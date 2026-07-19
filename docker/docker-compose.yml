@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────
+# MetaCI — Local development environment
+# ─────────────────────────────────────────────────────────────
+#
+# Usage:
+#   docker compose up          # start in foreground
+#   docker compose up -d       # start in background
+#   docker compose down        # stop and remove
+#   docker compose logs -f     # follow logs
+#   docker compose rebuild     # rebuild images
+#
+services:
+  # ─── MetaCI server ────────────────────────────────────────
+  metaci:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: metaci-dev
+    ports:
+      - "${METACI_PORT:-8080}:8080"
+    volumes:
+      # Mount source for hot reload
+      - ../cmd:/app/cmd
+      - ../internal:/app/internal
+      - ../examples:/app/examples
+      - ../docs:/app/docs
+      - ../go.mod:/app/go.mod
+      - ../go.sum:/app/go.sum
+    environment:
+      - METACI_WEBHOOK_SECRET=${METACI_WEBHOOK_SECRET:-dev-secret}
+      - METACI_GITLAB_URL=${METACI_GITLAB_URL:-https://gitlab.com}
+      - METACI_GITLAB_TOKEN=${METACI_GITLAB_TOKEN:-}
+      - METACI_DISPATCH_PROJECT=${METACI_DISPATCH_PROJECT:-}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ─── PostgreSQL (for future webhook log storage) ──────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: metaci-postgres
+    environment:
+      POSTGRES_DB: metaci
+      POSTGRES_USER: metaci
+      POSTGRES_PASSWORD: metaci
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metaci"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── Redis (for future rate limiting / caching) ───────────
+  redis:
+    image: redis:7-alpine
+    container_name: metaci-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

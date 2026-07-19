@@ -1,0 +1,31 @@
+# Air configuration for MetaCI development
+# Docs: https://github.com/air-verse/air
+
+root = "."
+tmp_dir = ".air"
+
+[build]
+  # Binary to run
+  cmd = "go build -o .air/metaci ./cmd/metaci"
+  # Binary path
+  bin = ".air/metaci"
+  # Watch these directories
+  include_ext = ["go", "tf"]
+  # Exclude these directories
+  exclude_dir = ["bin", "docs", "coverage", ".air", "vendor"]
+  # Delay after file change (ms)
+  delay = 1000
+
+[log]
+  # Log time
+  time = true
+
+[color]
+  main    = "magenta"
+  watcher = "cyan"
+  build   = "yellow"
+  runner  = "green"
+
+[misc]
+  # Delete temp directory on exit
+  clean_on_exit = true

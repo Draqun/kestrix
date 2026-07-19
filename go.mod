@@ -6,7 +6,6 @@ require (
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/swaggo/http-swagger v1.3.4
-	github.com/swaggo/swag v1.8.1
 	github.com/zclconf/go-cty v1.19.0
 )
 
@@ -24,6 +23,7 @@ require (
 	github.com/mailru/easyjson v0.7.6 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/swaggo/files v0.0.0-20220610200504-28940afbdbfe // indirect
+	github.com/swaggo/swag v1.8.1 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/sync v0.14.0 // indirect

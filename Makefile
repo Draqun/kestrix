@@ -91,6 +91,24 @@ resolve: $(BINARY)
 serve: $(BINARY)
 	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
 
+## dev: Start development server with hot reload (air)
+dev:
+	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; go install github.com/air-verse/air@latest; }
+	air -c .air.toml -- --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
+
 ## install-tools: Install development tools
 install-tools:
 	$(GO) install honnef.co/go/tools/cmd/staticcheck@latest
+	$(GO) install github.com/air-verse/air@latest
+
+## docker-up: Start local Docker environment
+docker-up:
+	cd docker && make up-d
+
+## docker-down: Stop local Docker environment
+docker-down:
+	cd docker && make down
+
+## docker-logs: Follow Docker logs
+docker-logs:
+	cd docker && make logs
