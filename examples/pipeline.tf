@@ -10,22 +10,22 @@ project "demo-mono" {
 
   ci_repo "auth_service" {
     path = "src/auth"
-    type = "subpath"
+    kind = "subpath"
   }
 
   ci_repo "api_gateway" {
     path = "src/gateway"
-    type = "subpath"
+    kind = "subpath"
   }
 
   ci_repo "docs" {
     path = "docs"
-    type = "subpath"
+    kind = "subpath"
   }
 
   ci_repo "integration_tests" {
     path = "tests"
-    type = "subpath"
+    kind = "subpath"
   }
 
   # Build auth_service when its own code changes

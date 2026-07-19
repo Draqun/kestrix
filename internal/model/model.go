@@ -18,10 +18,10 @@ type Repo struct {
 	//   monorepo:   "src/auth"
 	Path string `hcl:"path"`
 
-	// Type indicates how this repo is resolved.
+	// Kind indicates how this repo is resolved.
 	// "git"     — remote clone URL (multi-repo)
 	// "subpath" — local subdirectory within a monorepo workspace
-	Type string `hcl:"type,optional"`
+	Kind string `hcl:"kind,optional"`
 }
 
 // ExecuteSpec defines what a task runs and where.

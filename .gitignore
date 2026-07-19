@@ -19,3 +19,4 @@ Thumbs.db
 
 # OpenSpec build artifacts
 .openspec/build/
+coverage/

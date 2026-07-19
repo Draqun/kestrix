@@ -108,8 +108,8 @@ func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
 		switch name {
 		case "path":
 			r.Path = val
-		case "type":
-			r.Type = val
+		case "kind":
+			r.Kind = val
 		}
 	}
 	return r, nil

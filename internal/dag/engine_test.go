@@ -10,10 +10,10 @@ func newTestEngine() *Engine {
 	proj := model.Project{
 		Name: "test-project",
 		Repos: []model.Repo{
-			{Name: "service_a", Path: "src/a", Type: "subpath"},
-			{Name: "service_b", Path: "src/b", Type: "subpath"},
-			{Name: "docs", Path: "docs", Type: "subpath"},
-			{Name: "tests", Path: "tests", Type: "subpath"},
+			{Name: "service_a", Path: "src/a", Kind: "subpath"},
+			{Name: "service_b", Path: "src/b", Kind: "subpath"},
+			{Name: "docs", Path: "docs", Kind: "subpath"},
+			{Name: "tests", Path: "tests", Kind: "subpath"},
 		},
 		Tasks: []model.Task{
 			{

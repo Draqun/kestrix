@@ -76,34 +76,35 @@ func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string {
 }
 
 // deriveStages computes the pipeline stages from the node dependency graph.
+// deriveStages determines which stages the pipeline needs based on
+// the dependency graph. Tasks with no deps → "build", tasks with deps
+// that depend on build tasks → "test", manual tasks → "deploy".
 func deriveStages(nodes []dag.Node) []string {
-	hasNoDeps := false
-	hasTestDeps := false
-	hasDeployDeps := false
+	hasBuild := false
+	hasTest := false
+	hasDeploy := false
 
+	// First pass: identify which stages are needed.
 	for _, n := range nodes {
-		if len(n.Task.DependsOn) == 0 {
-			hasNoDeps = true
+		if len(n.Task.DependsOn) == 0 && !n.Task.Manual {
+			hasBuild = true
 		}
-		for _, dep := range n.Task.DependsOn {
-			// Check if the dependency is a "test" job.
-			if strings.Contains(dep, "test") {
-				hasTestDeps = true
-			}
+		if len(n.Task.DependsOn) > 0 && !n.Task.Manual {
+			hasTest = true
 		}
 		if n.Task.Manual {
-			hasDeployDeps = true
+			hasDeploy = true
 		}
 	}
 
 	var stages []string
-	if hasNoDeps {
+	if hasBuild {
 		stages = append(stages, "build")
 	}
-	if hasTestDeps {
+	if hasTest {
 		stages = append(stages, "test")
 	}
-	if hasDeployDeps {
+	if hasDeploy {
 		stages = append(stages, "deploy")
 	}
 	if len(stages) == 0 {
