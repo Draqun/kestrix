@@ -20,6 +20,7 @@ import (
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/web"
 )
 
 func main() {
@@ -32,6 +33,8 @@ func main() {
 		cmdResolve(os.Args[2:])
 	case "validate":
 		cmdValidate(os.Args[2:])
+	case "serve":
+		cmdServe(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -46,7 +49,27 @@ func usage() {
 
 Usage:
   metaci resolve  [--changed repo1,repo2] <file.tf>
-  metaci validate  <file.tf>`)
+  metaci validate  <file.tf>
+  metaci serve     [--addr :8080] [--dir ./examples]`)
+}
+
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "listen address (e.g. :8080, 0.0.0.0:9000)")
+	dir := fs.String("dir", "./examples", "pipeline directory containing .tf files")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	cfg := web.Config{
+		ListenAddr:  *addr,
+		PipelineDir: *dir,
+	}
+	server := web.NewServer(cfg)
+	if err := server.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdResolve(args []string) {
