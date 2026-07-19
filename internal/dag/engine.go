@@ -15,8 +15,8 @@ import (
 // Node is a single task in the resolved DAG, annotated with whether its trigger
 // condition is satisfied and whether it requires manual approval.
 type Node struct {
-	Task    model.Task
-	Triggered bool
+	Task            model.Task
+	Triggered       bool
 	TriggeredReason string
 }
 

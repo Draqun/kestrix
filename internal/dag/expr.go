@@ -7,6 +7,7 @@
 //	andExpr:= notExpr ( "&&" notExpr )*
 //	notExpr:= "!" notExpr | primary
 //	primary:= "(" expr ")" | predicate
+//
 // predicate := "repo" "." <name> "." "changed"
 //
 // Tokens are identifiers, dots, parentheses, and the operators && || !.
@@ -21,7 +22,7 @@ import (
 type tokenKind int
 
 const (
-	tkIdent    tokenKind = iota
+	tkIdent tokenKind = iota
 	tkDot
 	tkAnd // &&
 	tkOr  // ||

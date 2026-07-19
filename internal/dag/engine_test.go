@@ -46,10 +46,10 @@ func newTestEngine() *Engine {
 
 func changedSet(names ...string) map[string]bool {
 	ch := map[string]bool{
-		"service_a":  false,
-		"service_b":  false,
-		"docs":       false,
-		"tests":      false,
+		"service_a": false,
+		"service_b": false,
+		"docs":      false,
+		"tests":     false,
 	}
 	for _, n := range names {
 		ch[n] = true
