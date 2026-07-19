@@ -200,10 +200,10 @@ func TestParseGitLabPushEventMultipleCommits(t *testing.T) {
 func TestGitLabPushEventJSON(t *testing.T) {
 	// Verify our struct round-trips through JSON correctly.
 	event := &PushEvent{
-		Repo:        "org/test",
-		Branch:      "main",
+		Repo:         "org/test",
+		Branch:       "main",
 		FilesChanged: map[string]bool{"a.go": true},
-		CommitCount: 1,
+		CommitCount:  1,
 	}
 	data, err := json.Marshal(event)
 	if err != nil {

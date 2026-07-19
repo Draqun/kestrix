@@ -165,9 +165,9 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 	}
 
 	return &PushEvent{
-		Repo:        raw.Project.PathWithNamespace,
-		Branch:      branch,
+		Repo:         raw.Project.PathWithNamespace,
+		Branch:       branch,
 		FilesChanged: files,
-		CommitCount: len(raw.Commits),
+		CommitCount:  len(raw.Commits),
 	}, nil
 }
