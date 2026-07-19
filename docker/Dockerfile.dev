@@ -2,12 +2,12 @@
 # MetaCI — Development Dockerfile (with hot reload via air)
 # ─────────────────────────────────────────────────────────────
 
-FROM golang:1.22-alpine
+FROM golang:1.24-alpine
 
 RUN apk add --no-cache git curl
 
-# Install air for hot reload
-RUN go install github.com/air-verse/air@latest
+# Install air for hot reload (pin to compatible version)
+RUN go install github.com/air-verse/air@v1.61.7
 
 WORKDIR /app
 

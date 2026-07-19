@@ -1,0 +1,20 @@
+{
+  "branch": "main",
+  "commitConvention": {
+    "types": [
+      { "type": "feat", "description": "A new feature" },
+      { "type": "fix", "description": "A bug fix" },
+      { "type": "docs", "description": "Documentation only" },
+      { "type": "style", "description": "Formatting, no code change" },
+      { "type": "refactor", "description": "Code restructure, no feature/fix" },
+      { "type": "test", "description": "Adding or updating tests" },
+      { "type": "chore", "description": "Build process, dependencies, CI" },
+      { "type": "perf", "description": "Performance improvement" }
+    ],
+    "scopes": [
+      "dag", "parser", "web", "variables", "dispatch", "model", "cmd", "docker", "docs", "openspec"
+    ],
+    "requireScope": false,
+    "requireIssue": false
+  }
+}

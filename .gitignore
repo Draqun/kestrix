@@ -20,3 +20,31 @@ Thumbs.db
 # OpenSpec build artifacts
 .openspec/build/
 coverage/
+
+# Environment
+.env
+.air/
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
