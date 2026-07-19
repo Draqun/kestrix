@@ -9,23 +9,25 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/variables"
 )
 
 // Config holds the server configuration.
 type Config struct {
-	// ListenAddr is the address to bind the HTTP server to (e.g. ":8080").
-	ListenAddr string
-
-	// PipelineDir is the directory containing the pipeline .tf files.
-	PipelineDir string
+	ListenAddr        string
+	PipelineDir       string
+	Signature         SignatureConfig
+	Dispatch          *dispatch.Client
+	DispatchProjectID int
 }
 
-// Server is the MetaCI webhook receiver. It listens for GitLab push events,
-// evaluates the DAG against the changed files, and dispatches tasks.
+// Server is the MetaCI webhook receiver.
 type Server struct {
 	cfg        Config
 	classifier *FileClassifier
@@ -43,50 +45,92 @@ func NewServer(cfg Config) *Server {
 func (s *Server) Router() *chi.Mux {
 	r := chi.NewRouter()
 
-	// Middleware stack.
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Heartbeat("/ping"))
+
+	// Optional webhook signature verification.
+	if mw, err := s.cfg.Signature.Middleware(); err != nil {
+		log.Printf("WARNING: webhook signature config error: %v", err)
+	} else if mw != nil {
+		log.Printf("Webhook signature verification enabled (method: %s)", s.cfg.Signature.Method)
+		r.Use(mw)
+	}
 
 	// Routes.
 	r.Get("/health", s.handleHealth)
 	r.Post("/webhook", s.handleWebhook)
 	r.Get("/", s.handleRoot)
 
+	// Swagger docs — available at /docs/
+	r.Get("/docs/*", httpSwagger.Handler(
+		httpSwagger.URL("/docs/swagger.json"),
+	))
+	r.Handle("/docs/swagger.json", http.FileServer(http.Dir("docs")))
+	r.Handle("/docs/swagger.yaml", http.FileServer(http.Dir("docs")))
+
 	return r
 }
 
-// Run starts the HTTP server and blocks until it returns an error.
+// Run starts the HTTP server.
 func (s *Server) Run() error {
 	router := s.Router()
 	log.Printf("MetaCI webhook server listening on %s", s.cfg.ListenAddr)
 	log.Printf("Pipeline dir: %s", s.cfg.PipelineDir)
+	if s.cfg.Dispatch != nil {
+		log.Printf("Dispatch enabled → project %d", s.cfg.DispatchProjectID)
+	}
 	return http.ListenAndServe(s.cfg.ListenAddr, router)
 }
 
 // --- Handlers ---
 
+// handleRoot godoc
+// @Summary      MetaCI API root
+// @Description  Returns MetaCI server information and available endpoints
+// @Tags         info
+// @Produce      json
+// @Success      200 {object} map[string]interface{}
+// @Router       / [get]
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"name":    "MetaCI",
-		"version": "0.1.0",
+		"version": "0.2.0",
 		"status":  "running",
 		"endpoints": map[string]string{
 			"webhook": "POST /webhook",
 			"health":  "GET /health",
-			"ping":    "GET /ping",
+			"docs":    "GET /docs",
 		},
 	})
 }
 
+// handleHealth godoc
+// @Summary      Health check
+// @Description  Returns server health status
+// @Tags         health
+// @Produce      json
+// @Success      200 {object} map[string]string
+// @Router       /health [get]
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleWebhook is the main webhook handler.
+// handleWebhook godoc
+// @Summary      Process GitLab push webhook
+// @Description  Receives a GitLab push event, evaluates the pipeline DAG against changed files, and optionally dispatches to GitLab runners
+// @Tags         webhook
+// @Accept       json
+// @Produce      json
+// @Param        X-Gitlab-Token  header  string  false  "GitLab webhook secret token"
+// @Param        payload         body    object  true   "GitLab push event payload"
+// @Success      200 {object} WebhookResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      403 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /webhook [post]
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -95,7 +139,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Step 1: Parse the webhook payload.
 	event, err := ParseGitLabPushEvent(body)
 	if err != nil {
 		log.Printf("webhook parse error: %v", err)
@@ -115,7 +158,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Load the pipeline definition.
 	proj, err := parser.ParseDir(s.cfg.PipelineDir)
 	if err != nil {
 		log.Printf("pipeline parse error: %v", err)
@@ -123,10 +165,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Classify changes.
 	changedRepos := s.classifyChanges(event, proj)
 
-	// Step 4: Evaluate DAG.
 	engine := dag.New(proj)
 	nodes, err := engine.Resolve(changedRepos)
 	if err != nil {
@@ -137,11 +177,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("resolved %d tasks to execute", len(nodes))
 
-	// Step 5: Generate gitlab-ci.yml.
 	yamlContent := GenerateGitLabCI(proj, nodes)
 
-	// Step 6: Return the result.
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+	result := map[string]interface{}{
 		"status":        "ok",
 		"project":       proj.Name,
 		"repo":          event.Repo,
@@ -149,10 +187,61 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"changed_repos": changedRepos,
 		"tasks":         nodesToJSON(nodes),
 		"gitlab_ci":     yamlContent,
-	})
+	}
+
+	if s.cfg.Dispatch != nil && len(nodes) > 0 {
+		store := buildVarStore(proj)
+		envVars := store.Get(event.Repo, "", event.Branch)
+
+		dresp, err := s.cfg.Dispatch.Dispatch(dispatch.DispatchRequest{
+			ProjectID: s.cfg.DispatchProjectID,
+			Ref:       event.Branch,
+			YAML:      yamlContent,
+			Variables: envVars,
+		})
+		if err != nil {
+			log.Printf("dispatch error: %v", err)
+			result["dispatch_error"] = err.Error()
+		} else {
+			log.Printf("dispatched pipeline %d to project %d", dresp.PipelineID, s.cfg.DispatchProjectID)
+			result["dispatch"] = map[string]interface{}{
+				"pipeline_id": dresp.PipelineID,
+				"iid":         dresp.IID,
+				"status":      dresp.Status,
+				"web_url":     dresp.WebURL,
+			}
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 // --- Helpers ---
+
+// WebhookResponse is the API response for the webhook endpoint.
+type WebhookResponse struct {
+	Status       string                   `json:"status"`
+	Project      string                   `json:"project"`
+	Repo         string                   `json:"repo"`
+	Branch       string                   `json:"branch"`
+	ChangedRepos map[string]bool          `json:"changed_repos"`
+	Tasks        []map[string]interface{} `json:"tasks"`
+	GitlabCI     string                   `json:"gitlab_ci"`
+	Dispatch     *DispatchInfo            `json:"dispatch,omitempty"`
+}
+
+// DispatchInfo is included when a pipeline was dispatched to GitLab.
+type DispatchInfo struct {
+	PipelineID int    `json:"pipeline_id"`
+	IID        int    `json:"iid"`
+	Status     string `json:"status"`
+	WebURL     string `json:"web_url"`
+}
+
+// ErrorResponse is the API error response.
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
 
 func (s *Server) classifyChanges(event *PushEvent, proj model.Project) map[string]bool {
 	repoPaths := make(map[string]string)
@@ -174,6 +263,35 @@ func (s *Server) classifyChanges(event *PushEvent, proj model.Project) map[strin
 	}
 
 	return changed
+}
+
+func buildVarStore(proj model.Project) *variables.Store {
+	store := variables.New()
+	for _, v := range proj.Variables {
+		opts := []variables.Option{}
+		if v.Protected {
+			opts = append(opts, variables.WithProtected(true))
+		}
+		if v.Masked {
+			opts = append(opts, variables.WithMasked(true))
+		}
+		val := v.Value
+		if val == "" {
+			val = v.Default
+		}
+		switch v.Scope {
+		case "repo":
+			store.SetRepo(v.Repo, v.Key, val, opts...)
+		case "job":
+			store.SetJob(v.Repo, v.Job, v.Key, val, opts...)
+		default:
+			store.SetProject(v.Key, val, opts...)
+		}
+		if v.Env != "" {
+			store.SetEnvFilter(v.Key, v.Env)
+		}
+	}
+	return store
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v interface{}) {

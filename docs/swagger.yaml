@@ -1,0 +1,113 @@
+definitions:
+  internal_web.DispatchInfo:
+    properties:
+      iid:
+        type: integer
+      pipeline_id:
+        type: integer
+      status:
+        type: string
+      web_url:
+        type: string
+    type: object
+  internal_web.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_web.WebhookResponse:
+    properties:
+      branch:
+        type: string
+      changed_repos:
+        additionalProperties:
+          type: boolean
+        type: object
+      dispatch:
+        $ref: '#/definitions/internal_web.DispatchInfo'
+      gitlab_ci:
+        type: string
+      project:
+        type: string
+      repo:
+        type: string
+      status:
+        type: string
+      tasks:
+        items:
+          additionalProperties: true
+          type: object
+        type: array
+    type: object
+info:
+  contact: {}
+paths:
+  /:
+    get:
+      description: Returns MetaCI server information and available endpoints
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: MetaCI API root
+      tags:
+      - info
+  /health:
+    get:
+      description: Returns server health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /webhook:
+    post:
+      consumes:
+      - application/json
+      description: Receives a GitLab push event, evaluates the pipeline DAG against
+        changed files, and optionally dispatches to GitLab runners
+      parameters:
+      - description: GitLab webhook secret token
+        in: header
+        name: X-Gitlab-Token
+        type: string
+      - description: GitLab push event payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_web.WebhookResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_web.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_web.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_web.ErrorResponse'
+      summary: Process GitLab push webhook
+      tags:
+      - webhook
+swagger: "2.0"
