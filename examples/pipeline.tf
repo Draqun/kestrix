@@ -8,6 +8,32 @@
 project "demo-mono" {
   default_image = "golang:1.26"
 
+  # ─── Variables ──────────────────────────────────────────────────────
+  # Scoped like GitLab: project → repo → job (most specific wins).
+  variable "ENVIRONMENT" {
+    value = "staging"
+  }
+
+  variable "DEPLOY_TOKEN" {
+    value     = "d3pl0y-t0k3n"
+    masked    = true
+    protected = true
+  }
+
+  variable "REPO_SPECIFIC_FLAG" {
+    value  = "true"
+    scope  = "repo"
+    repo   = "auth_service"
+  }
+
+  variable "JOB_TIMEOUT" {
+    value  = "300"
+    scope  = "job"
+    repo   = "auth_service"
+    job    = "deploy_staging"
+  }
+
+  # ─── Repositories ──────────────────────────────────────────────────
   ci_repo "auth_service" {
     path = "src/auth"
     kind = "subpath"

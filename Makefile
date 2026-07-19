@@ -1,143 +1,96 @@
 # Makefile for MetaCI development tasks
 # Provides convenient shortcuts for common development tasks
 
-export HOME      := /home/hermes
-export GOPATH    := /home/hermes/workspace/.gopath
-export GOMODCACHE := /home/hermes/workspace/.gopath/pkg/mod
-export GOCACHE   := /home/hermes/workspace/.gocache
-
 BINARY    := bin/metaci
 GO        := go
 GOFLAGS   :=
-GOTEST    := go test
 
-.PHONY: help init build build-release test test-short test-coverage fmt fmt-check lint vet staticcheck check quality validate resolve tidy clean full-cleanup
+.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve serve install-tools
 
-help: ## Show this help message
-	@echo "MetaCI Development Commands:"
+## help: Show this help message
+help:
+	@echo "Usage: make [target]"
 	@echo ""
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@echo "Targets:"
+	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':' 2>/dev/null || sed -n 's/^## //p' $(MAKEFILE_LIST)
 
-# === Setup ===
+## init: Bootstrap the project (install deps + build)
+init: $(BINARY)
 
-init: ## Initialize project (install deps, build)
+## build: Build the metaci binary
+build: $(BINARY)
+
+$(BINARY): $(shell find . -name '*.go' -type f 2>/dev/null) go.mod
 	$(GO) mod tidy
 	$(GO) build -o $(BINARY) ./cmd/metaci
-	@echo ""
-	@echo "=========================================="
-	@echo "MetaCI initialized successfully!"
-	@echo "=========================================="
-	@echo ""
-	@echo "Binary: $(BINARY)"
-	@echo ""
-	@echo "Usage:"
-	@echo "  make validate"
-	@echo "  make resolve CHANGED=auth_service"
-	@echo ""
 
-# === Build ===
-
-build: ## Build the project
-	$(GO) build -o $(BINARY) ./cmd/metaci
-
-build-release: ## Build release version (stripped, optimized)
+## build-release: Build release binary (stripped)
+build-release:
 	$(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/metaci
 
-# === Testing ===
+## test: Run all tests
+test:
+	$(GO) test ./... -v
 
-test: ## Run all tests with verbose output
-	$(GOTEST) ./... -v
-
-test-short: ## Run tests (short mode, skip slow tests)
-	$(GOTEST) ./... -short -count=1
-
-test-coverage: ## Generate test coverage report
+## test-coverage: Run tests with coverage report
+test-coverage:
 	@mkdir -p coverage
-	$(GOTEST) ./... -coverprofile=coverage/coverage.out -covermode=atomic
+	$(GO) test ./... -coverprofile=coverage/coverage.out -covermode=atomic
 	$(GO) tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	$(GO) tool cover -func=coverage/coverage.out
-	@echo ""
-	@echo "Coverage report: coverage/coverage.html"
 
-# === Formatting ===
-
-fmt: ## Format code with gofmt
+## fmt: Format code
+fmt:
 	$(GO) fmt ./...
 
-fmt-check: ## Check code formatting (CI-friendly)
+## fmt-check: Check formatting
+fmt-check:
 	@echo "Checking formatting..."
-	@test -z "$$(gofmt -l .)" || (echo "Files not formatted:"; gofmt -l .; exit 1)
+	@test -z "$$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
 	@echo "✓ Formatting OK"
 
-# === Static Analysis ===
-
-vet: ## Run go vet ( catches suspicious constructs)
+## vet: Run go vet
+vet:
 	$(GO) vet ./...
 
-staticcheck: ## Run staticcheck (advanced static analysis)
-	@if command -v staticcheck >/dev/null 2>&1; then \
-		staticcheck ./...; \
-	else \
-		echo "⚠ staticcheck not installed, skipping"; \
-	fi
+## staticcheck: Run staticcheck
+staticcheck:
+	@command -v staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: go install honnef.co/go/tools/cmd/staticcheck@latest"; exit 0; }
+	staticcheck ./...
 
-# === Linting ===
+## lint: Run all linters
+lint: fmt-check vet staticcheck
 
-lint: fmt-check vet ## Run all lint checks (format + vet)
-	@echo "✓ All lint checks passed"
+## clean: Remove build artifacts
+clean:
+	rm -rf bin/ coverage/
 
-check: fmt-check vet staticcheck ## Run full static analysis suite
-	@echo "✓ All checks passed"
+## clean-all: Remove everything including downloaded deps
+clean-all: clean
+	$(GO) clean -cache -testcache
 
-# === Quality Gate ===
-
-quality: check test-coverage ## Full quality gate (format, vet, staticcheck, tests + coverage)
+## quality: Full quality gate (format + vet + test + coverage)
+quality: fmt-check vet test test-coverage
 	@echo ""
 	@echo "=========================================="
 	@echo "✓ All quality checks passed"
 	@echo "=========================================="
 
-# === MetaCI CLI ===
+## check: Run all checks (alias for quality)
+check: quality
 
-validate: build ## Validate pipeline file
+## validate: Validate the example pipeline
+validate: $(BINARY)
 	$(BINARY) validate examples/pipeline.tf
 
-resolve: build ## Resolve pipeline (usage: make resolve CHANGED=auth_service)
-	$(BINARY) resolve --changed $(CHANGED) examples/pipeline.tf
+## resolve: Resolve triggers for a set of changed repos
+resolve: $(BINARY)
+	$(BINARY) resolve $(if $(CHANGED),--changed $(CHANGED)) examples/pipeline.tf
 
-serve: build ## Start webhook server (usage: make serve ADDR=:8080 DIR=./examples)
+## serve: Start the webhook server
+serve: $(BINARY)
 	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
 
-# === Maintenance ===
-
-tidy: ## Run go mod tidy
-	$(GO) mod tidy
-
-clean: ## Clean build artifacts
-	rm -rf bin/
-	rm -rf coverage/
-
-full-cleanup: ## Remove all project dependencies and build artifacts
-	@echo "=========================================="
-	@echo "Full cleanup of MetaCI project"
-	@echo "=========================================="
-	@echo ""
-	@echo "This will remove:"
-	@echo "  - bin/ directory (built binary)"
-	@echo "  - coverage/ directory (test reports)"
-	@echo ""
-	@read -p "Continue? [y/N]: " -n 1 -r; \
-	echo; \
-	if [ "$$REPLY" != "y" ] && [ "$$REPLY" != "Y" ]; then \
-		echo "Cleanup cancelled."; \
-		exit 1; \
-	fi
-	@echo ""
-	@echo "Cleaning build artifacts..."
-	@rm -rf bin/ || true
-	@rm -rf coverage/ || true
-	@$(GO) clean || true
-	@echo ""
-	@echo "=========================================="
-	@echo "Cleanup complete!"
-	@echo "=========================================="
+## install-tools: Install development tools
+install-tools:
+	$(GO) install honnef.co/go/tools/cmd/staticcheck@latest

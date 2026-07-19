@@ -47,18 +47,113 @@ project "my-system" {
 
 This expression `(A || B) && !C` has no equivalent in standard GitLab CI.
 
-## Quick start
+## For Developers
+
+### Prerequisites
+
+- Go 1.26+
+- Make
+- Git
+
+### Getting started
 
 ```bash
-# Build
-go build -o metaci ./cmd/metaci
+git clone https://gitlab.com/lunaris-bot/metaci.git
+cd metaci
+make init          # install deps + build binary
+```
 
-# Validate a pipeline file (checks syntax, cycles, repo references)
-./metaci validate examples/pipeline.tf
+### Available commands
 
-# Resolve which tasks would run given a set of changed repos
-./metaci resolve --changed auth_service examples/pipeline.tf
-./metaci resolve --changed auth_service,api_gateway examples/pipeline.tf
+```bash
+make help          # show all available targets
+make build         # build the metaci binary
+make test          # run all tests (27+)
+make quality       # full quality gate: fmt + vet + test + coverage
+make validate      # validate examples/pipeline.tf
+make resolve CHANGED=auth_service   # simulate webhook
+make serve ADDR=:8080 DIR=./examples  # start webhook server
+make clean         # remove build artifacts
+```
+
+### Validate a pipeline
+
+```bash
+# Check syntax, cycles, and repo references
+./bin/metaci validate examples/pipeline.tf
+```
+
+### Resolve triggers
+
+```bash
+# Which tasks run when auth_service changes?
+./bin/metaci resolve --changed auth_service examples/pipeline.tf
+
+# Multiple repos changed
+./bin/metaci resolve --changed auth_service,api_gateway examples/pipeline.tf
+
+# Docs-only change — should trigger nothing
+./bin/metaci resolve --changed docs examples/pipeline.tf
+```
+
+### Run the webhook server
+
+```bash
+# Start server on port 8080, serving pipeline configs from ./examples
+./bin/metaci serve --addr :8080 --dir ./examples
+
+# Test with a simulated GitLab push event
+curl -X POST http://localhost:8080/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_kind": "push",
+    "ref": "refs/heads/main",
+    "project": {
+      "path_with_namespace": "src/auth",
+      "default_branch": "main"
+    },
+    "commits": [{
+      "id": "abc123",
+      "message": "fix handler",
+      "added": [],
+      "modified": ["handler.go"],
+      "removed": []
+    }]
+  }'
+
+# Health check
+curl http://localhost:8080/health
+```
+
+### Test coverage
+
+```bash
+make quality       # includes coverage report
+# Reports saved to coverage/coverage.html
+```
+
+Current coverage:
+- `internal/dag`:     82.4%
+- `internal/parser`:  80.6%
+- `internal/web`:     55.7%
+- Total:              61.1%
+
+### Project structure
+
+```
+metaci/
+├── cmd/metaci/              # CLI entry point (resolve, validate, serve)
+├── internal/
+│   ├── model/               # Domain types (Project, Repo, Task, Variable)
+│   ├── dag/                 # DAG engine + boolean expression parser
+│   ├── parser/              # HCL file parser (manual hclsyntax)
+│   ├── variables/           # GitLab-like variable store (scoped)
+│   └── web/                 # Webhook receiver + CI YAML generator
+├── examples/                # Example pipeline.tf files
+├── openspec/                # OpenSpec project docs (proposal, specs, design)
+├── .golangci.yml            # Linter configuration
+├── Makefile                 # Build system (make help for targets)
+└── go.mod
 ```
 
 ## Concepts
@@ -71,6 +166,7 @@ go build -o metaci ./cmd/metaci
 | **Trigger** | A boolean expression using `repo.<name>.changed` predicates with `&&`, `\|\|`, `!` |
 | **Execute** | The repo context and script to run (supports per-job container image) |
 | **Manual** | Task requires human approval before execution |
+| **Variable** | Scoped config values: project → repo → job (most specific wins) |
 
 ## Architecture
 
@@ -87,26 +183,16 @@ go build -o metaci ./cmd/metaci
                                  │  │ DAG      │  │
                                  │  │ Engine   │  │
                                  │  └──────────┘  │
+                                 │  ┌──────────┐  │
+                                 │  │ Webhook  │  │
+                                 │  │ Receiver │  │
+                                 │  └──────────┘  │
+                                 │  ┌──────────┐  │
+                                 │  │ Variables│  │
+                                 │  │ Store    │  │
+                                 │  └──────────┘  │
                                  └────────────────┘
 ```
-
-## Project structure
-
-```
-metaci/
-├── cmd/metaci/          # CLI entry point
-├── internal/
-│   ├── model/           # Domain types (Project, Repo, Task)
-│   ├── dag/             # DAG engine + expression parser
-│   └── parser/          # HCL file parser
-├── examples/            # Example pipeline.tf files
-└── openspec/            # OpenSpec project configuration
-```
-
-## Status
-
-**Proof of Concept** — core engine works. Webhook receiver and runner dispatch
-are not yet implemented.
 
 ## License
 

@@ -79,6 +79,9 @@ type Project struct {
 	// DefaultImage is the fallback container image for tasks without an explicit
 	// image.
 	DefaultImage string `hcl:"default_image,optional"`
+
+	// Variables declared at project level, with scoped visibility.
+	Variables []Variable `hcl:"variable,block"`
 }
 
 // ProjectFile is the *root* of an HCL file. It wraps the "project" block so
@@ -86,4 +89,17 @@ type Project struct {
 // into a model.Project.
 type ProjectFile struct {
 	Project Project `hcl:"project,block"`
+}
+
+// Variable represents a declared variable with scope and metadata.
+type Variable struct {
+	Key       string `hcl:"key,label"`
+	Value     string `hcl:"value,optional"`
+	Default   string `hcl:"default,optional"`
+	Scope     string `hcl:"scope,optional"` // project, repo, job
+	Repo      string `hcl:"repo,optional"`  // required if scope=repo
+	Job       string `hcl:"job,optional"`   // required if scope=job
+	Protected bool   `hcl:"protected,optional"`
+	Masked    bool   `hcl:"masked,optional"`
+	Env       string `hcl:"env,optional"` // environment filter
 }

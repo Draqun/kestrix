@@ -88,6 +88,12 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 				return model.Project{}, fmt.Errorf("ci_task: %w", err)
 			}
 			proj.Tasks = append(proj.Tasks, t)
+		case "variable":
+			v, err := decodeVariableBlock(child)
+			if err != nil {
+				return model.Project{}, fmt.Errorf("variable: %w", err)
+			}
+			proj.Variables = append(proj.Variables, v)
 		default:
 			return model.Project{}, fmt.Errorf("unsupported child block %q in project", child.Type)
 		}
@@ -287,6 +293,38 @@ func ParseDir(dir string) (model.Project, error) {
 		}
 	}
 	return proj, nil
+}
+
+func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
+	if len(blk.Labels) != 1 {
+		return model.Variable{}, fmt.Errorf("variable requires 1 label (key name)")
+	}
+	v := model.Variable{Key: blk.Labels[0]}
+	for name, attr := range attrsMap(blk.Body) {
+		val, err := literal(attr.Expr)
+		if err != nil {
+			return model.Variable{}, fmt.Errorf("attribute %q: %w", name, err)
+		}
+		switch name {
+		case "value":
+			v.Value = val
+		case "default":
+			v.Default = val
+		case "scope":
+			v.Scope = val
+		case "repo":
+			v.Repo = val
+		case "job":
+			v.Job = val
+		case "env":
+			v.Env = val
+		case "protected":
+			v.Protected = val == "true"
+		case "masked":
+			v.Masked = val == "true"
+		}
+	}
+	return v, nil
 }
 
 func formatDiags(diags hcl.Diagnostics, filename string) error {
