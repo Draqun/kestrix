@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/variables"
 	"gitlab.com/lunaris-bot/metaci/internal/web"
@@ -101,20 +100,16 @@ func cmdServe(args []string) {
 
 	// Setup dispatch if configured.
 	if *dispatchFlag != "" && *gitlabToken != "" {
-		var projectID int
-		if _, err := fmt.Sscanf(*dispatchFlag, "%d", &projectID); err != nil {
-			fmt.Fprintf(os.Stderr, "invalid dispatch project ID: %v\n", err)
-			os.Exit(1)
+		cfg.Dispatch = web.DispatchConfig{
+			Enabled:     true,
+			ProjectID:   *dispatchFlag,
+			GitLabURL:   *gitlabURL,
+			GitLabToken: *gitlabToken,
 		}
-		cfg.Dispatch = &dispatch.Client{
-			BaseURL: *gitlabURL,
-			Token:   *gitlabToken,
-		}
-		cfg.DispatchProjectID = projectID
 	}
 
 	server := web.NewServer(cfg)
-	if err := server.Run(); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

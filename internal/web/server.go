@@ -6,318 +6,423 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
 )
 
-// Config holds the server configuration.
-type Config struct {
-	ListenAddr        string
-	PipelineDir       string
-	Signature         SignatureConfig
-	Dispatch          *dispatch.Client
-	DispatchProjectID int
+// SignatureConfig defines webhook authentication.
+// Defined in webhook_verify.go.
+
+// DispatchConfig controls GitLab pipeline dispatch.
+type DispatchConfig struct {
+	Enabled     bool
+	ProjectID   string
+	GitLabURL   string
+	GitLabToken string
 }
 
-// Server is the MetaCI webhook receiver.
+// Config holds server configuration.
+type Config struct {
+	ListenAddr  string
+	PipelineDir string
+	Branch      string
+	Signature   SignatureConfig
+	Dispatch    DispatchConfig
+}
+
+// Server is the HTTP server.
 type Server struct {
 	cfg        Config
-	classifier *FileClassifier
+	router     chi.Router
+	webhookLog []map[string]interface{}
 }
 
-// NewServer creates a new webhook server.
+// NewServer creates a new HTTP server.
 func NewServer(cfg Config) *Server {
-	return &Server{
-		cfg:        cfg,
-		classifier: DefaultClassifier(),
-	}
+	s := &Server{cfg: cfg}
+	s.router = s.buildRouter()
+	return s
 }
 
-// Router returns the Chi router with all routes registered.
-func (s *Server) Router() *chi.Mux {
+func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.RequestID)
+	r.Use(chiMiddleware.RequestID)
+	r.Use(chiMiddleware.RealIP)
+	r.Use(chiMiddleware.Logger)
+	r.Use(chiMiddleware.Recoverer)
+	r.Use(chiMiddleware.Heartbeat("/ping"))
 
-	// Optional webhook signature verification.
-	if mw, err := s.cfg.Signature.Middleware(); err != nil {
-		log.Printf("WARNING: webhook signature config error: %v", err)
-	} else if mw != nil {
-		log.Printf("Webhook signature verification enabled (method: %s)", s.cfg.Signature.Method)
-		r.Use(mw)
-	}
+	// API routes
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/health", s.handleHealth)
+		r.Get("/pipeline", s.handleGetPipeline)
+		r.Post("/resolve", s.handleResolve)
+		r.Post("/generate", s.handleGenerate)
+		r.Get("/validate", s.handleValidate)
+		r.Get("/logs", s.handleGetLogs)
+	})
 
-	// Routes.
-	r.Get("/health", s.handleHealth)
+	// Webhook
 	r.Post("/webhook", s.handleWebhook)
-	r.Get("/", s.handleRoot)
 
-	// Swagger docs — available at /docs/
+	// Swagger docs
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/swagger.json"),
 	))
-	r.Handle("/docs/swagger.json", http.FileServer(http.Dir("docs")))
-	r.Handle("/docs/swagger.yaml", http.FileServer(http.Dir("docs")))
+
+	// Serve built frontend (ui/dist/) if it exists
+	uiDist := filepath.Join(s.cfg.PipelineDir, "..", "ui", "dist")
+	if info, err := os.Stat(uiDist); err == nil && info.IsDir() {
+		fileServer := http.FileServer(http.Dir(uiDist))
+		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") ||
+				strings.HasPrefix(r.URL.Path, "/webhook") ||
+				strings.HasPrefix(r.URL.Path, "/docs/") ||
+				strings.HasPrefix(r.URL.Path, "/ping") {
+				http.NotFound(w, r)
+				return
+			}
+			path := filepath.Join(uiDist, r.URL.Path)
+			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+				http.ServeFile(w, r, filepath.Join(uiDist, "index.html"))
+				return
+			}
+			fileServer.ServeHTTP(w, r)
+		})
+	} else {
+		r.Get("/", s.handleRoot)
+	}
 
 	return r
 }
 
-// Run starts the HTTP server.
-func (s *Server) Run() error {
-	router := s.Router()
-	log.Printf("MetaCI webhook server listening on %s", s.cfg.ListenAddr)
-	log.Printf("Pipeline dir: %s", s.cfg.PipelineDir)
-	if s.cfg.Dispatch != nil {
-		log.Printf("Dispatch enabled → project %d", s.cfg.DispatchProjectID)
-	}
-	return http.ListenAndServe(s.cfg.ListenAddr, router)
+// ListenAndServe starts the server.
+func (s *Server) ListenAndServe() error {
+	log.Printf("MetaCI server listening on %s", s.cfg.ListenAddr)
+	return http.ListenAndServe(s.cfg.ListenAddr, s.router)
 }
 
-// --- Handlers ---
+// ─── API Handlers ─────────────────────────────────────────────
 
-// handleRoot godoc
-// @Summary      MetaCI API root
-// @Description  Returns MetaCI server information and available endpoints
-// @Tags         info
-// @Produce      json
-// @Success      200 {object} map[string]interface{}
-// @Router       / [get]
-func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+// handleHealth godoc
+// @Summary Health check
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/health [get]
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":    "MetaCI",
-		"version": "0.2.0",
-		"status":  "running",
-		"endpoints": map[string]string{
-			"webhook": "POST /webhook",
-			"health":  "GET /health",
-			"docs":    "GET /docs",
-		},
+		"status":    "ok",
+		"service":   "metaci",
+		"pipelines": len(s.webhookLog),
+		"webhooks":  len(s.webhookLog),
+		"repos":     0,
 	})
 }
 
-// handleHealth godoc
-// @Summary      Health check
-// @Description  Returns server health status
-// @Tags         health
-// @Produce      json
-// @Success      200 {object} map[string]string
-// @Router       /health [get]
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+// handleGetPipeline godoc
+// @Summary Parse and return pipeline definition
+// @Tags pipeline
+// @Produce json
+// @Param dir query string false "Pipeline directory"
+// @Success 200 {object} model.Project
+// @Router /api/pipeline [get]
+func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		dir = s.cfg.PipelineDir
+	}
+
+	proj, err := parser.ParseDir(dir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(proj)
+}
+
+// handleResolve godoc
+// @Summary Resolve trigger expressions against changed repos
+// @Tags pipeline
+// @Accept json
+// @Produce json
+// @Param request body object true "Changed repos"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/resolve [post]
+func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Changed []string `json:"changed"`
+		Dir     string   `json:"dir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Dir == "" {
+		req.Dir = s.cfg.PipelineDir
+	}
+
+	proj, err := parser.ParseDir(req.Dir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	changedSet := make(map[string]bool)
+	for _, c := range req.Changed {
+		changedSet[c] = true
+	}
+
+	e := dag.New(proj)
+	nodes, err := e.Resolve(changedSet)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	var triggered []string
+	for _, n := range nodes {
+		if n.Triggered {
+			triggered = append(triggered, n.Task.Name)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"project":   proj.Name,
+		"changed":   req.Changed,
+		"triggered": triggered,
+		"all_tasks": len(proj.Tasks),
+	})
+}
+
+// handleGenerate godoc
+// @Summary Generate gitlab-ci.yml from pipeline definition
+// @Tags pipeline
+// @Accept json
+// @Produce json
+// @Param request body object true "Generation options"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/generate [post]
+func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dir     string   `json:"dir"`
+		Changed []string `json:"changed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Dir == "" {
+		req.Dir = s.cfg.PipelineDir
+	}
+
+	proj, err := parser.ParseDir(req.Dir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	e := dag.New(proj)
+	changedSet := make(map[string]bool)
+	for _, c := range req.Changed {
+		changedSet[c] = true
+	}
+
+	nodes, err := e.Resolve(changedSet)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	var triggered []dag.Node
+	for _, n := range nodes {
+		if n.Triggered {
+			triggered = append(triggered, n)
+		}
+	}
+
+	yaml := GenerateGitLabCI(proj, triggered)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"yaml":       yaml,
+		"task_count": len(triggered),
+	})
+}
+
+// handleValidate godoc
+// @Summary Validate pipeline definition
+// @Tags pipeline
+// @Produce json
+// @Param dir query string false "Pipeline directory"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/validate [get]
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		dir = s.cfg.PipelineDir
+	}
+
+	proj, err := parser.ParseDir(dir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"valid":false,"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	e := dag.New(proj)
+	if err := e.Validate(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid":  false,
+			"errors": []string{err.Error()},
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"valid":   true,
+		"project": proj.Name,
+		"repos":   len(proj.Repos),
+		"tasks":   len(proj.Tasks),
+	})
+}
+
+// handleGetLogs godoc
+// @Summary Get webhook logs
+// @Tags webhooks
+// @Produce json
+// @Success 200 {array} map[string]interface{}
+// @Router /api/logs [get]
+func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.webhookLog)
 }
 
 // handleWebhook godoc
-// @Summary      Process GitLab push webhook
-// @Description  Receives a GitLab push event, evaluates the pipeline DAG against changed files, and optionally dispatches to GitLab runners
-// @Tags         webhook
-// @Accept       json
-// @Produce      json
-// @Param        X-Gitlab-Token  header  string  false  "GitLab webhook secret token"
-// @Param        payload         body    object  true   "GitLab push event payload"
-// @Success      200 {object} WebhookResponse
-// @Failure      400 {object} ErrorResponse
-// @Failure      403 {object} ErrorResponse
-// @Failure      500 {object} ErrorResponse
-// @Router       /webhook [post]
+// @Summary Receive GitLab webhook
+// @Tags webhooks
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /webhook [post]
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Signature.Enabled && s.cfg.Signature.Secret != "" {
+		token := r.Header.Get("X-Gitlab-Token")
+		if token != s.cfg.Signature.Secret {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("read body: %v", err))
+		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
 	event, err := ParseGitLabPushEvent(body)
 	if err != nil {
-		log.Printf("webhook parse error: %v", err)
-		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("parse error: %v", err))
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	if event == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ignored", "reason": "not a push event"})
 		return
 	}
 
-	log.Printf("webhook: repo=%s branch=%s commits=%d files=%d",
-		event.Repo, event.Branch, event.CommitCount, len(event.FilesChanged))
-
-	if event.IsEmpty() {
-		log.Printf("no file changes, skipping")
-		s.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status": "skipped",
-			"reason": "no file changes in push",
-		})
-		return
+	logEntry := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"repo":      event.Repo,
+		"branch":    event.Branch,
+		"commits":   event.CommitCount,
+		"tasks":     []string{},
+		"status":    "received",
 	}
 
 	proj, err := parser.ParseDir(s.cfg.PipelineDir)
 	if err != nil {
-		log.Printf("pipeline parse error: %v", err)
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("pipeline parse error: %v", err))
+		log.Printf("webhook: parse error: %v", err)
+		logEntry["status"] = "error"
+		logEntry["error"] = err.Error()
+		s.webhookLog = append(s.webhookLog, logEntry)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(logEntry)
 		return
 	}
 
-	changedRepos := s.classifyChanges(event, proj)
+	classifier := DefaultClassifier()
+	changedRepos := classifier.MatchRepos(event.FilesChanged, proj.Repos)
 
-	engine := dag.New(proj)
-	nodes, err := engine.Resolve(changedRepos)
-	if err != nil {
-		log.Printf("DAG resolve error: %v", err)
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("DAG error: %v", err))
-		return
+	changedSet := make(map[string]bool)
+	for _, c := range changedRepos {
+		changedSet[c] = true
 	}
 
-	log.Printf("resolved %d tasks to execute", len(nodes))
+	e := dag.New(proj)
+	nodes, _ := e.Resolve(changedSet)
 
-	yamlContent := GenerateGitLabCI(proj, nodes)
-
-	result := map[string]interface{}{
-		"status":        "ok",
-		"project":       proj.Name,
-		"repo":          event.Repo,
-		"branch":        event.Branch,
-		"changed_repos": changedRepos,
-		"tasks":         nodesToJSON(nodes),
-		"gitlab_ci":     yamlContent,
-	}
-
-	if s.cfg.Dispatch != nil && len(nodes) > 0 {
-		store := buildVarStore(proj)
-		envVars := store.Get(event.Repo, "", event.Branch)
-
-		dresp, err := s.cfg.Dispatch.Dispatch(dispatch.DispatchRequest{
-			ProjectID: s.cfg.DispatchProjectID,
-			Ref:       event.Branch,
-			YAML:      yamlContent,
-			Variables: envVars,
-		})
-		if err != nil {
-			log.Printf("dispatch error: %v", err)
-			result["dispatch_error"] = err.Error()
-		} else {
-			log.Printf("dispatched pipeline %d to project %d", dresp.PipelineID, s.cfg.DispatchProjectID)
-			result["dispatch"] = map[string]interface{}{
-				"pipeline_id": dresp.PipelineID,
-				"iid":         dresp.IID,
-				"status":      dresp.Status,
-				"web_url":     dresp.WebURL,
-			}
-		}
-	}
-
-	s.writeJSON(w, http.StatusOK, result)
-}
-
-// --- Helpers ---
-
-// WebhookResponse is the API response for the webhook endpoint.
-type WebhookResponse struct {
-	Status       string                   `json:"status"`
-	Project      string                   `json:"project"`
-	Repo         string                   `json:"repo"`
-	Branch       string                   `json:"branch"`
-	ChangedRepos map[string]bool          `json:"changed_repos"`
-	Tasks        []map[string]interface{} `json:"tasks"`
-	GitlabCI     string                   `json:"gitlab_ci"`
-	Dispatch     *DispatchInfo            `json:"dispatch,omitempty"`
-}
-
-// DispatchInfo is included when a pipeline was dispatched to GitLab.
-type DispatchInfo struct {
-	PipelineID int    `json:"pipeline_id"`
-	IID        int    `json:"iid"`
-	Status     string `json:"status"`
-	WebURL     string `json:"web_url"`
-}
-
-// ErrorResponse is the API error response.
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
-func (s *Server) classifyChanges(event *PushEvent, proj model.Project) map[string]bool {
-	repoPaths := make(map[string]string)
-	for _, r := range proj.Repos {
-		repoPaths[r.Name] = r.Path
-	}
-
-	changed := make(map[string]bool)
-	for name, path := range repoPaths {
-		if path == event.Repo || event.Repo == path {
-			changed[name] = s.classifier.HasCodeChanges(event.FilesChanged)
-		} else {
-			changed[name] = false
-		}
-	}
-
-	if len(changed) == 0 {
-		log.Printf("warning: repo %q not found in pipeline project %q", event.Repo, proj.Name)
-	}
-
-	return changed
-}
-
-func buildVarStore(proj model.Project) *variables.Store {
-	store := variables.New()
-	for _, v := range proj.Variables {
-		opts := []variables.Option{}
-		if v.Protected {
-			opts = append(opts, variables.WithProtected(true))
-		}
-		if v.Masked {
-			opts = append(opts, variables.WithMasked(true))
-		}
-		val := v.Value
-		if val == "" {
-			val = v.Default
-		}
-		switch v.Scope {
-		case "repo":
-			store.SetRepo(v.Repo, v.Key, val, opts...)
-		case "job":
-			store.SetJob(v.Repo, v.Job, v.Key, val, opts...)
-		default:
-			store.SetProject(v.Key, val, opts...)
-		}
-		if v.Env != "" {
-			store.SetEnvFilter(v.Key, v.Env)
-		}
-	}
-	return store
-}
-
-func (s *Server) writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func (s *Server) writeError(w http.ResponseWriter, status int, msg string) {
-	log.Printf("error %d: %s", status, msg)
-	s.writeJSON(w, status, map[string]string{"error": msg})
-}
-
-func nodesToJSON(nodes []dag.Node) []map[string]interface{} {
-	var out []map[string]interface{}
+	var triggeredTasks []string
 	for _, n := range nodes {
-		out = append(out, map[string]interface{}{
-			"name":       n.Task.Name,
-			"triggered":  n.Triggered,
-			"reason":     n.TriggeredReason,
-			"repo":       n.Task.Execute.Repo,
-			"script":     n.Task.Execute.Script,
-			"image":      n.Task.Execute.Image,
-			"manual":     n.Task.Manual,
-			"depends_on": n.Task.DependsOn,
-		})
+		if n.Triggered {
+			triggeredTasks = append(triggeredTasks, n.Task.Name)
+		}
 	}
-	return out
+
+	logEntry["tasks"] = triggeredTasks
+	logEntry["status"] = "triggered"
+	if len(triggeredTasks) == 0 {
+		logEntry["status"] = "skipped"
+	}
+
+	log.Printf("webhook: repo=%s branch=%s commits=%d files=%d tasks=%v",
+		event.Repo, event.Branch, event.CommitCount, len(changedRepos), triggeredTasks)
+
+	s.webhookLog = append(s.webhookLog, logEntry)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"project": proj.Name,
+		"changed": changedRepos,
+		"tasks":   triggeredTasks,
+		"count":   len(triggeredTasks),
+	})
+}
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>MetaCI</title></head>
+<body style="font-family:monospace;background:#0a1929;color:#e0e0e0;padding:40px">
+<h1>🚀 MetaCI — CI/CD Control Plane</h1>
+<p>PoC v0.2 — API endpoints:</p>
+<ul>
+  <li><a href="/docs/">/docs/</a> — Swagger UI</li>
+  <li><a href="/health">/health</a> — Health check</li>
+  <li><a href="/api/pipeline">/api/pipeline</a> — Get pipeline definition</li>
+  <li><a href="/api/validate">/api/validate</a> — Validate pipeline</li>
+  <li><a href="/api/logs">/api/logs</a> — Webhook logs</li>
+</ul>
+<p>Frontend: <code>cd ui && npm run dev</code> (port 3000)</p>
+</body>
+</html>`)
 }

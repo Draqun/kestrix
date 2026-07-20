@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 // --- GitLab Webhook Payload ---
@@ -130,6 +132,34 @@ func (fc *FileClassifier) ChangedRepos(repoFiles map[string]map[string]bool) map
 		result[repo] = fc.HasCodeChanges(files)
 	}
 	return result
+}
+
+// MatchRepos maps a flat set of changed files to pipeline repo names.
+// A repo matches if any changed file is under its configured path (for
+// subpath repos) or if it has any code-level change (for git repos, which
+// represent the whole repository).
+func (fc *FileClassifier) MatchRepos(files map[string]bool, repos []model.Repo) []string {
+	var matched []string
+	for _, repo := range repos {
+		if repo.Kind == "subpath" || repo.Path != "" {
+			// subpath: match files under repo.Path prefix
+			prefix := strings.TrimSuffix(repo.Path, "/") + "/"
+			for f := range files {
+				if strings.HasPrefix(f, prefix) || f == repo.Path {
+					if fc.HasCodeChanges(files) {
+						matched = append(matched, repo.Name)
+					}
+					break
+				}
+			}
+		} else {
+			// git repo: whole repo, any code change matches
+			if fc.HasCodeChanges(files) {
+				matched = append(matched, repo.Name)
+			}
+		}
+	}
+	return matched
 }
 
 // --- Parsing ---

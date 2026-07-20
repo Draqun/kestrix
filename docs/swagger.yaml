@@ -1,90 +1,143 @@
+basePath: /
 definitions:
-  internal_web.DispatchInfo:
+  model.ExecuteSpec:
     properties:
-      iid:
-        type: integer
-      pipeline_id:
-        type: integer
-      status:
-        type: string
-      web_url:
-        type: string
-    type: object
-  internal_web.ErrorResponse:
-    properties:
-      error:
-        type: string
-    type: object
-  internal_web.WebhookResponse:
-    properties:
-      branch:
-        type: string
-      changed_repos:
-        additionalProperties:
-          type: boolean
-        type: object
-      dispatch:
-        $ref: '#/definitions/internal_web.DispatchInfo'
-      gitlab_ci:
-        type: string
-      project:
+      image:
+        description: |-
+          Image is the container image to pull for this job (per-job dynamic image).
+          If empty, the project-level default image is used.
         type: string
       repo:
+        description: |-
+          Repo is the name of the ci_repo whose scripts should be executed.
+          This is a reference, not an inline definition. It must resolve to a Repo
+          declared in the same project.
         type: string
-      status:
+      script:
+        description: Script is the command to run inside the repo's working directory.
         type: string
-      tasks:
+    type: object
+  model.Project:
+    properties:
+      defaultImage:
+        description: |-
+          DefaultImage is the fallback container image for tasks without an explicit
+          image.
+        type: string
+      name:
+        description: 'Name is the HCL label: project "system-bankowy" { ... }'
+        type: string
+      repos:
+        description: Repos is the set of repositories tracked by this project.
         items:
-          additionalProperties: true
-          type: object
+          $ref: '#/definitions/model.Repo'
+        type: array
+      tasks:
+        description: Tasks is the set of tasks that form the pipeline.
+        items:
+          $ref: '#/definitions/model.Task'
+        type: array
+      variables:
+        description: Variables declared at project level, with scoped visibility.
+        items:
+          $ref: '#/definitions/model.Variable'
         type: array
     type: object
+  model.Repo:
+    properties:
+      kind:
+        description: |-
+          Kind indicates how this repo is resolved.
+          "git"     — remote clone URL (multi-repo)
+          "subpath" — local subdirectory within a monorepo workspace
+        type: string
+      name:
+        description: |-
+          Name is the local identifier used in trigger expressions, e.g. "auth_service".
+          It corresponds to the HCL label: ci_repo "auth_service" { ... }
+        type: string
+      path:
+        description: |-
+          Path is the clone URL (multi-repo) or the subdirectory within a monorepo.
+          Examples:
+            multi-repo: "https://gitlab.com/org/auth.git"
+            monorepo:   "src/auth"
+        type: string
+    type: object
+  model.Task:
+    properties:
+      dependsOn:
+        description: |-
+          DependsOn lists tasks that must complete before this one starts.
+          This is separate from the trigger — trigger decides *whether* to run,
+          DependsOn decides *ordering* within the DAG.
+        items:
+          type: string
+        type: array
+      execute:
+        allOf:
+        - $ref: '#/definitions/model.ExecuteSpec'
+        description: Execute defines what to run and in which repo context.
+      manual:
+        description: |-
+          Manual, when true, requires a human to click "Run" in the UI before the
+          task executes, even if its trigger condition is met.
+        type: boolean
+      name:
+        description: 'Name is the HCL label: ci_task "test_integration" { ... }'
+        type: string
+      trigger:
+        description: |-
+          Trigger is a boolean expression string evaluated by the DAG engine.
+          Syntax examples:
+            "repo.auth_service.changed && !repo.docs.changed"
+            "repo.a.changed || repo.b.changed"
+        type: string
+    type: object
+  model.Variable:
+    properties:
+      default:
+        type: string
+      env:
+        description: environment filter
+        type: string
+      job:
+        description: required if scope=job
+        type: string
+      key:
+        type: string
+      masked:
+        type: boolean
+      protected:
+        type: boolean
+      repo:
+        description: required if scope=repo
+        type: string
+      scope:
+        description: project, repo, job
+        type: string
+      value:
+        type: string
+    type: object
+host: localhost:8080
 info:
-  contact: {}
+  contact:
+    email: damian.giebas@gmail.com
+    name: MetaCI Team
+  description: |-
+    Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
+    Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
+  title: MetaCI API
+  version: 0.2.0
 paths:
-  /:
-    get:
-      description: Returns MetaCI server information and available endpoints
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: MetaCI API root
-      tags:
-      - info
-  /health:
-    get:
-      description: Returns server health status
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Health check
-      tags:
-      - health
-  /webhook:
+  /api/generate:
     post:
       consumes:
       - application/json
-      description: Receives a GitLab push event, evaluates the pipeline DAG against
-        changed files, and optionally dispatches to GitLab runners
       parameters:
-      - description: GitLab webhook secret token
-        in: header
-        name: X-Gitlab-Token
-        type: string
-      - description: GitLab push event payload
+      - description: Generation options
         in: body
-        name: payload
+        name: request
         required: true
         schema:
           type: object
@@ -94,20 +147,115 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_web.WebhookResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_web.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/internal_web.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/internal_web.ErrorResponse'
-      summary: Process GitLab push webhook
+            additionalProperties: true
+            type: object
+      summary: Generate gitlab-ci.yml from pipeline definition
       tags:
-      - webhook
+      - pipeline
+  /api/health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - system
+  /api/logs:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      summary: Get webhook logs
+      tags:
+      - webhooks
+  /api/pipeline:
+    get:
+      parameters:
+      - description: Pipeline directory
+        in: query
+        name: dir
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Project'
+      summary: Parse and return pipeline definition
+      tags:
+      - pipeline
+  /api/resolve:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Changed repos
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Resolve trigger expressions against changed repos
+      tags:
+      - pipeline
+  /api/validate:
+    get:
+      parameters:
+      - description: Pipeline directory
+        in: query
+        name: dir
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Validate pipeline definition
+      tags:
+      - pipeline
+  /webhook:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Receive GitLab webhook
+      tags:
+      - webhooks
+securityDefinitions:
+  WebhookToken:
+    description: GitLab webhook secret token for signature verification
+    in: header
+    name: X-Gitlab-Token
+    type: apiKey
 swagger: "2.0"

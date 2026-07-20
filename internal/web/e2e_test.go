@@ -65,7 +65,7 @@ project "e2e-test" {
 			"id": "abc",
 			"message": "fix",
 			"added": [],
-			"modified": ["handler.go"],
+			"modified": ["src/auth/handler.go"],
 			"removed": []
 		}]
 	}`
@@ -93,13 +93,16 @@ project "e2e-test" {
 		t.Fatalf("expected triggered tasks, got %v", resp["tasks"])
 	}
 
-	// Build task should be triggered.
-	buildTask := tasks[0].(map[string]interface{})
-	if buildTask["name"] != "build" {
-		t.Errorf("task name = %v, want build", buildTask["name"])
+	// Build task should be in the triggered list.
+	found := false
+	for _, task := range tasks {
+		if task.(string) == "build" {
+			found = true
+			break
+		}
 	}
-	if !buildTask["triggered"].(bool) {
-		t.Error("build task should be triggered")
+	if !found {
+		t.Errorf("build task not in triggered list: %v", tasks)
 	}
 }
 
