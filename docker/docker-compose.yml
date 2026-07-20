@@ -31,11 +31,19 @@ services:
       - METACI_GITLAB_URL=${METACI_GITLAB_URL:-https://gitlab.com}
       - METACI_GITLAB_TOKEN=${METACI_GITLAB_TOKEN:-}
       - METACI_DISPATCH_PROJECT=${METACI_DISPATCH_PROJECT:-}
+      - DATABASE_URL=postgres://metaci:metaci@postgres:5432/metaci?sslmode=disable
+      - DOCKER_REGISTRY=${DOCKER_REGISTRY:-registry.gitlab.com}
+      - DOCKER_IMAGE=${DOCKER_IMAGE:-registry.gitlab.com/lunaris-bot/metaci}
+      - DOCKER_USERNAME=${DOCKER_USERNAME:-}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
       interval: 10s
       timeout: 3s
       retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   # ─── PostgreSQL (for future webhook log storage) ──────────

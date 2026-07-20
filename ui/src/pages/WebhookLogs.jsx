@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
 import {
   Box, Typography, Card, CardContent, Table, TableBody, TableCell,
-  TableContainer, TableHead, TableRow, Paper, Chip, IconButton,
+  TableContainer, TableHead, TableRow, Chip, IconButton,
   Tooltip, Alert, Badge, LinearProgress
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
   CheckCircle as OkIcon,
-  Error as ErrIcon,
   Info as InfoIcon,
 } from '@mui/icons-material';
 

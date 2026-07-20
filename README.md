@@ -41,11 +41,11 @@ make build
 
 ```bash
 # Serve with examples (default: :8080)
-./bin/metaci serve --dir ./examples
+./bin/metaci serve --dir ./examples/demo-mono
 
 # With dispatch to GitLab
 ./bin/metaci serve \
-  --dir ./examples \
+  --dir ./examples/demo-mono \
   --dispatch 12345 \
   --gitlab-token glpat-xxx \
   --secret my-webhook-secret
@@ -58,16 +58,19 @@ make build
 
 ```bash
 # CLI: resolve triggers
-./bin/metaci resolve examples/pipeline.tf --changed auth_service,billing_service
+./bin/metaci resolve examples/demo-mono/pipeline.tf --changed auth_service,billing_service
 
 # CLI: validate pipeline
-./bin/metaci validate examples/pipeline.tf
+./bin/metaci validate examples/demo-mono/pipeline.tf
+
+# CLI: run a pipeline locally in dependency order
+./bin/metaci run --changed metaci .metaci/pipeline.tf
 
 # API: health check
 curl http://localhost:8080/api/health
 
 # API: parse pipeline
-curl http://localhost:8080/api/pipeline?dir=./examples
+curl http://localhost:8080/api/pipeline?dir=./examples/demo-mono
 
 # API: resolve triggers
 curl -X POST http://localhost:8080/api/resolve \
@@ -88,7 +91,7 @@ listen_addr: ":8080"
 default_branch: "main"
 
 pipeline:
-  dir: "./examples"
+  dir: "./examples/demo-mono"
 
 webhook:
   secret: "your-webhook-secret"
@@ -150,11 +153,11 @@ metaci/
 │   ├── store/           # Persistent project config (JSON file)
 │   ├── variables/       # Variable resolution engine
 │   └── web/             # HTTP server, webhook handler, API
-├── examples/            # Example pipeline definitions
-│   ├── pipeline.tf      # Original demo-mono
-│   ├── simple-webservice.tf
-│   ├── multi-service.tf
-│   └── enterprise-saas.tf
+├── examples/            # One self-contained project per directory
+│   ├── demo-mono/pipeline.tf
+│   ├── simple-webservice/pipeline.tf
+│   ├── multi-service/pipeline.tf
+│   └── enterprise-saas/pipeline.tf
 ├── ui/                  # React + MUI frontend
 ├── docs/                # Swagger/OpenAPI
 ├── openspec/            # OpenSpec documentation
@@ -198,6 +201,9 @@ Three examples demonstrate different scales:
 # Build
 make build
 
+# Run this repository's .metaci/pipeline.tf locally (same jobs as .gitlab-ci.yml)
+make pipeline
+
 # Test
 make test
 
@@ -207,12 +213,28 @@ make quality
 # Run dev server
 make dev
 
+# Build the UI and serve it with the API. Open http://localhost:8080.
+make ui-serve DIR=.
+
 # Docker
 cd docker && make docker-up
 
 # UI development
 cd ui && npm install && npm run dev
 ```
+
+### Running a pipeline from the UI
+
+1. Start the application with `make ui-serve DIR=.`.
+2. Open **Projects**. If `metaci` is not listed, create it with repository path
+   set to this checkout's absolute path and pipeline directory set to `.metaci`.
+3. Select **Open Pipeline**, stay on the **Graph** view, enter `metaci` in
+   **Changed repos**, then choose **Run locally**.
+4. The job output and final status appear below the graph. Manual tasks remain
+   skipped unless **Include manual tasks** is enabled.
+
+The UI executes scripts from registered local projects. Do not expose this
+development server to an untrusted network.
 
 ## License
 

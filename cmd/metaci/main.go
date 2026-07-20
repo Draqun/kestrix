@@ -20,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"gitlab.com/lunaris-bot/metaci/internal/config"
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/runner"
 	"gitlab.com/lunaris-bot/metaci/internal/variables"
 	"gitlab.com/lunaris-bot/metaci/internal/web"
 )
@@ -42,6 +44,8 @@ func main() {
 		cmdResolve(os.Args[2:])
 	case "validate":
 		cmdValidate(os.Args[2:])
+	case "run":
+		cmdRun(os.Args[2:])
 	case "serve":
 		cmdServe(os.Args[2:])
 	case "variables":
@@ -61,8 +65,47 @@ func usage() {
 Usage:
   metaci resolve    [--changed repo1,repo2] <file.tf>
   metaci validate   <file.tf>
-  metaci serve      [--addr :8080] [--dir ./examples] [--secret TOKEN] [--dispatch PROJECT_ID]
+	  metaci run       [--changed repo1,repo2] [--workdir .] [--include-manual] <file.tf>
+  metaci serve      [--addr :8080] [--database-url postgres://...] [--static ../ui/dist] [--secret TOKEN] [--dispatch PROJECT_ID]
   metaci variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]`)
+}
+
+func cmdRun(args []string) {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	changedFlag := fs.String("changed", "", "comma-separated list of changed repo names")
+	workDir := fs.String("workdir", ".", "checkout containing the pipeline repositories")
+	includeManual := fs.Bool("include-manual", false, "run tasks marked manual")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "error: pipeline file required")
+		os.Exit(2)
+	}
+	proj, err := parser.ParseFile(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse error: %v\n", err)
+		os.Exit(1)
+	}
+	changed := make(map[string]bool, len(proj.Repos))
+	for _, repo := range proj.Repos {
+		changed[repo.Name] = false
+	}
+	for _, name := range strings.Split(*changedFlag, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			changed[name] = true
+		}
+	}
+	if err := runner.Run(context.Background(), proj, changed, runner.Options{
+		WorkDir:       *workDir,
+		IncludeManual: *includeManual,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "pipeline failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdServe(args []string) {
@@ -76,6 +119,12 @@ func cmdServe(args []string) {
 	gitlabURL := fs.String("gitlab-url", "", "GitLab instance URL (overrides config)")
 	gitlabToken := fs.String("gitlab-token", "", "GitLab API token (env: METACI_GITLAB_TOKEN)")
 	branchFlag := fs.String("branch", "", "default branch (overrides config)")
+	staticDir := fs.String("static", "", "directory to serve as static files (e.g. ../ui/dist)")
+	dbURL := fs.String("database-url", "", "PostgreSQL connection URL (env: DATABASE_URL)")
+	dockerRegistry := fs.String("docker-registry", "", "Docker registry URL (env: DOCKER_REGISTRY)")
+	dockerImage := fs.String("docker-image", "", "Docker image name (env: DOCKER_IMAGE)")
+	dockerUsername := fs.String("docker-username", "", "Docker registry username (env: DOCKER_USERNAME)")
+	dockerPassword := fs.String("docker-password", "", "Docker registry password (env: DOCKER_PASSWORD)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -96,6 +145,21 @@ func cmdServe(args []string) {
 	}
 	if *gitlabToken == "" {
 		*gitlabToken = os.Getenv("METACI_GITLAB_TOKEN")
+	}
+	if *dbURL == "" {
+		*dbURL = os.Getenv("DATABASE_URL")
+	}
+	if *dockerRegistry == "" {
+		*dockerRegistry = os.Getenv("DOCKER_REGISTRY")
+	}
+	if *dockerImage == "" {
+		*dockerImage = os.Getenv("DOCKER_IMAGE")
+	}
+	if *dockerUsername == "" {
+		*dockerUsername = os.Getenv("DOCKER_USERNAME")
+	}
+	if *dockerPassword == "" {
+		*dockerPassword = os.Getenv("DOCKER_PASSWORD")
 	}
 
 	// Apply env secrets to config.
@@ -126,12 +190,32 @@ func cmdServe(args []string) {
 	if *method != "" {
 		// method is used for SignatureConfig
 	}
+	if *dockerRegistry != "" {
+		cfg.Docker.Registry = *dockerRegistry
+	}
+	if *dockerImage != "" {
+		cfg.Docker.Image = *dockerImage
+	}
+	if *dockerUsername != "" {
+		cfg.Docker.Username = *dockerUsername
+	}
+	if *dockerPassword != "" {
+		cfg.Docker.Password = *dockerPassword
+	}
 
 	// Convert to web.Config.
 	webCfg := web.Config{
 		ListenAddr:  cfg.ListenAddr,
 		PipelineDir: cfg.Pipeline.Dir,
+		StaticDir:   *staticDir,
+		DatabaseURL: *dbURL,
 		Branch:      cfg.Branch,
+		Docker: web.DockerConfig{
+			Registry: cfg.Docker.Registry,
+			Image:    cfg.Docker.Image,
+			Username: cfg.Docker.Username,
+			Password: cfg.Docker.Password,
+		},
 		Signature: web.SignatureConfig{
 			Enabled: cfg.Webhook.Secret != "",
 			Secret:  cfg.Webhook.Secret,

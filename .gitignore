@@ -1,6 +1,5 @@
 # Binaries
-/metaci
-/bin/
+bin/
 /dist/
 
 # Go

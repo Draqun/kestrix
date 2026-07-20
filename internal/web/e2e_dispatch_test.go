@@ -61,6 +61,7 @@ func TestWebhookDispatchIntegration(t *testing.T) {
 	server := NewServer(Config{
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
 		Signature:   SignatureConfig{Enabled: true, Secret: "tok"},
 		Dispatch: DispatchConfig{
 			Enabled:     true,
@@ -103,7 +104,10 @@ func TestWebhookNoDispatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "pipeline.tf"), []byte(testPipeline), 0o644)
 
-	server := NewServer(Config{PipelineDir: tmpDir})
+	server := NewServer(Config{
+		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
+	})
 	body := `{"object_kind":"push","ref":"refs/heads/main","commits":[{"id":"a","message":"x","added":[],"modified":["auth_service/main.go"],"removed":[]}],"repository":{"name":"test-app"},"changes":["auth_service/main.go"]}`
 	req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))
 	rec := httptest.NewRecorder()
@@ -125,6 +129,7 @@ func TestWebhookWrongSecret(t *testing.T) {
 
 	server := NewServer(Config{
 		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
 		Signature:   SignatureConfig{Enabled: true, Secret: "correct"},
 	})
 	body := `{"ref":"refs/heads/main","commits":[],"repository":{"name":"x"}}`

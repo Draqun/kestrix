@@ -14,11 +14,21 @@ import (
 
 // Config is the top-level configuration.
 type Config struct {
-	ListenAddr string         `yaml:"listen_addr"`
-	Branch     string         `yaml:"default_branch"`
-	Pipeline   PipelineConfig `yaml:"pipeline"`
-	Webhook    WebhookConfig  `yaml:"webhook"`
-	Dispatch   DispatchConfig `yaml:"dispatch"`
+	ListenAddr  string         `yaml:"listen_addr"`
+	DatabaseURL string         `yaml:"database_url"`
+	Branch      string         `yaml:"default_branch"`
+	Pipeline    PipelineConfig `yaml:"pipeline"`
+	Webhook     WebhookConfig  `yaml:"webhook"`
+	Dispatch    DispatchConfig `yaml:"dispatch"`
+	Docker      DockerConfig   `yaml:"docker"`
+}
+
+// DockerConfig holds Docker registry and deployment settings.
+type DockerConfig struct {
+	Registry string `yaml:"registry"`
+	Image    string `yaml:"image"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // PipelineConfig controls pipeline parsing behavior.

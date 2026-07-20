@@ -5,7 +5,7 @@ BINARY    := bin/metaci
 GO        := go
 GOFLAGS   :=
 
-.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve serve dev install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
+.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
 ## help: Show this help message
 help:
@@ -81,20 +81,32 @@ check: quality
 
 ## validate: Validate the example pipeline
 validate: $(BINARY)
-	$(BINARY) validate examples/pipeline.tf
+	$(BINARY) validate examples/demo-mono/pipeline.tf
 
 ## resolve: Resolve triggers for a set of changed repos
 resolve: $(BINARY)
-	$(BINARY) resolve $(if $(CHANGED),--changed $(CHANGED)) examples/pipeline.tf
+	$(BINARY) resolve $(if $(CHANGED),--changed $(CHANGED)) examples/demo-mono/pipeline.tf
+
+## pipeline: Run this repository's MetaCI pipeline locally
+pipeline: $(BINARY)
+	$(BINARY) run --changed metaci ci/pipeline.tf
 
 ## serve: Start the webhook server
 serve: $(BINARY)
-	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
+	$(BINARY) serve --addr $(or $(ADDR),:8080)
 
 ## dev: Start development server with hot reload (air)
 dev:
 	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; go install github.com/air-verse/air@latest; }
-	air -c .air.toml -- --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
+	PATH="$(shell go env GOPATH)/bin:$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080)
+
+## dev-all: Start backend + frontend dev servers
+dev-all:
+	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; go install github.com/air-verse/air@latest; }
+	@cd ui && npm install --silent
+	@echo "Starting backend (air) on :8080 and frontend (vite) on :3000..."
+	PATH="$(shell go env GOPATH)/bin:$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080) &
+	@cd ui && npx vite --port 3000
 
 ## install-tools: Install development tools
 install-tools:
@@ -115,7 +127,7 @@ ui-build: ui-install
 
 ## ui-serve: Build frontend + serve via Go (single binary, port 8080)
 ui-serve: ui-build $(BINARY)
-	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
+	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples/demo-mono) --static $(or $(STATIC),./ui/dist)
 
 ## docker-up: Start local Docker environment
 docker-up:

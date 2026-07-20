@@ -18,8 +18,8 @@ const DRAWER_WIDTH = 260;
 
 const NAV_ITEMS = [
   { path: '/', label: 'Dashboard', icon: <DashboardIcon /> },
-  { path: '/pipeline', label: 'Pipeline Editor', icon: <DagIcon /> },
   { path: '/projects', label: 'Projects', icon: <ProjectsIcon /> },
+  { path: '/pipelines', label: 'Pipelines', icon: <DagIcon /> },
   { path: '/webhooks', label: 'Webhook Logs', icon: <WebhookIcon /> },
 ];
 

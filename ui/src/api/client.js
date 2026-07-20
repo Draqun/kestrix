@@ -1,18 +1,18 @@
 // MetaCI API client
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/api/health`);
   return res.json();
 }
 
-export async function parsePipeline(dir = './examples') {
+export async function parsePipeline(dir = './examples/demo-mono') {
   const res = await fetch(`${API_BASE}/api/pipeline?dir=${encodeURIComponent(dir)}`);
   if (!res.ok) throw new Error(`Pipeline parse failed: ${res.statusText}`);
   return res.json();
 }
 
-export async function resolveTriggers(changed = [], dir = './examples') {
+export async function resolveTriggers(changed = [], dir = './examples/demo-mono') {
   const res = await fetch(`${API_BASE}/api/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -29,7 +29,7 @@ export async function getWebhookLogs() {
   return res.json();
 }
 
-export async function generateCI(dir = './examples', changed = []) {
+export async function generateCI(dir = './examples/demo-mono', changed = []) {
   const res = await fetch(`${API_BASE}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -39,7 +39,7 @@ export async function generateCI(dir = './examples', changed = []) {
   return res.json();
 }
 
-export async function validatePipeline(dir = './examples') {
+export async function validatePipeline(dir = './examples/demo-mono') {
   const res = await fetch(`${API_BASE}/api/validate?dir=${encodeURIComponent(dir)}`);
   if (!res.ok) throw new Error(`Validate failed: ${res.statusText}`);
   return res.json();
@@ -93,6 +93,15 @@ export async function getProjectPipeline(name) {
   return res.text();
 }
 
+export async function getProjectDefinition(name) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/definition`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Get pipeline definition failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function saveProjectPipeline(name, hcl) {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`, {
     method: 'POST',
@@ -116,5 +125,34 @@ export async function resolveProject(name, changed = []) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Resolve failed: ${res.statusText}`);
   }
+  return res.json();
+}
+
+export async function runProject(name, changed = [], includeManual = false) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ changed, include_manual: includeManual }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Run failed: ${res.statusText}`);
+  return data;
+}
+
+export async function listRuns(name) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getRun(name, runID) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}`);
+  if (!res.ok) throw new Error(`Get run failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function listAllRuns() {
+  const res = await fetch(`${API_BASE}/api/runs`);
+  if (!res.ok) return [];
   return res.json();
 }

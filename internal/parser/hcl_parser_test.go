@@ -88,7 +88,10 @@ project "test-proj" {
 func TestParseDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	file1 := `project "multi" {
-  ci_repo "auth" {
+	  variable "FROM_REPOS" {
+	    value = "yes"
+	  }
+	  ci_repo "auth" {
     path = "src/auth"
     kind = "subpath"
   }
@@ -125,6 +128,18 @@ func TestParseDir(t *testing.T) {
 	}
 	if proj.DefaultImage != "python:3.12" {
 		t.Errorf("default_image = %q, want %q", proj.DefaultImage, "python:3.12")
+	}
+	if len(proj.Variables) != 1 || proj.Variables[0].Key != "FROM_REPOS" {
+		t.Errorf("variables = %+v, want variable from every pipeline file", proj.Variables)
+	}
+}
+
+func TestParseDirRejectsDifferentProjectNames(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "one.tf"), []byte(`project "one" {}`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "two.tf"), []byte(`project "two" {}`), 0644)
+	if _, err := ParseDir(tmpDir); err == nil {
+		t.Fatal("expected different project names to be rejected")
 	}
 }
 

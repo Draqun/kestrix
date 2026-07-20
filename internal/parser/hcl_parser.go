@@ -282,8 +282,13 @@ func ParseDir(dir string) (model.Project, error) {
 		}
 		proj.Repos = append(proj.Repos, p.Repos...)
 		proj.Tasks = append(proj.Tasks, p.Tasks...)
-		if proj.Name == "" && p.Name != "" {
-			proj.Name = p.Name
+		proj.Variables = append(proj.Variables, p.Variables...)
+		if p.Name != "" {
+			if proj.Name == "" {
+				proj.Name = p.Name
+			} else if proj.Name != p.Name {
+				return model.Project{}, fmt.Errorf("parse %s: project name %q does not match %q", path, p.Name, proj.Name)
+			}
 		}
 		if p.DefaultImage != "" {
 			proj.DefaultImage = p.DefaultImage

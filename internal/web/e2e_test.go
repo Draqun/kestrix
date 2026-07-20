@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/store"
 )
 
 func TestFullWebhookFlow(t *testing.T) {
@@ -51,6 +52,7 @@ project "e2e-test" {
 	srv := NewServer(Config{
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
 	})
 
 	// 4. Send a webhook for auth (code change).
@@ -127,6 +129,7 @@ project "p" {
 	srv := NewServer(Config{
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
 	})
 
 	payload := `{
@@ -169,7 +172,11 @@ project "p" {
 func TestProjectLifecycle(t *testing.T) {
 	repoDir := t.TempDir()
 
-	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: "./examples"})
+	srv := NewServer(Config{
+		ListenAddr:  ":0",
+		PipelineDir: "./examples/demo-mono",
+		StorePath:   filepath.Join(t.TempDir(), "projects.json"),
+	})
 
 	// 1. Create project pointing at repoDir.
 	createBody := `{"name":"tf-demo","repo_path":"` + repoDir + `"}`
@@ -240,5 +247,59 @@ project "tf-demo" {
 	}
 	if len(resp.Triggered) != 1 || resp.Triggered[0].Name != "build_tf_plugin" {
 		t.Fatalf("expected [build_tf_plugin], got %+v", resp.Triggered)
+	}
+}
+
+func TestRunProject(t *testing.T) {
+	repoDir := t.TempDir()
+	pipelineDir := filepath.Join(repoDir, ".ci")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pipeline := `project "run-demo" {
+  ci_repo "app" {
+    path = "."
+    kind = "subpath"
+  }
+  ci_task "check" {
+    trigger = "repo.app.changed"
+    execute {
+      repo = "app"
+      script = "printf passed > result.txt"
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(pipeline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "unrelated.tf"), []byte("this is not a pipeline"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{
+		ListenAddr: ":0",
+		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
+	})
+	if err := srv.store.Upsert(&store.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/api/projects/run-demo/run", bytes.NewBufferString(`{"changed":["app"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("run status = %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "passed" {
+		t.Fatalf("run status = %q, body: %s", response.Status, w.Body.String())
+	}
+	got, err := os.ReadFile(filepath.Join(repoDir, "result.txt"))
+	if err != nil || string(got) != "passed" {
+		t.Fatalf("task output = %q, err = %v", got, err)
 	}
 }

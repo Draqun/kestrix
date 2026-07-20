@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  Grid, Card, CardContent, Typography, Box, Chip, LinearProgress,
+  Grid, Card, CardContent, Typography, Box, LinearProgress,
   Alert, IconButton, Tooltip
 } from '@mui/material';
 import {
@@ -10,7 +10,6 @@ import {
   Webhook as WebhookIcon,
   AccountTree as DagIcon,
   Folder as FolderIcon,
-  Speed as SpeedIcon,
 } from '@mui/icons-material';
 import { healthCheck } from '../api/client';
 
@@ -133,7 +132,7 @@ make serve
 make validate
 
 # Resolve triggers
-./bin/metaci resolve --changed auth_service examples/pipeline.tf
+./bin/metaci resolve --changed auth_service examples/demo-mono/pipeline.tf
 
 # Docker full stack
 make docker-up`}

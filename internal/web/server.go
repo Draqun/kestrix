@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,13 +15,16 @@ import (
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
+	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/runner"
 	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"gitlab.com/lunaris-bot/metaci/internal/variables"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	httpSwagger "github.com/swaggo/http-swagger"
-	_ "gitlab.com/lunaris-bot/metaci/docs"
+	"gitlab.com/lunaris-bot/metaci/docs"
 )
 
 // SignatureConfig defines webhook authentication.
@@ -38,9 +42,21 @@ type DispatchConfig struct {
 type Config struct {
 	ListenAddr  string
 	PipelineDir string
+	StaticDir   string
+	StorePath   string
+	DatabaseURL string
 	Branch      string
+	Docker      DockerConfig
 	Signature   SignatureConfig
 	Dispatch    DispatchConfig
+}
+
+// DockerConfig holds Docker registry and deployment settings.
+type DockerConfig struct {
+	Registry string
+	Image    string
+	Username string
+	Password string
 }
 
 // Server is the HTTP server.
@@ -48,48 +64,35 @@ type Server struct {
 	cfg        Config
 	router     chi.Router
 	webhookLog []map[string]interface{}
-	store      *store.FileStore
+	store      store.Store
 }
 
 // NewServer creates a new HTTP server.
 func NewServer(cfg Config) *Server {
 	s := &Server{cfg: cfg}
 
-	// Initialize persistent project store.
-	storePath := store.DefaultPath()
-	fs, err := store.New(storePath)
-	if err != nil {
-		log.Printf("warning: could not init project store at %s: %v", storePath, err)
-		// Fall back to temp dir with PID to avoid cross-instance conflicts.
-		fallback := filepath.Join(os.TempDir(), fmt.Sprintf("metaci-%d-projects.json", os.Getpid()))
-		fs, _ = store.New(fallback)
-	}
-	s.store = fs
-
-	// Auto-load all .tf files as separate projects.
-	if cfg.PipelineDir != "" {
-		entries, err := os.ReadDir(cfg.PipelineDir)
-		if err == nil {
-			absPath, _ := filepath.Abs(cfg.PipelineDir)
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
-					continue
-				}
-				filePath := filepath.Join(cfg.PipelineDir, e.Name())
-				proj, parseErr := parser.ParseFile(filePath)
-				if parseErr != nil || proj.Name == "" {
-					continue
-				}
-				existing, _ := s.store.Get(proj.Name)
-				if existing == nil {
-					s.store.Upsert(&store.ProjectConfig{
-						Name:         proj.Name,
-						RepoPath:     absPath,
-						PipelineFile: e.Name(),
-					})
-				}
-			}
+	// Initialize project store — PostgreSQL if DATABASE_URL is set, else file.
+	if cfg.DatabaseURL != "" {
+		pg, err := store.NewPG(cfg.DatabaseURL)
+		if err != nil {
+			log.Printf("warning: could not connect to database: %v, falling back to file store", err)
+		} else {
+			log.Printf("connected to PostgreSQL")
+			s.store = pg
 		}
+	}
+	if s.store == nil {
+		storePath := cfg.StorePath
+		if storePath == "" {
+			storePath = store.DefaultPath()
+		}
+		fs, err := store.New(storePath)
+		if err != nil {
+			log.Printf("warning: could not init project store at %s: %v", storePath, err)
+			fallback := filepath.Join(os.TempDir(), fmt.Sprintf("metaci-%d-projects.json", os.Getpid()))
+			fs, _ = store.New(fallback)
+		}
+		s.store = fs
 	}
 
 	s.router = s.buildRouter()
@@ -113,9 +116,15 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/projects", s.handleCreateProject)
 		r.Get("/projects/{name}", s.handleGetProject)
 		r.Delete("/projects/{name}", s.handleDeleteProject)
+		r.Get("/projects/{name}/definition", s.handleGetProjectDefinition)
 		r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
 		r.Post("/projects/{name}/pipeline", s.handleSaveProjectPipeline)
 		r.Post("/projects/{name}/resolve", s.handleResolveProject)
+		r.Post("/projects/{name}/run", s.handleRunProject)
+		r.Post("/projects/{name}/tasks/{task}/run", s.handleRunTask)
+		r.Get("/projects/{name}/runs", s.handleListRuns)
+		r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
+		r.Get("/runs", s.handleListAllRuns)
 		r.Post("/resolve", s.handleResolve)
 		r.Post("/generate", s.handleGenerate)
 		r.Get("/validate", s.handleValidate)
@@ -126,29 +135,34 @@ func (s *Server) buildRouter() chi.Router {
 	r.Post("/webhook", s.handleWebhook)
 
 	// Swagger docs
+	r.Get("/docs/swagger.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(docs.SwaggerInfo.ReadDoc()))
+	})
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/swagger.json"),
 	))
 
-	// Serve built frontend (ui/dist/) if it exists
-	uiDist := filepath.Join(s.cfg.PipelineDir, "..", "ui", "dist")
-	if info, err := os.Stat(uiDist); err == nil && info.IsDir() {
-		fileServer := http.FileServer(http.Dir(uiDist))
-		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/") ||
-				strings.HasPrefix(r.URL.Path, "/webhook") ||
-				strings.HasPrefix(r.URL.Path, "/docs/") ||
-				strings.HasPrefix(r.URL.Path, "/ping") {
-				http.NotFound(w, r)
-				return
-			}
-			path := filepath.Join(uiDist, r.URL.Path)
-			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-				http.ServeFile(w, r, filepath.Join(uiDist, "index.html"))
-				return
-			}
-			fileServer.ServeHTTP(w, r)
-		})
+	// Serve built frontend if --static is set
+	if s.cfg.StaticDir != "" {
+		if info, err := os.Stat(s.cfg.StaticDir); err == nil && info.IsDir() {
+			fileServer := http.FileServer(http.Dir(s.cfg.StaticDir))
+			r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/api/") ||
+					strings.HasPrefix(r.URL.Path, "/webhook") ||
+					strings.HasPrefix(r.URL.Path, "/docs/") ||
+					strings.HasPrefix(r.URL.Path, "/ping") {
+					http.NotFound(w, r)
+					return
+				}
+				path := filepath.Join(s.cfg.StaticDir, r.URL.Path)
+				if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+					http.ServeFile(w, r, filepath.Join(s.cfg.StaticDir, "index.html"))
+					return
+				}
+				fileServer.ServeHTTP(w, r)
+			})
+		}
 	} else {
 		r.Get("/", s.handleRoot)
 	}
@@ -269,7 +283,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateProject godoc
-// @Summary Create a project (point at a repo containing pipeline.tf)
+// @Summary Create a project (point at a repo and its pipeline definition directory)
 // @Tags projects
 // @Accept json
 // @Produce json
@@ -340,12 +354,61 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
 }
 
-// projectPipelinePath resolves the absolute path to a project's pipeline file.
-func (s *Server) projectPipelinePath(p *store.ProjectConfig) string {
+// projectPipelineDir resolves the directory containing a project's pipeline
+// definitions and prevents a relative configuration from escaping RepoPath.
+func (s *Server) projectPipelineDir(p *store.ProjectConfig) (string, error) {
+	pipelineDir := p.PipelineDir
+	if pipelineDir == "" {
+		pipelineDir = filepath.Dir(p.PipelineFile)
+		if pipelineDir == "" {
+			pipelineDir = "."
+		}
+	}
+	repoPath, err := filepath.Abs(p.RepoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo path: %w", err)
+	}
+	dir := filepath.Clean(filepath.Join(repoPath, pipelineDir))
+	rel, err := filepath.Rel(repoPath, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("pipeline directory %q escapes repository", pipelineDir)
+	}
+	return dir, nil
+}
+
+// projectPipelinePath resolves the editor's file inside the pipeline directory.
+func (s *Server) projectPipelinePath(p *store.ProjectConfig) (string, error) {
 	if p.PipelineFile == "" {
 		p.PipelineFile = "pipeline.tf"
 	}
-	return filepath.Join(p.RepoPath, p.PipelineFile)
+	fileName := p.PipelineFile
+	if p.PipelineDir == "" {
+		fileName = filepath.Base(fileName)
+	}
+	dir, err := s.projectPipelineDir(p)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Clean(filepath.Join(dir, fileName))
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("pipeline file %q escapes pipeline directory", fileName)
+	}
+	return path, nil
+}
+
+// parseProjectPipeline merges all .tf definitions from the configured pipeline
+// directory. Other .tf files in the repository are intentionally ignored.
+func (s *Server) parseProjectPipeline(p *store.ProjectConfig) (model.Project, error) {
+	dir, err := s.projectPipelineDir(p)
+	if err != nil {
+		return model.Project{}, err
+	}
+	proj, err := parser.ParseDir(dir)
+	if err != nil {
+		return model.Project{}, fmt.Errorf("parse pipeline directory %s: %w", dir, err)
+	}
+	return proj, nil
 }
 
 // handleGetProjectPipeline godoc
@@ -362,7 +425,12 @@ func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request
 		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
 		return
 	}
-	data, err := os.ReadFile(s.projectPipelinePath(p))
+	path, err := s.projectPipelinePath(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
 		return
@@ -371,8 +439,25 @@ func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request
 	w.Write(data)
 }
 
+// handleGetProjectDefinition returns the parsed configured pipeline file.
+func (s *Server) handleGetProjectDefinition(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	proj, err := s.parseProjectPipeline(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(proj)
+}
+
 // handleSaveProjectPipeline godoc
-// @Summary Save pipeline HCL for a project (writes pipeline.tf to repo path)
+// @Summary Save the editor pipeline file inside a project's pipeline directory
 // @Tags projects
 // @Accept plain
 // @Produce json
@@ -391,11 +476,20 @@ func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
 		return
 	}
-	if err := os.MkdirAll(p.RepoPath, 0o755); err != nil {
+	pipelineDir, err := s.projectPipelineDir(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	path := s.projectPipelinePath(p)
+	path, err := s.projectPipelinePath(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -430,7 +524,7 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
 	}
-	proj, err := parser.ParseDir(p.RepoPath)
+	proj, err := s.parseProjectPipeline(p)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
@@ -461,6 +555,320 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 		"triggered": triggered,
 		"all_tasks": len(proj.Tasks),
 	})
+}
+
+// handleRunProject executes a registered project's selected tasks in its local
+// checkout. This endpoint intentionally accepts only a project name, rather
+// than a path or command, so execution stays limited to registered projects
+// and the scripts committed in their pipeline definition.
+func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	var req struct {
+		Changed       []string `json:"changed"`
+		IncludeManual bool     `json:"include_manual"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	proj, err := s.parseProjectPipeline(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	changedSet := make(map[string]bool, len(proj.Repos))
+	for _, repo := range proj.Repos {
+		changedSet[repo.Name] = false
+	}
+	for _, changed := range req.Changed {
+		changedSet[changed] = true
+	}
+
+	var output bytes.Buffer
+
+	// Build variable store from project variables and inject env vars.
+	varStore := variables.New()
+	for _, v := range proj.Variables {
+		val := v.Value
+		if val == "" {
+			val = v.Default
+		}
+		opts := []variables.Option{}
+		if v.Protected {
+			opts = append(opts, variables.WithProtected(true))
+		}
+		if v.Masked {
+			opts = append(opts, variables.WithMasked(true))
+		}
+		switch v.Scope {
+		case "repo":
+			varStore.SetRepo(v.Repo, v.Key, val, opts...)
+		case "job":
+			varStore.SetJob(v.Repo, v.Job, v.Key, val, opts...)
+		default:
+			varStore.SetProject(v.Key, val, opts...)
+		}
+	}
+	// Also pull in METACI_* env vars.
+	envVars := variables.FromEnv("METACI_")
+	for _, v := range envVars.List() {
+		varStore.SetProject(v.Key, v.Value)
+	}
+	// Inject Docker config as env vars.
+	if s.cfg.Docker.Registry != "" {
+		varStore.SetProject("DOCKER_REGISTRY", s.cfg.Docker.Registry)
+	}
+	if s.cfg.Docker.Image != "" {
+		varStore.SetProject("DOCKER_IMAGE", s.cfg.Docker.Image)
+	}
+	if s.cfg.Docker.Username != "" {
+		varStore.SetProject("DOCKER_USERNAME", s.cfg.Docker.Username)
+	}
+	if s.cfg.Docker.Password != "" {
+		varStore.SetProject("DOCKER_PASSWORD", s.cfg.Docker.Password)
+	}
+
+	// Persist run start if PG store is available.
+	var runID int
+	if pgStore, ok := s.store.(*store.PGStore); ok {
+		runID, _ = pgStore.CreateRun(name, req.Changed, req.IncludeManual)
+	}
+
+	err = runner.Run(r.Context(), proj, changedSet, runner.Options{
+		WorkDir:       p.RepoPath,
+		IncludeManual: req.IncludeManual,
+		Variables:     varStore,
+		Stdout:        &output,
+		Stderr:        &output,
+	})
+
+	// Persist run result.
+	status := "passed"
+	errMsg := ""
+	if err != nil {
+		status = "failed"
+		errMsg = err.Error()
+	}
+	if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
+		pgStore.FinishRun(runID, status, output.String(), errMsg)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"project": proj.Name,
+		"changed": req.Changed,
+		"output":  output.String(),
+	}
+	if err != nil {
+		response["status"] = "failed"
+		response["error"] = err.Error()
+	} else {
+		response["status"] = "passed"
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleRunTask executes a single task by name.
+func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	taskName := chi.URLParam(r, "task")
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	proj, err := s.parseProjectPipeline(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	// Find the task.
+	var targetTask *model.Task
+	for i := range proj.Tasks {
+		if proj.Tasks[i].Name == taskName {
+			targetTask = &proj.Tasks[i]
+			break
+		}
+	}
+	if targetTask == nil {
+		http.Error(w, fmt.Sprintf(`{"error":"task %q not found"}`, taskName), http.StatusNotFound)
+		return
+	}
+
+	// Build changed set — mark the task's trigger repos as changed.
+	changedSet := make(map[string]bool)
+	for _, repo := range proj.Repos {
+		changedSet[repo.Name] = false
+	}
+	trig := targetTask.Trigger
+	for _, repo := range proj.Repos {
+		if strings.Contains(trig, repo.Name) {
+			changedSet[repo.Name] = true
+		}
+	}
+
+	// Build variable store.
+	varStore := variables.New()
+	for _, v := range proj.Variables {
+		val := v.Value
+		if val == "" {
+			val = v.Default
+		}
+		opts := []variables.Option{}
+		if v.Protected {
+			opts = append(opts, variables.WithProtected(true))
+		}
+		if v.Masked {
+			opts = append(opts, variables.WithMasked(true))
+		}
+		switch v.Scope {
+		case "repo":
+			varStore.SetRepo(v.Repo, v.Key, val, opts...)
+		case "job":
+			varStore.SetJob(v.Repo, v.Job, v.Key, val, opts...)
+		default:
+			varStore.SetProject(v.Key, val, opts...)
+		}
+	}
+	envVars := variables.FromEnv("METACI_")
+	for _, v := range envVars.List() {
+		varStore.SetProject(v.Key, v.Value)
+	}
+	if s.cfg.Docker.Registry != "" {
+		varStore.SetProject("DOCKER_REGISTRY", s.cfg.Docker.Registry)
+	}
+	if s.cfg.Docker.Image != "" {
+		varStore.SetProject("DOCKER_IMAGE", s.cfg.Docker.Image)
+	}
+	if s.cfg.Docker.Username != "" {
+		varStore.SetProject("DOCKER_USERNAME", s.cfg.Docker.Username)
+	}
+	if s.cfg.Docker.Password != "" {
+		varStore.SetProject("DOCKER_PASSWORD", s.cfg.Docker.Password)
+	}
+
+	// Persist run.
+	var runID int
+	if pgStore, ok := s.store.(*store.PGStore); ok {
+		runID, _ = pgStore.CreateRun(name, []string{taskName}, false)
+	}
+
+	var output bytes.Buffer
+	err = runner.Run(r.Context(), proj, changedSet, runner.Options{
+		WorkDir:       p.RepoPath,
+		IncludeManual: true,
+		Variables:     varStore,
+		Stdout:        &output,
+		Stderr:        &output,
+	})
+
+	status := "passed"
+	errMsg := ""
+	if err != nil {
+		status = "failed"
+		errMsg = err.Error()
+	}
+	if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
+		pgStore.FinishRun(runID, status, output.String(), errMsg)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"project": proj.Name,
+		"task":    taskName,
+		"status":  status,
+		"output":  output.String(),
+	}
+	if err != nil {
+		response["error"] = errMsg
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// ─── Run Handlers ───────────────────────────────────────────────
+
+// handleListRuns godoc
+// @Summary List pipeline runs for a project
+// @Tags runs
+// @Produce json
+// @Param name path string true "Project name"
+// @Success 200 {array} store.Run
+// @Router /api/projects/{name}/runs [get]
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	pgStore, ok := s.store.(*store.PGStore)
+	if !ok {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+	runs, err := pgStore.ListRuns(name, 50)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if runs == nil {
+		runs = []store.Run{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(runs)
+}
+
+// handleGetRun godoc
+// @Summary Get a pipeline run by ID
+// @Tags runs
+// @Produce json
+// @Param name path string true "Project name"
+// @Param runID path int true "Run ID"
+// @Success 200 {object} store.Run
+// @Router /api/projects/{name}/runs/{runID} [get]
+func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
+	pgStore, ok := s.store.(*store.PGStore)
+	if !ok {
+		http.Error(w, `{"error":"runs not supported"}`, http.StatusBadRequest)
+		return
+	}
+	runID := 0
+	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
+	if runID == 0 {
+		http.Error(w, `{"error":"invalid run ID"}`, http.StatusBadRequest)
+		return
+	}
+	run, err := pgStore.GetRun(runID)
+	if err != nil || run == nil {
+		http.Error(w, `{"error":"run not found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(run)
+}
+
+// handleListAllRuns godoc
+// @Summary List all pipeline runs across projects
+// @Tags runs
+// @Produce json
+// @Success 200 {array} store.Run
+// @Router /api/runs [get]
+func (s *Server) handleListAllRuns(w http.ResponseWriter, r *http.Request) {
+	pgStore, ok := s.store.(*store.PGStore)
+	if !ok {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+	runs, err := pgStore.ListAllRuns(100)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if runs == nil {
+		runs = []store.Run{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(runs)
 }
 
 // ─── Pipeline Handlers (global, use --dir) ────────────────────
@@ -772,7 +1180,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>MetaCI</title></head>
