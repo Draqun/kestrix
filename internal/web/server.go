@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/store"
 
@@ -699,16 +700,69 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	log.Printf("webhook: repo=%s branch=%s commits=%d files=%d tasks=%v",
 		event.Repo, event.Branch, event.CommitCount, len(changedRepos), triggeredTasks)
 
+	// ─── Dispatch to GitLab (if configured) ──────────────────
+	var dispatchResult map[string]interface{}
+	if s.cfg.Dispatch.Enabled && s.cfg.Dispatch.ProjectID != "" && len(triggeredTasks) > 0 {
+		var projectID int
+		fmt.Sscanf(s.cfg.Dispatch.ProjectID, "%d", &projectID)
+		if projectID > 0 {
+			client := &dispatch.Client{
+				BaseURL: s.cfg.Dispatch.GitLabURL,
+				Token:   s.cfg.Dispatch.GitLabToken,
+			}
+			// Build variables for the pipeline.
+			vars := map[string]string{
+				"METACI_TRIGGERED_TASKS": strings.Join(triggeredTasks, ","),
+				"METACI_CHANGED_REPOS":   strings.Join(changedRepos, ","),
+				"METACI_DISPATCH_TIME":   time.Now().UTC().Format(time.RFC3339),
+			}
+			ref := s.cfg.Branch
+			if ref == "" {
+				ref = event.Branch
+			}
+
+			resp, err := client.Dispatch(dispatch.DispatchRequest{
+				ProjectID: projectID,
+				Ref:       ref,
+				Variables: vars,
+			})
+			if err != nil {
+				log.Printf("webhook: dispatch error: %v", err)
+				logEntry["dispatch"] = map[string]interface{}{
+					"dispatched": false,
+					"error":      err.Error(),
+				}
+			} else {
+				log.Printf("webhook: dispatched pipeline %d (%s)", resp.PipelineID, resp.WebURL)
+				logEntry["dispatch"] = map[string]interface{}{
+					"dispatched":  true,
+					"pipeline_id": resp.PipelineID,
+					"pipeline_url": resp.WebURL,
+				}
+				dispatchResult = logEntry["dispatch"].(map[string]interface{})
+			}
+		}
+	}
+
 	s.webhookLog = append(s.webhookLog, logEntry)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := map[string]interface{}{
 		"status":  "ok",
 		"project": proj.Name,
 		"changed": changedRepos,
 		"tasks":   triggeredTasks,
 		"count":   len(triggeredTasks),
-	})
+	}
+	if dispatchResult != nil {
+		response["dispatched"] = dispatchResult["dispatched"]
+		response["pipeline_url"] = dispatchResult["pipeline_url"]
+		response["pipeline_id"] = dispatchResult["pipeline_id"]
+	} else {
+		response["dispatched"] = false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
