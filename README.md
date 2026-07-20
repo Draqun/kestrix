@@ -1,200 +1,219 @@
-# MetaCI
+# MetaCI — CI/CD Control Plane
 
-> Repo-agnostic CI/CD Control Plane with HCL-based DAG orchestration.
+> Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
+> Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
+
+[![pipeline status](https://gitlab.com/lunaris-bot/metaci/badges/main/pipeline.svg)](https://gitlab.com/lunaris-bot/metaci/-/pipelines)
+[![coverage report](https://gitlab.com/lunaris-bot/metaci/badges/main/coverage.svg)](https://gitlab.com/lunaris-bot/metaci/-/pipelines)
+
+---
 
 ## What is MetaCI?
 
-MetaCI decouples pipeline definitions from repositories. Instead of scattering
-CI configuration across dozens of `.gitlab-ci.yml` files, you define your
-entire system's pipeline in one or more HCL files — with support for
-**OR/AND/NOT trigger logic** that is impossible in standard GitLab CI.
+MetaCI is a CI/CD control plane that orchestrates pipelines across multiple
+repositories using declarative HCL configuration. Instead of scattering CI
+logic across dozens of `.gitlab-ci.yml` files, you define everything in one
+place with clear trigger conditions.
 
-### The problem MetaCI solves
+**Key concepts:**
+- **ci_repo** — maps a repository name to a path (monorepo) or Git URL
+- **ci_task** — defines what to run, when to run it, and what it depends on
+- **Trigger logic** — `repo.auth_service.changed`, `!repo.docs.changed`, `||`, `&&`
 
-In multirepo setups, you have many services, many repos, and often an
-integration-test repo. A single push to any service should trigger the right
-subset of builds, integration tests, and deployments. Standard CI tools force
-you into per-repo pipelines with no native way to express cross-repo
-conditional triggers.
-
-### Example
-
+**Example trigger:**
 ```hcl
-project "my-system" {
-  ci_repo "auth" {
-    path = "src/auth"
-  }
-  ci_repo "gateway" {
-    path = "src/gateway"
-  }
-  ci_repo "docs" {
-    path = "docs"
-  }
-
-  # Integration tests run when EITHER service changes,
-  # but NOT when only documentation changes.
-  ci_task "integration_tests" {
-    trigger    = "(repo.auth.changed || repo.gateway.changed) && !repo.docs.changed"
-    depends_on = ["build_auth", "build_gateway"]
-
-    execute {
-      repo   = "tests"
-      script = "./run.sh"
-    }
-  }
+ci_task "deploy_staging" {
+  trigger  = "repo.auth_service.changed || repo.billing_service.changed"
+  repo     = "infra"
+  script   = "terraform apply -auto-approve"
 }
 ```
 
-This expression `(A || B) && !C` has no equivalent in standard GitLab CI.
+## Quick Start
 
-## For Developers
-
-### Prerequisites
-
-- Go 1.26+
-- Make
-- Git
-
-### Getting started
+### 1. Build
 
 ```bash
-git clone https://gitlab.com/lunaris-bot/metaci.git
-cd metaci
-make init          # install deps + build binary
+make build
 ```
 
-### Available commands
+### 2. Run
 
 ```bash
-make help          # show all available targets
-make build         # build the metaci binary
-make test          # run all tests (27+)
-make quality       # full quality gate: fmt + vet + test + coverage
-make validate      # validate examples/pipeline.tf
-make resolve CHANGED=auth_service   # simulate webhook
-make serve ADDR=:8080 DIR=./examples  # start webhook server
-make clean         # remove build artifacts
+# Serve with examples (default: :8080)
+./bin/metaci serve --dir ./examples
+
+# With dispatch to GitLab
+./bin/metaci serve \
+  --dir ./examples \
+  --dispatch 12345 \
+  --gitlab-token glpat-xxx \
+  --secret my-webhook-secret
+
+# From config file (~/.metaci/config.yaml)
+./bin/metaci serve --config ~/.metaci/config.yaml
 ```
 
-### Validate a pipeline
+### 3. Use
 
 ```bash
-# Check syntax, cycles, and repo references
+# CLI: resolve triggers
+./bin/metaci resolve examples/pipeline.tf --changed auth_service,billing_service
+
+# CLI: validate pipeline
 ./bin/metaci validate examples/pipeline.tf
-```
 
-### Resolve triggers
+# API: health check
+curl http://localhost:8080/api/health
 
-```bash
-# Which tasks run when auth_service changes?
-./bin/metaci resolve --changed auth_service examples/pipeline.tf
+# API: parse pipeline
+curl http://localhost:8080/api/pipeline?dir=./examples
 
-# Multiple repos changed
-./bin/metaci resolve --changed auth_service,api_gateway examples/pipeline.tf
-
-# Docs-only change — should trigger nothing
-./bin/metaci resolve --changed docs examples/pipeline.tf
-```
-
-### Run the webhook server
-
-```bash
-# Start server on port 8080, serving pipeline configs from ./examples
-./bin/metaci serve --addr :8080 --dir ./examples
-
-# Test with a simulated GitLab push event
-curl -X POST http://localhost:8080/webhook \
+# API: resolve triggers
+curl -X POST http://localhost:8080/api/resolve \
   -H "Content-Type: application/json" \
-  -d '{
-    "object_kind": "push",
-    "ref": "refs/heads/main",
-    "project": {
-      "path_with_namespace": "src/auth",
-      "default_branch": "main"
-    },
-    "commits": [{
-      "id": "abc123",
-      "message": "fix handler",
-      "added": [],
-      "modified": ["handler.go"],
-      "removed": []
-    }]
-  }'
+  -d '{"changed": ["auth_service"]}'
 
-# Health check
-curl http://localhost:8080/health
+# Webhook: register in GitLab → Settings → Webhooks
+# URL: http://your-server:8080/webhook
+# Secret Token: your-webhook-secret
 ```
 
-### Test coverage
+## Configuration
 
-```bash
-make quality       # includes coverage report
-# Reports saved to coverage/coverage.html
+MetaCI loads config from `~/.metaci/config.yaml` (auto-discovered).
+
+```yaml
+listen_addr: ":8080"
+default_branch: "main"
+
+pipeline:
+  dir: "./examples"
+
+webhook:
+  secret: "your-webhook-secret"
+
+dispatch:
+  enabled: true
+  project_id: 12345
+  gitlab_url: "https://gitlab.com"
+  gitlab_token: "glpat-xxx"
 ```
 
-Current coverage:
-- `internal/dag`:     82.4%
-- `internal/parser`:  80.6%
-- `internal/web`:     55.7%
-- Total:              61.1%
+**Precedence:** config file → env vars → CLI flags.
 
-### Project structure
-
-```
-metaci/
-├── cmd/metaci/              # CLI entry point (resolve, validate, serve)
-├── internal/
-│   ├── model/               # Domain types (Project, Repo, Task, Variable)
-│   ├── dag/                 # DAG engine + boolean expression parser
-│   ├── parser/              # HCL file parser (manual hclsyntax)
-│   ├── variables/           # GitLab-like variable store (scoped)
-│   └── web/                 # Webhook receiver + CI YAML generator
-├── examples/                # Example pipeline.tf files
-├── openspec/                # OpenSpec project docs (proposal, specs, design)
-├── .golangci.yml            # Linter configuration
-├── Makefile                 # Build system (make help for targets)
-└── go.mod
-```
-
-## Concepts
-
-| Concept | Description |
-|---------|-------------|
-| **Project** | Top-level container grouping repos and tasks |
-| **Repo** | A source repository (or subdirectory in monorepo) |
-| **Task** | A unit of work with a trigger condition and execution spec |
-| **Trigger** | A boolean expression using `repo.<name>.changed` predicates with `&&`, `\|\|`, `!` |
-| **Execute** | The repo context and script to run (supports per-job container image) |
-| **Manual** | Task requires human approval before execution |
-| **Variable** | Scoped config values: project → repo → job (most specific wins) |
+| Env Variable | CLI Flag | Description |
+|---|---|---|
+| `METACI_WEBHOOK_SECRET` | `--secret` | Webhook HMAC secret |
+| `METACI_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
+| `METACI_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
 
 ## Architecture
 
 ```
-┌──────────────┐     webhook     ┌────────────────┐     dispatch    ┌──────────────┐
-│  Git Repo    │ ──────────────▶ │  MetaCI        │ ──────────────▶ │  GitLab      │
-│  (push)      │                 │  Control Plane │                 │  Runner      │
-└──────────────┘                 │                │                 └──────────────┘
-                                 │  ┌──────────┐  │
-                                 │  │ HCL      │  │
-                                 │  │ Parser   │  │
-                                 │  └──────────┘  │
-                                 │  ┌──────────┐  │
-                                 │  │ DAG      │  │
-                                 │  │ Engine   │  │
-                                 │  └──────────┘  │
-                                 │  ┌──────────┐  │
-                                 │  │ Webhook  │  │
-                                 │  │ Receiver │  │
-                                 │  └──────────┘  │
-                                 │  ┌──────────┐  │
-                                 │  │ Variables│  │
-                                 │  │ Store    │  │
-                                 │  └──────────┘  │
-                                 └────────────────┘
+┌─────────────┐   push    ┌──────────────────┐   API    ┌───────────┐
+│  Developer   │─────────▶│   GitLab         │────────▶│  MetaCI   │
+└─────────────┘           │   (repo + CI)    │ webhook │  Server   │
+                          └──────────────────┘◀────────│           │
+                                    ▲                 │  ┌────────┤
+                                    │ pipeline        │  │ REST   │
+                                    └─────────────────│  │ + UI   │
+                                         dispatch     │  │ + Web  │
+                                                      └──┴────────┘
+```
+
+**Flow:**
+1. Developer pushes code to GitLab
+2. GitLab fires webhook to MetaCI (`/webhook`)
+3. MetaCI parses `pipeline.tf`, resolves trigger conditions
+4. If triggers match → dispatches pipeline to GitLab via API
+5. GitLab Runner picks up the job and executes
+
+**Components:**
+- **Parser** — HCL → `model.Project` (repos, tasks, variables)
+- **DAG Engine** — evaluates trigger expressions, resolves dependencies
+- **File Classifier** — maps changed files → repository names
+- **Dispatch Client** — GitLab Pipeline API integration
+- **Web Server** — Chi router, REST API, webhook receiver, UI
+
+## Project Structure
+
+```
+metaci/
+├── cmd/metaci/          # CLI entry point
+├── internal/
+│   ├── config/          # YAML config loading (~/.metaci/config.yaml)
+│   ├── dag/             # DAG engine + trigger expression parser
+│   ├── dispatch/        # GitLab pipeline dispatch client
+│   ├── model/           # Data model (Project, Task, Repo, Variable)
+│   ├── parser/          # HCL parser (hclsyntax)
+│   ├── store/           # Persistent project config (JSON file)
+│   ├── variables/       # Variable resolution engine
+│   └── web/             # HTTP server, webhook handler, API
+├── examples/            # Example pipeline definitions
+│   ├── pipeline.tf      # Original demo-mono
+│   ├── simple-webservice.tf
+│   ├── multi-service.tf
+│   └── enterprise-saas.tf
+├── ui/                  # React + MUI frontend
+├── docs/                # Swagger/OpenAPI
+├── openspec/            # OpenSpec documentation
+├── docker/              # Docker setup
+└── Makefile             # Build system
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/health` | Health check |
+| GET | `/api/pipeline` | Parse pipeline definition |
+| GET | `/api/pipeline/raw` | Raw HCL source |
+| POST | `/api/resolve` | Resolve trigger conditions |
+| POST | `/api/generate` | Generate gitlab-ci.yml |
+| GET | `/api/validate` | Validate pipeline |
+| GET | `/api/projects` | List projects |
+| POST | `/api/projects` | Create project |
+| GET | `/api/projects/{name}` | Get project |
+| DELETE | `/api/projects/{name}` | Delete project |
+| GET | `/api/projects/{name}/pipeline` | Get project pipeline HCL |
+| POST | `/api/projects/{name}/pipeline` | Save project pipeline HCL |
+| POST | `/api/projects/{name}/resolve` | Resolve project triggers |
+| POST | `/webhook` | GitLab webhook receiver |
+| GET | `/docs/` | Swagger UI |
+
+## Example Pipelines
+
+Three examples demonstrate different scales:
+
+| File | Scale | Repos | Tasks | Description |
+|---|---|---|---|---|
+| `simple-webservice.tf` | Small | 1 | 5 | Single webservice: lint → test → build → deploy |
+| `multi-service.tf` | Medium | 4 | 13 | 3 microservices + infra, integration tests |
+| `enterprise-saas.tf` | Large | 13 | 32 | Enterprise SaaS, shared libs, security, compliance |
+
+## Development
+
+```bash
+# Build
+make build
+
+# Test
+make test
+
+# Full quality gate
+make quality
+
+# Run dev server
+make dev
+
+# Docker
+cd docker && make docker-up
+
+# UI development
+cd ui && npm install && npm run dev
 ```
 
 ## License
 
-All rights reserved. See [LICENSE](./LICENSE).
-No usage without explicit permission from the copyright holder.
+MIT
