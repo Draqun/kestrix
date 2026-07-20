@@ -695,8 +695,9 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	// Persist run start if PG store is available.
 	var runID int
 	if pgStore, ok := s.store.(*store.PGStore); ok {
+		snap := store.SnapshotFromProject(&proj)
 		var runErr error
-		runID, runErr = pgStore.CreateRun(name, req.Changed, req.IncludeManual)
+		runID, runErr = pgStore.CreateRun(name, req.Changed, req.IncludeManual, snap)
 		if runErr != nil {
 			log.Printf("warning: could not create run record: %v", runErr)
 		}
@@ -864,8 +865,9 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	// Persist run.
 	var runID int
 	if pgStore, ok := s.store.(*store.PGStore); ok {
+		snap := store.SnapshotFromProject(&proj)
 		var runErr error
-		runID, runErr = pgStore.CreateRun(name, []string{taskName}, false)
+		runID, runErr = pgStore.CreateRun(name, []string{taskName}, false, snap)
 		if runErr != nil {
 			log.Printf("warning: could not create run record: %v", runErr)
 		}

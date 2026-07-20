@@ -185,6 +185,8 @@ function RunDetailView({ run, onClose }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
+  const [dagNodes, setDagNodes, onDagNodesChange] = useNodesState([]);
+  const [dagEdges, setDagEdges, onDagEdgesChange] = useEdgesState([]);
 
   useEffect(() => {
     if (!run) { setDetail(null); setSelectedJob(null); return; }
@@ -198,6 +200,40 @@ function RunDetailView({ run, onClose }) {
 
   const r = detail || run;
   if (!r) return null;
+
+  // Build DAG from pipeline_def snapshot when detail loads.
+  useEffect(() => {
+    if (!r?.pipeline_def) { setDagNodes([]); setDagEdges([]); return; }
+    // Convert snapshot shape to the shape layoutFromProject expects.
+    const proj = {
+      Repos: r.pipeline_def.repos,
+      Tasks: r.pipeline_def.tasks.map(t => ({
+        Name: t.name,
+        Trigger: t.trigger,
+        DependsOn: t.depends_on,
+        Manual: t.manual,
+        Execute: t.execute,
+      })),
+    };
+    const { nodes: n, edges: e } = layoutFromProject(proj);
+
+    // Overlay task_results statuses on DAG nodes.
+    const statusMap = {};
+    (r.task_results || []).forEach(t => { statusMap[t.name] = t.status; });
+    const patchedNodes = n.map(node => {
+      if (node.data.type === 'task') {
+        const taskName = node.id.replace('task:', '');
+        if (statusMap[taskName]) {
+          return { ...node, data: { ...node.data, runStatus: statusMap[taskName] } };
+        }
+      }
+      return node;
+    });
+
+    setDagNodes(patchedNodes);
+    setDagEdges(e);
+  }, [r?.pipeline_def, r?.task_results]);
+
   const st = formatStatus(r.status);
   const jobs = r.task_results || [];
   const activeJob = selectedJob != null ? jobs.find(j => j.name === selectedJob) : null;
@@ -250,8 +286,8 @@ function RunDetailView({ run, onClose }) {
           )}
         </Box>
 
-        {/* Job output */}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+        {/* Job output or DAG graph */}
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {activeJob ? (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -262,15 +298,27 @@ function RunDetailView({ run, onClose }) {
                 )}
               </Box>
               {activeJob.error && <Alert severity="error" sx={{ mb: 1 }}>{activeJob.error}</Alert>}
-              <Box component="pre" sx={{ p: 1.5, maxHeight: 500, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+              <Box component="pre" sx={{ p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                 {activeJob.output || '(No output)'}
               </Box>
             </>
           ) : (
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <Typography variant="body2" color="text.secondary">
-                {jobs.length > 0 ? 'Select a job to view its logs' : 'No output available'}
-              </Typography>
+            <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 300 }}>
+              {dagNodes.length > 0 ? (
+                <ReactFlow nodes={dagNodes} edges={dagEdges}
+                  onNodesChange={onDagNodesChange} onEdgesChange={onDagEdgesChange}
+                  nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}>
+                  <Background color="#1e3a5f" />
+                  <Controls />
+                  <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
+                </ReactFlow>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {jobs.length > 0 ? 'Select a job to view its logs' : 'No pipeline definition available'}
+                  </Typography>
+                </Box>
+              )}
             </Box>
           )}
         </Box>
