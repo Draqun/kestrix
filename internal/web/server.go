@@ -60,27 +60,34 @@ func NewServer(cfg Config) *Server {
 	fs, err := store.New(storePath)
 	if err != nil {
 		log.Printf("warning: could not init project store at %s: %v", storePath, err)
-		// Fall back to in-memory (will not persist).
-		fs, _ = store.New(filepath.Join(os.TempDir(), "metaci-projects.json"))
+		// Fall back to temp dir with PID to avoid cross-instance conflicts.
+		fallback := filepath.Join(os.TempDir(), fmt.Sprintf("metaci-%d-projects.json", os.Getpid()))
+		fs, _ = store.New(fallback)
 	}
 	s.store = fs
 
-	// Auto-load default project if pipeline directory exists.
+	// Auto-load all .tf files as separate projects.
 	if cfg.PipelineDir != "" {
-		if _, err := os.Stat(filepath.Join(cfg.PipelineDir, "pipeline.tf")); err == nil {
+		entries, err := os.ReadDir(cfg.PipelineDir)
+		if err == nil {
 			absPath, _ := filepath.Abs(cfg.PipelineDir)
-			projName := "demo-mono"
-			if proj, parseErr := parser.ParseFile(filepath.Join(cfg.PipelineDir, "pipeline.tf")); parseErr == nil && proj.Name != "" {
-				projName = proj.Name
-			}
-			// Only auto-create if not already registered.
-			existing, _ := s.store.Get(projName)
-			if existing == nil {
-				s.store.Upsert(&store.ProjectConfig{
-					Name:         projName,
-					RepoPath:     absPath,
-					PipelineFile: "pipeline.tf",
-				})
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
+					continue
+				}
+				filePath := filepath.Join(cfg.PipelineDir, e.Name())
+				proj, parseErr := parser.ParseFile(filePath)
+				if parseErr != nil || proj.Name == "" {
+					continue
+				}
+				existing, _ := s.store.Get(proj.Name)
+				if existing == nil {
+					s.store.Upsert(&store.ProjectConfig{
+						Name:         proj.Name,
+						RepoPath:     absPath,
+						PipelineFile: e.Name(),
+					})
+				}
 			}
 		}
 	}
