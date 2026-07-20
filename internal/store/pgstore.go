@@ -62,6 +62,7 @@ func migrate(db *sql.DB) error {
 			include_manual  BOOLEAN NOT NULL DEFAULT false,
 			output          TEXT NOT NULL DEFAULT '',
 			error           TEXT NOT NULL DEFAULT '',
+			task_results    JSONB NOT NULL DEFAULT '[]',
 			started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 			finished_at     TIMESTAMPTZ
 		);
@@ -69,7 +70,12 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_name);
 		CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add task_results column if missing (for existing databases).
+	_, _ = db.Exec(`ALTER TABLE runs ADD COLUMN IF NOT EXISTS task_results JSONB NOT NULL DEFAULT '[]'`)
+	return nil
 }
 
 func (s *PGStore) Load() (map[string]*ProjectConfig, error) {
@@ -184,15 +190,25 @@ func (s *PGStore) List() ([]string, error) {
 
 // Run represents a single pipeline execution.
 type Run struct {
-	ID            int        `json:"id"`
-	ProjectName   string     `json:"project_name"`
-	Status        string     `json:"status"` // running, passed, failed
-	Changed       []string   `json:"changed"`
-	IncludeManual bool       `json:"include_manual"`
-	Output        string     `json:"output"`
-	Error         string     `json:"error,omitempty"`
-	StartedAt     time.Time  `json:"started_at"`
-	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	ID            int              `json:"id"`
+	ProjectName   string           `json:"project_name"`
+	Status        string           `json:"status"` // running, passed, failed
+	Changed       []string         `json:"changed"`
+	IncludeManual bool             `json:"include_manual"`
+	Output        string           `json:"output"`
+	Error         string           `json:"error,omitempty"`
+	TaskResults   []TaskResult     `json:"task_results,omitempty"`
+	StartedAt     time.Time        `json:"started_at"`
+	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+}
+
+// TaskResult is a per-task execution record stored in the runs table.
+type TaskResult struct {
+	Name     string        `json:"name"`
+	Status   string        `json:"status"`
+	Output   string        `json:"output"`
+	Error    string        `json:"error,omitempty"`
+	Duration time.Duration `json:"duration"`
 }
 
 // CreateRun inserts a new run and returns its ID.
@@ -211,10 +227,15 @@ func (s *PGStore) CreateRun(projectName string, changed []string, includeManual 
 }
 
 // FinishRun updates a run with its result.
-func (s *PGStore) FinishRun(id int, status, output, errMsg string) error {
+func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error {
+	taskResultsJSON := "[]"
+	if len(taskResults) > 0 {
+		b, _ := json.Marshal(taskResults)
+		taskResultsJSON = string(b)
+	}
 	_, err := s.db.Exec(
-		`UPDATE runs SET status = $1, output = $2, error = $3, finished_at = now() WHERE id = $4`,
-		status, output, errMsg, id,
+		`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5`,
+		status, output, errMsg, taskResultsJSON, id,
 	)
 	return err
 }
@@ -222,11 +243,11 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string) error {
 // GetRun returns a run by ID.
 func (s *PGStore) GetRun(id int) (*Run, error) {
 	var r Run
-	var changedJSON string
+	var changedJSON, taskResultsJSON string
 	var finishedAt sql.NullTime
 	err := s.db.QueryRow(
-		`SELECT id, project_name, status, changed, include_manual, output, error, started_at, finished_at FROM runs WHERE id = $1`, id,
-	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &r.StartedAt, &finishedAt)
+		`SELECT id, project_name, status, changed, include_manual, output, error, task_results, started_at, finished_at FROM runs WHERE id = $1`, id,
+	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -234,6 +255,7 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 		return nil, err
 	}
 	json.Unmarshal([]byte(changedJSON), &r.Changed)
+	json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 	if finishedAt.Valid {
 		r.FinishedAt = &finishedAt.Time
 	}
@@ -246,7 +268,7 @@ func (s *PGStore) ListRuns(projectName string, limit int) ([]Run, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, output, error, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2`,
+		`SELECT id, project_name, status, changed, include_manual, output, error, task_results, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2`,
 		projectName, limit,
 	)
 	if err != nil {
@@ -257,12 +279,13 @@ func (s *PGStore) ListRuns(projectName string, limit int) ([]Run, error) {
 	var runs []Run
 	for rows.Next() {
 		var r Run
-		var changedJSON string
+		var changedJSON, taskResultsJSON string
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
+		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		if finishedAt.Valid {
 			r.FinishedAt = &finishedAt.Time
 		}
@@ -277,7 +300,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, output, error, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT $1`,
+		`SELECT id, project_name, status, changed, include_manual, output, error, task_results, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT $1`,
 		limit,
 	)
 	if err != nil {
@@ -288,12 +311,13 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 	var runs []Run
 	for rows.Next() {
 		var r Run
-		var changedJSON string
+		var changedJSON, taskResultsJSON string
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
+		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		if finishedAt.Valid {
 			r.FinishedAt = &finishedAt.Time
 		}

@@ -79,7 +79,7 @@ export default function Layout({ children }) {
                 onClick={() => navigate(item.path)}
                 sx={{
                   cursor: 'pointer',
-                  backgroundColor: location.pathname === item.path
+                  backgroundColor: location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path))
                     ? 'action.selected' : 'transparent',
                   '&:hover': { backgroundColor: 'action.hover' },
                 }}

@@ -83,6 +83,19 @@ export async function deleteProject(name) {
   return res.json();
 }
 
+export async function updateProject(name, cfg) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Update failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function getProjectPipeline(name) {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`);
   if (!res.ok) {

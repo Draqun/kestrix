@@ -21,6 +21,15 @@ type Config struct {
 	Webhook     WebhookConfig  `yaml:"webhook"`
 	Dispatch    DispatchConfig `yaml:"dispatch"`
 	Docker      DockerConfig   `yaml:"docker"`
+	Runner      RunnerConfig   `yaml:"runner"`
+}
+
+// RunnerConfig controls how pipeline jobs are executed.
+type RunnerConfig struct {
+	// Mode selects the execution backend: "local" (direct sh -c) or "gitlab-runner" (gitlab-runner exec).
+	Mode string `yaml:"mode"`
+	// Executor is the gitlab-runner executor to use (shell, docker, etc.). Only used with mode=gitlab-runner.
+	Executor string `yaml:"executor"`
 }
 
 // DockerConfig holds Docker registry and deployment settings.
@@ -59,6 +68,10 @@ func DefaultConfig() *Config {
 		},
 		Dispatch: DispatchConfig{
 			GitLabURL: "https://gitlab.com",
+		},
+		Runner: RunnerConfig{
+			Mode:     "local",
+			Executor: "shell",
 		},
 	}
 }

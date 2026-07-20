@@ -3,7 +3,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import theme from './theme/theme';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
-import Pipelines from './pages/Pipelines';
+import { RunList, NewRun, RunProject } from './pages/Pipelines';
 import Projects from './pages/Projects';
 import WebhookLogs from './pages/WebhookLogs';
 
@@ -13,18 +13,25 @@ function ProjectsRoutes() {
   return <Projects selectedName={name} onSelect={(n) => n ? navigate(`/projects/${encodeURIComponent(n)}`) : navigate('/projects')} />;
 }
 
+function NewRunRoutes() {
+  const { projectName } = useParams();
+  const navigate = useNavigate();
+  if (projectName) {
+    return <RunProject projectName={decodeURIComponent(projectName)} onBack={() => navigate('/pipelines/new-run')} />;
+  }
+  return <NewRun onSelect={(n) => navigate(`/pipelines/new-run/${encodeURIComponent(n)}`)} onBack={() => navigate('/pipelines')} />;
+}
+
 function AppRoutes() {
   const navigate = useNavigate();
-
-  const openPipeline = (name) => {
-    navigate(`/pipelines?project=${encodeURIComponent(name)}`);
-  };
 
   return (
     <Layout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/pipelines" element={<Pipelines />} />
+        <Route path="/pipelines" element={<RunList onNewRun={() => navigate('/pipelines/new-run')} />} />
+        <Route path="/pipelines/new-run" element={<NewRunRoutes />} />
+        <Route path="/pipelines/new-run/:projectName" element={<NewRunRoutes />} />
         <Route path="/projects" element={<Projects selectedName={null} onSelect={(n) => n ? navigate(`/projects/${encodeURIComponent(n)}`) : navigate('/projects')} />} />
         <Route path="/projects/:name" element={<ProjectsRoutes />} />
         <Route path="/webhooks" element={<WebhookLogs />} />

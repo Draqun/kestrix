@@ -49,6 +49,13 @@ type Config struct {
 	Docker      DockerConfig
 	Signature   SignatureConfig
 	Dispatch    DispatchConfig
+	Runner      RunnerConfig
+}
+
+// RunnerConfig holds runner execution settings.
+type RunnerConfig struct {
+	Mode     string // "local" or "gitlab-runner"
+	Executor string // "shell", "docker", etc.
 }
 
 // DockerConfig holds Docker registry and deployment settings.
@@ -115,6 +122,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/projects", s.handleListProjects)
 		r.Post("/projects", s.handleCreateProject)
 		r.Get("/projects/{name}", s.handleGetProject)
+		r.Put("/projects/{name}", s.handleUpdateProject)
 		r.Delete("/projects/{name}", s.handleDeleteProject)
 		r.Get("/projects/{name}/definition", s.handleGetProjectDefinition)
 		r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
@@ -335,6 +343,52 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(p)
+}
+
+// handleUpdateProject godoc
+// @Summary Update a project config
+// @Tags projects
+// @Accept json
+// @Produce json
+// @Param name path string true "Project name"
+// @Param request body store.ProjectConfig true "Updated config"
+// @Success 200 {object} store.ProjectConfig
+// @Router /api/projects/{name} [put]
+func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	existing, err := s.store.Get(name)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	var update store.ProjectConfig
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	update.Name = name
+	if update.RepoPath == "" {
+		update.RepoPath = existing.RepoPath
+	}
+	if update.PipelineDir == "" {
+		update.PipelineDir = existing.PipelineDir
+	}
+	if update.PipelineFile == "" {
+		update.PipelineFile = existing.PipelineFile
+	}
+	if update.CreatedAt == "" {
+		update.CreatedAt = existing.CreatedAt
+	}
+	if err := s.store.Upsert(&update); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(update)
 }
 
 // handleDeleteProject godoc
@@ -582,11 +636,17 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	changedSet := make(map[string]bool, len(proj.Repos))
-	for _, repo := range proj.Repos {
-		changedSet[repo.Name] = false
-	}
-	for _, changed := range req.Changed {
-		changedSet[changed] = true
+	if len(req.Changed) == 0 {
+		for _, repo := range proj.Repos {
+			changedSet[repo.Name] = true
+		}
+	} else {
+		for _, repo := range proj.Repos {
+			changedSet[repo.Name] = false
+		}
+		for _, changed := range req.Changed {
+			changedSet[changed] = true
+		}
 	}
 
 	var output bytes.Buffer
@@ -636,16 +696,36 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	// Persist run start if PG store is available.
 	var runID int
 	if pgStore, ok := s.store.(*store.PGStore); ok {
-		runID, _ = pgStore.CreateRun(name, req.Changed, req.IncludeManual)
+		var runErr error
+		runID, runErr = pgStore.CreateRun(name, req.Changed, req.IncludeManual)
+		if runErr != nil {
+			log.Printf("warning: could not create run record: %v", runErr)
+		}
 	}
 
-	err = runner.Run(r.Context(), proj, changedSet, runner.Options{
-		WorkDir:       p.RepoPath,
-		IncludeManual: req.IncludeManual,
-		Variables:     varStore,
-		Stdout:        &output,
-		Stderr:        &output,
-	})
+	var taskResults []runner.TaskResult
+	if s.cfg.Runner.Mode == "gitlab-runner" {
+		nodes, err := dag.New(proj).Resolve(changedSet)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		taskResults, err = runner.RunGitLabRunner(r.Context(), proj, nodes, runner.Options{
+			WorkDir:       p.RepoPath,
+			IncludeManual: req.IncludeManual,
+			Variables:     varStore,
+			Stdout:        &output,
+			Stderr:        &output,
+		}, GenerateGitLabCI)
+	} else {
+		taskResults, err = runner.Run(r.Context(), proj, changedSet, runner.Options{
+			WorkDir:       p.RepoPath,
+			IncludeManual: req.IncludeManual,
+			Variables:     varStore,
+			Stdout:        &output,
+			Stderr:        &output,
+		})
+	}
 
 	// Persist run result.
 	status := "passed"
@@ -655,13 +735,21 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		errMsg = err.Error()
 	}
 	if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
-		pgStore.FinishRun(runID, status, output.String(), errMsg)
+		var trs []store.TaskResult
+		for _, tr := range taskResults {
+			trs = append(trs, store.TaskResult{
+				Name: tr.Name, Status: tr.Status, Output: tr.Output,
+				Error: tr.Error, Duration: tr.Duration,
+			})
+		}
+		pgStore.FinishRun(runID, status, output.String(), errMsg, trs)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]interface{}{
-		"project": proj.Name,
-		"changed": req.Changed,
-		"output":  output.String(),
+		"project":      proj.Name,
+		"changed":      req.Changed,
+		"output":       output.String(),
+		"task_results": taskResults,
 	}
 	if err != nil {
 		response["status"] = "failed"
@@ -755,11 +843,15 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	// Persist run.
 	var runID int
 	if pgStore, ok := s.store.(*store.PGStore); ok {
-		runID, _ = pgStore.CreateRun(name, []string{taskName}, false)
+		var runErr error
+		runID, runErr = pgStore.CreateRun(name, []string{taskName}, false)
+		if runErr != nil {
+			log.Printf("warning: could not create run record: %v", runErr)
+		}
 	}
 
 	var output bytes.Buffer
-	err = runner.Run(r.Context(), proj, changedSet, runner.Options{
+	taskResults, err := runner.Run(r.Context(), proj, changedSet, runner.Options{
 		WorkDir:       p.RepoPath,
 		IncludeManual: true,
 		Variables:     varStore,
@@ -774,7 +866,14 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		errMsg = err.Error()
 	}
 	if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
-		pgStore.FinishRun(runID, status, output.String(), errMsg)
+		var trs []store.TaskResult
+		for _, tr := range taskResults {
+			trs = append(trs, store.TaskResult{
+				Name: tr.Name, Status: tr.Status, Output: tr.Output,
+				Error: tr.Error, Duration: tr.Duration,
+			})
+		}
+		pgStore.FinishRun(runID, status, output.String(), errMsg, trs)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

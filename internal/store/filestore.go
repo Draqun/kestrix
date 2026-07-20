@@ -39,6 +39,16 @@ type ProjectConfig struct {
 	DefaultBranch   string `json:"default_branch,omitempty"`
 	WebhookSecret   string `json:"webhook_secret,omitempty"`
 	CreatedAt       string `json:"created_at"`
+	// ExtraRepos lists additional repositories beyond the primary one.
+	ExtraRepos []ExtraRepo `json:"extra_repos,omitempty"`
+}
+
+// ExtraRepo is an additional repository that participates in the project's pipeline.
+type ExtraRepo struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	URL  string `json:"url,omitempty"`
+	Kind string `json:"kind,omitempty"` // "subpath" or "git"
 }
 
 // FileStore provides atomic, file-backed project configuration storage.

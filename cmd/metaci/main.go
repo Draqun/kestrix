@@ -97,12 +97,13 @@ func cmdRun(args []string) {
 			changed[name] = true
 		}
 	}
-	if err := runner.Run(context.Background(), proj, changed, runner.Options{
+	_, err = runner.Run(context.Background(), proj, changed, runner.Options{
 		WorkDir:       *workDir,
 		IncludeManual: *includeManual,
 		Stdout:        os.Stdout,
 		Stderr:        os.Stderr,
-	}); err != nil {
+	})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "pipeline failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -148,6 +149,9 @@ func cmdServe(args []string) {
 	}
 	if *dbURL == "" {
 		*dbURL = os.Getenv("DATABASE_URL")
+	}
+	if *dbURL == "" {
+		*dbURL = "postgres://metaci:metaci@localhost:5432/metaci?sslmode=disable"
 	}
 	if *dockerRegistry == "" {
 		*dockerRegistry = os.Getenv("DOCKER_REGISTRY")
@@ -226,6 +230,10 @@ func cmdServe(args []string) {
 			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),
 			GitLabURL:   cfg.Dispatch.GitLabURL,
 			GitLabToken: cfg.Dispatch.GitLabToken,
+		},
+		Runner: web.RunnerConfig{
+			Mode:     cfg.Runner.Mode,
+			Executor: cfg.Runner.Executor,
 		},
 	}
 
