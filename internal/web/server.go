@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -649,8 +650,6 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var output bytes.Buffer
-
 	// Build variable store from project variables and inject env vars.
 	varStore := variables.New()
 	for _, v := range proj.Variables {
@@ -703,61 +702,62 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var taskResults []runner.TaskResult
-	if s.cfg.Runner.Mode == "gitlab-runner" {
-		nodes, err := dag.New(proj).Resolve(changedSet)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
-			return
-		}
-		taskResults, err = runner.RunGitLabRunner(r.Context(), proj, nodes, runner.Options{
-			WorkDir:       p.RepoPath,
-			IncludeManual: req.IncludeManual,
-			Variables:     varStore,
-			Stdout:        &output,
-			Stderr:        &output,
-		}, GenerateGitLabCI)
-	} else {
-		taskResults, err = runner.Run(r.Context(), proj, changedSet, runner.Options{
-			WorkDir:       p.RepoPath,
-			IncludeManual: req.IncludeManual,
-			Variables:     varStore,
-			Stdout:        &output,
-			Stderr:        &output,
-		})
-	}
+	// Return immediately so the frontend doesn't timeout.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"project": proj.Name,
+		"run_id":  runID,
+		"status":  "running",
+		"changed": req.Changed,
+	})
 
-	// Persist run result.
-	status := "passed"
-	errMsg := ""
-	if err != nil {
-		status = "failed"
-		errMsg = err.Error()
-	}
-	if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
-		var trs []store.TaskResult
-		for _, tr := range taskResults {
-			trs = append(trs, store.TaskResult{
-				Name: tr.Name, Status: tr.Status, Output: tr.Output,
-				Error: tr.Error, Duration: tr.Duration,
+	// Execute pipeline in background.
+	go func() {
+		var bgOutput bytes.Buffer
+		var taskResults []runner.TaskResult
+		var err error
+
+		if s.cfg.Runner.Mode == "gitlab-runner" {
+			nodes, resErr := dag.New(proj).Resolve(changedSet)
+			if resErr != nil {
+				err = resErr
+			} else {
+				taskResults, err = runner.RunGitLabRunner(context.Background(), proj, nodes, runner.Options{
+					WorkDir:       p.RepoPath,
+					IncludeManual: req.IncludeManual,
+					Variables:     varStore,
+					Stdout:        &bgOutput,
+					Stderr:        &bgOutput,
+				}, GenerateGitLabCI)
+			}
+		} else {
+			taskResults, err = runner.Run(context.Background(), proj, changedSet, runner.Options{
+				WorkDir:       p.RepoPath,
+				IncludeManual: req.IncludeManual,
+				Variables:     varStore,
+				Stdout:        &bgOutput,
+				Stderr:        &bgOutput,
 			})
 		}
-		pgStore.FinishRun(runID, status, output.String(), errMsg, trs)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"project":      proj.Name,
-		"changed":      req.Changed,
-		"output":       output.String(),
-		"task_results": taskResults,
-	}
-	if err != nil {
-		response["status"] = "failed"
-		response["error"] = err.Error()
-	} else {
-		response["status"] = "passed"
-	}
-	json.NewEncoder(w).Encode(response)
+
+		status := "passed"
+		errMsg := ""
+		if err != nil {
+			status = "failed"
+			errMsg = err.Error()
+		}
+		if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
+			var trs []store.TaskResult
+			for _, tr := range taskResults {
+				trs = append(trs, store.TaskResult{
+					Name: tr.Name, Status: tr.Status, Output: tr.Output,
+					Error: tr.Error, Duration: tr.Duration,
+				})
+			}
+			pgStore.FinishRun(runID, status, bgOutput.String(), errMsg, trs)
+			log.Printf("run #%d finished: %s", runID, status)
+		}
+	}()
 }
 
 // handleRunTask executes a single task by name.

@@ -124,12 +124,20 @@ function layoutFromProject(project) {
 }
 
 function CustomNode({ data }) {
+  const statusColor = data.runStatus === 'passed' ? '#4caf50'
+    : data.runStatus === 'failed' ? '#f44336'
+    : data.runStatus === 'skipped' ? '#757575'
+    : data.runStatus === 'running' ? '#ff9800'
+    : null;
+  const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50');
+
   return (
     <Box sx={{
       background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
-      border: `2px solid ${data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50'}`,
+      border: `2px solid ${borderColor}`,
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
       position: 'relative',
+      opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' ? 0.5 : 1,
     }}>
       <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
       <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
@@ -139,9 +147,19 @@ function CustomNode({ data }) {
           {data.trigger}
         </Typography>
       )}
-      {data.manual && (
+      {data.manual && !data.runStatus && (
         <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5 }}>
           MANUAL
+        </Typography>
+      )}
+      {data.runStatus && data.runStatus !== 'passed' && (
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: borderColor }}>
+          {data.runStatus.toUpperCase()}
+        </Typography>
+      )}
+      {data.runStatus === 'passed' && (
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: '#4caf50' }}>
+          PASSED
         </Typography>
       )}
       <Handle type="source" position={Position.Right} style={{ background: '#fff', width: 8, height: 8 }} />
@@ -431,14 +449,48 @@ export function RunProject({ projectName, onBack }) {
     setRunning(true);
     setError(null);
     setRunResult(null);
+    // Reset DAG node statuses.
+    setNodes(prev => prev.map(node => {
+      if (node.data.type === 'task') {
+        return { ...node, data: { ...node.data, runStatus: undefined } };
+      }
+      return node;
+    }));
     try {
       const changed = changedRepos.split(',').map(s => s.trim()).filter(Boolean);
       const result = await runProject(projectName, changed, includeManual);
       setRunResult(result);
+
+      // If async (running), poll for completion.
+      if (result.status === 'running' && result.run_id) {
+        const pollInterval = setInterval(async () => {
+          try {
+            const run = await getRun(projectName, result.run_id);
+            if (run && run.status !== 'running') {
+              setRunResult(run);
+              clearInterval(pollInterval);
+              setRunning(false);
+              if (run.task_results) {
+                const resultMap = {};
+                run.task_results.forEach(t => { resultMap[t.name] = t.status; });
+                setNodes(prev => prev.map(node => {
+                  const taskName = node.id.replace('task:', '');
+                  if (node.data.type === 'task') {
+                    return { ...node, data: { ...node.data, runStatus: resultMap[taskName] || 'pending' } };
+                  }
+                  return node;
+                }));
+              }
+            }
+          } catch { /* retry */ }
+        }, 2000);
+      } else {
+        setRunning(false);
+      }
     } catch (e) {
       setError(e.message);
+      setRunning(false);
     }
-    setRunning(false);
   };
 
   const handleSave = async () => {

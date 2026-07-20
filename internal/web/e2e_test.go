@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/store"
@@ -289,14 +290,25 @@ func TestRunProject(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("run status = %d: %s", w.Code, w.Body.String())
 	}
-	var response struct {
+	var initial struct {
 		Status string `json:"status"`
+		RunID  int    `json:"run_id"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &initial); err != nil {
 		t.Fatal(err)
 	}
-	if response.Status != "passed" {
-		t.Fatalf("run status = %q, body: %s", response.Status, w.Body.String())
+	if initial.Status != "running" {
+		t.Fatalf("expected initial status 'running', got %q", initial.Status)
+	}
+
+	// Poll for completion.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		got, err := os.ReadFile(filepath.Join(repoDir, "result.txt"))
+		if err == nil && string(got) == "passed" {
+			break
+		}
 	}
 	got, err := os.ReadFile(filepath.Join(repoDir, "result.txt"))
 	if err != nil || string(got) != "passed" {
