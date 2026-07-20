@@ -25,7 +25,7 @@ import {
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import dagre from 'dagre';
-import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun } from '../api/client';
+import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
 
 function layoutFromProject(project) {
   const g = new dagre.graphlib.Graph();
@@ -79,7 +79,7 @@ function layoutFromProject(project) {
       position: { x: pos.x - 95, y: pos.y - 30 },
       data: { label: `⚙️ ${task.Name}`, type: 'task', manual: task.Manual, trigger: task.Trigger, script: task.Execute?.Script },
       type: 'custom',
-      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#ff9800' : '#4caf50'}`, borderRadius: 8 },
+      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#42a5f5' : '#4caf50'}`, borderRadius: 8 },
     });
   });
 
@@ -130,8 +130,9 @@ function CustomNode({ data }) {
     : data.runStatus === 'running' ? '#ff9800'
     : data.runStatus === 'pending' ? '#616161'
     : data.runStatus === 'canceled' ? '#ff9800'
+    : data.runStatus === 'manual' ? '#42a5f5'
     : null;
-  const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50');
+  const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#42a5f5' : '#4caf50');
 
   return (
     <Box sx={{
@@ -150,7 +151,7 @@ function CustomNode({ data }) {
         </Typography>
       )}
       {data.manual && !data.runStatus && (
-        <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5 }}>
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5, color: '#42a5f5' }}>
           MANUAL
         </Typography>
       )}
@@ -175,9 +176,26 @@ function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
   if (status === 'failed') return { color: 'error', label: 'FAILED' };
   if (status === 'canceled') return { color: 'warning', label: 'CANCELED' };
+  if (status === 'manual') return { color: 'info', label: 'MANUAL' };
   if (status === 'skipped') return { color: 'default', label: 'SKIPPED' };
   if (status === 'pending') return { color: 'default', label: 'PENDING' };
   return { color: 'warning', label: 'RUNNING' };
+}
+
+function isManualWaiting(job, pipelineDef, allJobs) {
+  if (!job) return false;
+  const waiting = job.status === 'manual' ||
+    (job.status === 'skipped' && job.error !== 'dependency failed' && job.error !== 'dependency canceled');
+  if (!waiting) return false;
+  // Must be manual in pipeline definition.
+  const t = pipelineDef?.tasks?.find(x => (x.name || x.Name) === job.name);
+  if (!(t?.manual ?? t?.Manual)) return false;
+  // All dependencies must have passed.
+  const deps = t.depends_on || t.DependsOn || [];
+  if (deps.length === 0) return true;
+  const statusMap = {};
+  (allJobs || []).forEach(j => { statusMap[j.name] = j.status; });
+  return deps.every(d => statusMap[d] === 'passed');
 }
 
 function formatDuration(ms) {
@@ -186,57 +204,72 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function RunDetailView({ run, onClose }) {
+export function RunDetail({ projectName, runId, onBack }) {
   const [detail, setDetail] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [selectedJob, setSelectedJob] = useState(null);
   const [dagNodes, setDagNodes, onDagNodesChange] = useNodesState([]);
   const [dagEdges, setDagEdges, onDagEdgesChange] = useEdgesState([]);
   const [canceling, setCanceling] = useState(false);
-  const r = detail || run;
+  const [approving, setApproving] = useState(null);
+  const [approveErr, setApproveErr] = useState(null);
 
-  const handleCancel = async () => {
-    const cur = detail || run;
-    if (!cur) return;
-    setCanceling(true);
+  const load = useCallback(async () => {
     try {
-      await cancelRun(cur.project_name, cur.id);
-      const updated = await getRun(cur.project_name, cur.id);
-      setDetail(updated);
-    } catch { /* ignore */ }
-    setCanceling(false);
-  };
+      const d = await getRun(projectName, runId);
+      setDetail(d);
+      setError(null);
+      return d;
+    } catch (e) {
+      setError(e.message);
+      return null;
+    }
+  }, [projectName, runId]);
 
   useEffect(() => {
-    if (!run) { setDetail(null); setSelectedJob(null); return; }
     setLoading(true);
     setSelectedJob(null);
-    getRun(run.project_name, run.id)
-      .then(d => { setDetail(d); setSelectedJob(null); })
-      .catch(() => { setDetail(run); setSelectedJob(null); })
-      .finally(() => setLoading(false));
-  }, [run]);
+    load().finally(() => setLoading(false));
+  }, [load]);
 
-  // Build DAG from pipeline_def snapshot when detail loads.
+  // Poll while running or a job is running after manual approve.
   useEffect(() => {
-    if (!r?.pipeline_def) { setDagNodes([]); setDagEdges([]); return; }
-    // Convert snapshot shape to the shape layoutFromProject expects.
+    if (!detail) return;
+    const jobs = detail.task_results || [];
+    const busy = detail.status === 'running' || jobs.some(j => j.status === 'running');
+    if (!busy) return;
+    const id = setInterval(() => { load(); }, 1500);
+    return () => clearInterval(id);
+  }, [detail?.status, detail?.task_results, load]);
+
+  useEffect(() => {
+    if (!detail?.pipeline_def) { setDagNodes([]); setDagEdges([]); return; }
     const proj = {
-      Repos: r.pipeline_def.repos,
-      Tasks: r.pipeline_def.tasks.map(t => ({
-        Name: t.name,
-        Trigger: t.trigger,
-        DependsOn: t.depends_on,
-        Manual: t.manual,
-        Execute: t.execute,
+      Repos: (detail.pipeline_def.repos || []).map(repo => ({
+        Name: repo.name ?? repo.Name,
+        Path: repo.path ?? repo.Path,
+        Kind: repo.kind ?? repo.Kind,
       })),
+      Tasks: (detail.pipeline_def.tasks || []).map(t => {
+        const ex = t.execute || t.Execute || {};
+        return {
+          Name: t.name ?? t.Name,
+          Trigger: t.trigger ?? t.Trigger,
+          DependsOn: t.depends_on ?? t.DependsOn,
+          Manual: t.manual ?? t.Manual,
+          Execute: {
+            Repo: ex.repo ?? ex.Repo,
+            Script: ex.script ?? ex.Script,
+            Image: ex.image ?? ex.Image,
+          },
+        };
+      }),
     };
     const { nodes: n, edges: e } = layoutFromProject(proj);
-
-    // Overlay task_results statuses on DAG nodes.
     const statusMap = {};
-    (r.task_results || []).forEach(t => { statusMap[t.name] = t.status; });
-    const patchedNodes = n.map(node => {
+    (detail.task_results || []).forEach(t => { statusMap[t.name] = t.status; });
+    setDagNodes(n.map(node => {
       if (node.data.type === 'task') {
         const taskName = node.id.replace('task:', '');
         if (statusMap[taskName]) {
@@ -244,118 +277,175 @@ function RunDetailView({ run, onClose }) {
         }
       }
       return node;
-    });
-
-    setDagNodes(patchedNodes);
+    }));
     setDagEdges(e);
-  }, [r?.pipeline_def, r?.task_results]);
+  }, [detail?.pipeline_def, detail?.task_results]);
 
-  if (!r) return null;
+  const handleCancel = async () => {
+    setCanceling(true);
+    try {
+      await cancelRun(projectName, runId);
+      await load();
+    } catch (e) { setError(e.message); }
+    setCanceling(false);
+  };
 
-  const st = formatStatus(r.status);
-  const jobs = r.task_results || [];
+  const handleApprove = async (taskName) => {
+    setApproving(taskName);
+    setApproveErr(null);
+    try {
+      await approveManualTask(projectName, runId, taskName);
+      await load();
+    } catch (e) {
+      setApproveErr(e.message);
+    }
+    setApproving(null);
+  };
+
+  const r = detail;
+  const st = r ? formatStatus(r.status) : null;
+  const jobs = (() => {
+    const map = {};
+    (r?.task_results || []).forEach(j => { map[j.name] = j; });
+    return Object.values(map);
+  })();
   const activeJob = selectedJob != null ? jobs.find(j => j.name === selectedJob) : null;
 
   return (
-    <Dialog open={!!run} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        Run #{r.id} — {r.project_name}
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-          {r.status === 'running' && (
-            <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
-              {canceling ? 'Canceling…' : 'Cancel'}
-            </Button>
-          )}
-          <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
-        </Box>
-      </DialogTitle>
-      <DialogContent sx={{ display: 'flex', gap: 2, minHeight: 400 }}>
-        {loading && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0 }} />}
-        {/* Job list */}
-        <Box sx={{ width: 240, flexShrink: 0, borderRight: 1, borderColor: 'divider', pr: 2 }}>
-          <Box sx={{ display: 'flex', gap: 0.5, mb: 2, flexWrap: 'wrap' }}>
-            <Chip label={st.label} color={st.color} size="small" />
-            <Chip label={`Changed: ${r.changed?.join(', ') || 'none'}`} size="small" variant="outlined" />
-          </Box>
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-            {new Date(r.started_at).toLocaleString()}
-            {r.finished_at && ` → ${new Date(r.finished_at).toLocaleString()}`}
-          </Typography>
-          {jobs.length > 0 ? (
-            <List dense disablePadding>
-              {jobs.map(job => {
-                const js = formatStatus(job.status);
-                return (
-                  <ListItem key={job.name} disablePadding
-                    sx={{ mb: 0.5 }}>
-                    <ListItemButton
-                      selected={selectedJob === job.name}
-                      onClick={() => setSelectedJob(selectedJob === job.name ? null : job.name)}
-                      sx={{ borderRadius: 1, px: 1 }}>
-                      <Chip label={js.label} color={js.color} size="small" sx={{ mr: 1, minWidth: 54 }} />
-                      <ListItemText
-                        primary={job.name}
-                        secondary={formatDuration(job.duration)}
-                        primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
-                        secondaryTypographyProps={{ variant: 'caption' }}
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                );
-              })}
-            </List>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              No job data. Run with PostgreSQL to see per-job logs.
-            </Typography>
-          )}
-        </Box>
+    <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
+        <Button size="small" startIcon={<BackIcon />} onClick={onBack}>Back to runs</Button>
+        <Typography variant="h4">Run #{runId}</Typography>
+        <Typography variant="h6" color="text.secondary">{projectName}</Typography>
+        {st && <Chip label={st.label} color={st.color} size="small" />}
+        {r?.changed?.length > 0 && (
+          <Chip label={`Changed: ${r.changed.join(', ')}`} size="small" variant="outlined" />
+        )}
+        <Box sx={{ flexGrow: 1 }} />
+        {r?.status === 'running' && (
+          <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
+            {canceling ? 'Canceling…' : 'Cancel'}
+          </Button>
+        )}
+      </Box>
 
-        {/* Job output or DAG graph */}
-        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {activeJob ? (
-            <>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Typography variant="subtitle1" fontWeight={700}>{activeJob.name}</Typography>
-                <Chip label={formatStatus(activeJob.status).label} color={formatStatus(activeJob.status).color} size="small" />
-                {activeJob.duration > 0 && (
-                  <Typography variant="caption" color="text.secondary">{formatDuration(activeJob.duration)}</Typography>
+      {loading && !r && <LinearProgress sx={{ mb: 2 }} />}
+      {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+      {approveErr && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setApproveErr(null)}>{approveErr}</Alert>}
+
+      {r && (
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+          {new Date(r.started_at).toLocaleString()}
+          {r.finished_at && ` → ${new Date(r.finished_at).toLocaleString()}`}
+        </Typography>
+      )}
+
+      <Box sx={{ display: 'flex', gap: 2, flex: 1, minHeight: 0 }}>
+        <Card sx={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+          <CardContent sx={{ flex: 1, overflow: 'auto', py: 1, '&:last-child': { pb: 1 } }}>
+            <Typography variant="subtitle2" gutterBottom>Jobs</Typography>
+            {jobs.length > 0 ? (
+              <List dense disablePadding>
+                {jobs.map(job => {
+                  const js = formatStatus(job.status);
+                  const canRun = isManualWaiting(job, r?.pipeline_def, jobs);
+                  return (
+                    <ListItem key={job.name} disablePadding sx={{ mb: 0.5, flexDirection: 'column', alignItems: 'stretch' }}>
+                      <ListItemButton
+                        selected={selectedJob === job.name}
+                        onClick={() => setSelectedJob(selectedJob === job.name ? null : job.name)}
+                        sx={{ borderRadius: 1, px: 1 }}>
+                        <Chip label={js.label} color={js.color} size="small" sx={{ mr: 1, minWidth: 54 }} />
+                        <ListItemText
+                          primary={job.name}
+                          secondary={formatDuration(job.duration)}
+                          primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
+                          secondaryTypographyProps={{ variant: 'caption' }}
+                        />
+                      </ListItemButton>
+                      {canRun && (
+                        <Button size="small" variant="contained" color="info" sx={{ mt: 0.5, mx: 1 }}
+                          disabled={!!approving} onClick={() => handleApprove(job.name)}>
+                          {approving === job.name ? 'Starting…' : 'Run'}
+                        </Button>
+                      )}
+                    </ListItem>
+                  );
+                })}
+              </List>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                {loading ? 'Loading…' : 'No job data yet.'}
+              </Typography>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 1, minHeight: 0, '&:last-child': { pb: 1 } }}>
+            {activeJob ? (
+              <>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, px: 1 }}>
+                  <Button size="small" onClick={() => setSelectedJob(null)}>← DAG</Button>
+                  <Typography variant="subtitle1" fontWeight={700}>{activeJob.name}</Typography>
+                  <Chip label={formatStatus(activeJob.status).label} color={formatStatus(activeJob.status).color} size="small" />
+                  {activeJob.duration > 0 && (
+                    <Typography variant="caption" color="text.secondary">{formatDuration(activeJob.duration)}</Typography>
+                  )}
+                  {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
+                    <Button size="small" variant="contained" color="info" disabled={!!approving}
+                      onClick={() => handleApprove(activeJob.name)}>
+                      {approving === activeJob.name ? 'Starting…' : 'Run manual job'}
+                    </Button>
+                  )}
+                </Box>
+                {activeJob.error && activeJob.status !== 'manual' && (
+                  <Alert severity="error" sx={{ mb: 1, mx: 1 }}>{activeJob.error}</Alert>
+                )}
+                {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
+                  <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>
+                )}
+                <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
+                </Box>
+              </>
+            ) : (
+              <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }}>
+                {dagNodes.length > 0 ? (
+                  <ReactFlow nodes={dagNodes} edges={dagEdges}
+                    onNodesChange={onDagNodesChange} onEdgesChange={onDagEdgesChange}
+                    nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}
+                    onNodeClick={(_, node) => {
+                      if (node.data?.type === 'task') setSelectedJob(node.id.replace('task:', ''));
+                    }}>
+                    <Background color="#1e3a5f" />
+                    <Controls />
+                    <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
+                  </ReactFlow>
+                ) : (
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {loading ? 'Loading pipeline…' : 'No pipeline definition'}
+                    </Typography>
+                  </Box>
                 )}
               </Box>
-              {activeJob.error && <Alert severity="error" sx={{ mb: 1 }}>{activeJob.error}</Alert>}
-              <Box component="pre" sx={{ p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                {activeJob.output || '(No output)'}
+            )}
+            {r?.output && !activeJob && (
+              <Box component="pre" sx={{ m: 0, mt: 1, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                {r.output}
               </Box>
-            </>
-          ) : (
-            <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 300 }}>
-              {dagNodes.length > 0 ? (
-                <ReactFlow nodes={dagNodes} edges={dagEdges}
-                  onNodesChange={onDagNodesChange} onEdgesChange={onDagEdgesChange}
-                  nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}>
-                  <Background color="#1e3a5f" />
-                  <Controls />
-                  <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
-                </ReactFlow>
-              ) : (
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                  <Typography variant="body2" color="text.secondary">
-                    {jobs.length > 0 ? 'Select a job to view its logs' : 'No pipeline definition available'}
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-          )}
-        </Box>
-      </DialogContent>
-    </Dialog>
+            )}
+          </CardContent>
+        </Card>
+      </Box>
+    </Box>
   );
 }
 
-export function RunList({ onNewRun }) {
+export function RunList({ onNewRun, onOpenRun }) {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRun, setSelectedRun] = useState(null);
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
@@ -393,7 +483,7 @@ export function RunList({ onNewRun }) {
             <Box key={run.id}>
               {i > 0 && <Divider />}
               <ListItem sx={{ cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
-                onClick={() => setSelectedRun(run)}>
+                onClick={() => onOpenRun?.(run)}>
                 <ListItemIcon><HistoryIcon /></ListItemIcon>
                 <ListItemText
                   primary={
@@ -420,8 +510,6 @@ export function RunList({ onNewRun }) {
           );
         })}
       </List>
-
-      <RunDetailView run={selectedRun} onClose={() => setSelectedRun(null)} />
     </Box>
   );
 }
@@ -463,15 +551,14 @@ export function NewRun({ onSelect, onBack }) {
   );
 }
 
-export function RunProject({ projectName, onBack }) {
+export function RunProject({ projectName, onBack, onStarted }) {
   const [project, setProject] = useState(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [changedRepos, setChangedRepos] = useState('');
   const [resolvedTasks, setResolvedTasks] = useState([]);
-  const [includeManual, setIncludeManual] = useState(true);
+  const [includeManual, setIncludeManual] = useState(false);
   const [running, setRunning] = useState(false);
-  const [runResult, setRunResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
@@ -508,7 +595,7 @@ export function RunProject({ projectName, onBack }) {
           const isOn = triggeredSet.has(taskName);
           return {
             ...node,
-            style: { ...node.style, border: isOn ? `2px solid ${node.data.manual ? '#ff9800' : '#4caf50'}` : '2px solid #f44336', opacity: isOn ? 1 : 0.45 },
+            style: { ...node.style, border: isOn ? `2px solid ${node.data.manual ? '#42a5f5' : '#4caf50'}` : '2px solid #f44336', opacity: isOn ? 1 : 0.45 },
           };
         }
         return node;
@@ -521,54 +608,18 @@ export function RunProject({ projectName, onBack }) {
   const handleRun = async () => {
     setRunning(true);
     setError(null);
-    setRunResult(null);
-    // Reset DAG node statuses.
-    setNodes(prev => prev.map(node => {
-      if (node.data.type === 'task') {
-        return { ...node, data: { ...node.data, runStatus: undefined } };
-      }
-      return node;
-    }));
     try {
       const changed = changedRepos.split(',').map(s => s.trim()).filter(Boolean);
       const result = await runProject(projectName, changed, includeManual);
-      setRunResult(result);
-
-      // If async (running), poll for completion.
-      if (result.status === 'running' && result.run_id) {
-        const pollInterval = setInterval(async () => {
-          try {
-            const run = await getRun(projectName, result.run_id);
-            if (!run) return;
-            // Update DAG nodes with current task_results on every poll.
-            if (run.task_results && run.task_results.length > 0) {
-              const resultMap = {};
-              run.task_results.forEach(t => { resultMap[t.name] = t.status; });
-              setNodes(prev => prev.map(node => {
-                const taskName = node.id.replace('task:', '');
-                if (node.data.type === 'task' && resultMap[taskName]) {
-                  return { ...node, data: { ...node.data, runStatus: resultMap[taskName] } };
-                }
-                return node;
-              }));
-            }
-            if (run.status !== 'running') {
-              setRunResult(run);
-              clearInterval(pollInterval);
-              setRunning(false);
-            } else {
-              // Update runResult on every poll so output is visible during execution.
-              setRunResult(run);
-            }
-          } catch { /* retry */ }
-        }, 1500);
-      } else {
-        setRunning(false);
+      if (result.run_id && onStarted) {
+        onStarted(result.run_id);
+        return;
       }
+      setError('Run started but no run_id returned');
     } catch (e) {
       setError(e.message);
-      setRunning(false);
     }
+    setRunning(false);
   };
 
   const handleSave = async () => {
@@ -607,25 +658,13 @@ export function RunProject({ projectName, onBack }) {
                 onChange={(e) => setChangedRepos(e.target.value)} sx={{ flex: 1 }} />
               <Button variant="contained" startIcon={<ResolveIcon />} onClick={handleResolve} disabled={!projectName}>Resolve</Button>
               <Button color="success" variant="contained" startIcon={<RunIcon />} onClick={handleRun} disabled={running}>
-                {running ? 'Running…' : 'Run'}
+                {running ? 'Starting…' : 'Run'}
               </Button>
-              {running && runResult?.run_id && (
-                <Button color="warning" variant="outlined" size="small" onClick={async () => {
-                  try {
-                    await cancelRun(projectName, runResult.run_id);
-                    const updated = await getRun(projectName, runResult.run_id);
-                    setRunResult(updated);
-                    setRunning(false);
-                  } catch (e) { setError(e.message); }
-                }}>
-                  Cancel
-                </Button>
-              )}
             </Box>
             <FormControlLabel
               sx={{ mb: 1, ml: 0 }}
               control={<Switch size="small" checked={includeManual} onChange={(e) => setIncludeManual(e.target.checked)} />}
-              label="Include manual tasks"
+              label="Auto-run manual jobs"
             />
 
             <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden' }}>
@@ -644,17 +683,6 @@ export function RunProject({ projectName, onBack }) {
                   {resolvedTasks.map(t => (
                     <Chip key={t.name} icon={<TriggeredIcon />} label={t.name} color="success" variant="filled" size="small" />
                   ))}
-                </Box>
-              </Box>
-            )}
-
-            {runResult && (
-              <Box sx={{ mt: 1 }}>
-                <Alert severity={runResult.status === 'passed' ? 'success' : runResult.status === 'running' ? 'info' : 'error'} sx={{ mb: 1 }}>
-                  {runResult.status === 'passed' ? 'Pipeline passed.' : runResult.status === 'running' ? 'Pipeline is running…' : `Pipeline failed: ${runResult.error}`}
-                </Alert>
-                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                  {runResult.output || '(No output)'}
                 </Box>
               </Box>
             )}

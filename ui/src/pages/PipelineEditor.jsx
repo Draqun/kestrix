@@ -98,7 +98,7 @@ function layoutFromProject(project) {
       position: { x: pos.x - 95, y: pos.y - 30 },
       data: { label: `⚙️ ${task.Name}`, type: 'task', manual: task.Manual, trigger: task.Trigger, script: task.Execute?.Script },
       type: 'custom',
-      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#ff9800' : '#4caf50'}`, borderRadius: 8 },
+      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#42a5f5' : '#4caf50'}`, borderRadius: 8 },
     });
   });
 
@@ -146,7 +146,7 @@ function CustomNode({ data }) {
   return (
     <Box sx={{
       background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
-      border: `2px solid ${data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50'}`,
+      border: `2px solid ${data.type === 'repo' ? '#2196f3' : data.manual ? '#42a5f5' : '#4caf50'}`,
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
       position: 'relative',
     }}>
@@ -159,7 +159,7 @@ function CustomNode({ data }) {
         </Typography>
       )}
       {data.manual && (
-        <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5 }}>
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5, color: '#42a5f5' }}>
           MANUAL
         </Typography>
       )}
@@ -263,7 +263,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
           const isOn = triggeredSet.has(taskName);
           return {
             ...node,
-            style: { ...node.style, border: isOn ? `2px solid ${node.data.manual ? '#ff9800' : '#4caf50'}` : '2px solid #f44336', opacity: isOn ? 1 : 0.45 },
+            style: { ...node.style, border: isOn ? `2px solid ${node.data.manual ? '#42a5f5' : '#4caf50'}` : '2px solid #f44336', opacity: isOn ? 1 : 0.45 },
           };
         }
         return node;
@@ -357,7 +357,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
             <FormControlLabel
               sx={{ mb: 1, ml: 0 }}
               control={<Switch size="small" checked={includeManual} onChange={(e) => setIncludeManual(e.target.checked)} />}
-              label="Include manual tasks"
+              label="Auto-run manual jobs"
             />
 
             {/* DAG */}

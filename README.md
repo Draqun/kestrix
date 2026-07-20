@@ -231,7 +231,7 @@ cd ui && npm install && npm run dev
 3. Select **Open Pipeline**, stay on the **Graph** view, enter `metaci` in
    **Changed repos**, then choose **Run locally**.
 4. The job output and final status appear below the graph. Manual tasks remain
-   skipped unless **Include manual tasks** is enabled.
+   skipped unless **Auto-run manual jobs** is enabled.
 
 The UI executes scripts from registered local projects. Do not expose this
 development server to an untrusted network.

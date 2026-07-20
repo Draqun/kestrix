@@ -119,7 +119,7 @@ func TestRunReturnsPerTaskResults(t *testing.T) {
 	if results[0].Name != "pass" || results[0].Status != "passed" {
 		t.Errorf("result[0] = %+v, want name=pass status=passed", results[0])
 	}
-	if results[1].Name != "skip" || results[1].Status != "skipped" {
-		t.Errorf("result[1] = %+v, want name=skip status=skipped", results[1])
+	if results[1].Name != "skip" || results[1].Status != "manual" {
+		t.Errorf("result[1] = %+v, want name=skip status=manual", results[1])
 	}
 }

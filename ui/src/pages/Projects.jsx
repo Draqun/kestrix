@@ -213,10 +213,10 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
                       <Chip
                         label={t.Name}
                         size="small"
-                        color={t.Manual ? 'warning' : 'success'}
+                        color={t.Manual ? 'info' : 'success'}
                         variant="outlined"
                       />
-                      {t.Manual && <Chip label="Manual" size="small" variant="filled" color="warning" sx={{ fontSize: 10 }} />}
+                      {t.Manual && <Chip label="Manual" size="small" variant="filled" color="info" sx={{ fontSize: 10 }} />}
                       {t.Trigger && <Typography variant="caption" color="text.secondary">{t.Trigger}</Typography>}
                     </Box>
                   )) || <Typography variant="body2" color="text.secondary">None</Typography>}

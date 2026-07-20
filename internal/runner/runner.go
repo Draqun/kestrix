@@ -92,11 +92,11 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped"}
-			results = append(results, skipped)
+			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
+			waiting := TaskResult{Name: task.Name, Status: "manual"}
+			results = append(results, waiting)
 			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
+				opts.OnTaskComplete(waiting)
 			}
 			continue
 		}
@@ -237,11 +237,11 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped"}
-			results = append(results, skipped)
+			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
+			waiting := TaskResult{Name: task.Name, Status: "manual"}
+			results = append(results, waiting)
 			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
+				opts.OnTaskComplete(waiting)
 			}
 			continue
 		}
@@ -368,10 +368,11 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
-			results = append(results, TaskResult{Name: task.Name, Status: "skipped"})
+			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
+			waiting := TaskResult{Name: task.Name, Status: "manual"}
+			results = append(results, waiting)
 			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(TaskResult{Name: task.Name, Status: "skipped"})
+				opts.OnTaskComplete(waiting)
 			}
 			continue
 		}
@@ -437,6 +438,94 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 		}
 	}
 	return results, nil
+}
+
+// RunOne executes a single named task (used for manual job approval).
+func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	if opts.WorkDir == "" {
+		opts.WorkDir = "."
+	}
+	workDir, err := filepath.Abs(opts.WorkDir)
+	if err != nil {
+		return TaskResult{}, fmt.Errorf("resolve workdir: %w", err)
+	}
+
+	var task *model.Task
+	for i := range project.Tasks {
+		if project.Tasks[i].Name == taskName {
+			task = &project.Tasks[i]
+			break
+		}
+	}
+	if task == nil {
+		return TaskResult{}, fmt.Errorf("task %q not found", taskName)
+	}
+
+	repos := make(map[string]model.Repo, len(project.Repos))
+	for _, repo := range project.Repos {
+		repos[repo.Name] = repo
+	}
+	repo := repos[task.Execute.Repo]
+	taskDir, err := repoDir(workDir, repo)
+	if err != nil {
+		return TaskResult{}, fmt.Errorf("task %q: %w", task.Name, err)
+	}
+	relDir, _ := filepath.Rel(workDir, taskDir)
+	if relDir == "" {
+		relDir = "."
+	}
+
+	fmt.Fprintf(opts.Stdout, "[RUN] %s (manual approve, dir=%s)\n", task.Name, relDir)
+	if opts.OnTaskStart != nil {
+		opts.OnTaskStart(task.Name)
+	}
+
+	env := os.Environ()
+	env = append(env, "CI_PROJECT_DIR="+taskDir)
+	if opts.Variables != nil {
+		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
+		for k, v := range vars {
+			env = append(env, k+"="+v)
+		}
+	}
+
+	var taskOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
+	cmd.Dir = taskDir
+	cmd.Env = env
+	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+
+	start := time.Now()
+	runErr := cmd.Run()
+	dur := time.Since(start)
+
+	tr := TaskResult{
+		Name:     task.Name,
+		Output:   taskOut.String(),
+		Duration: dur,
+	}
+	if runErr != nil {
+		tr.Status = "failed"
+		tr.Error = runErr.Error()
+		fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
+	} else {
+		tr.Status = "passed"
+		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
+	}
+	if opts.OnTaskComplete != nil {
+		opts.OnTaskComplete(tr)
+	}
+	if runErr != nil {
+		return tr, fmt.Errorf("task %q failed: %w", task.Name, runErr)
+	}
+	return tr, nil
 }
 
 // assignStage determines which stage a task belongs to.

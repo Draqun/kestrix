@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 // PGStore provides PostgreSQL-backed project configuration storage.
@@ -193,17 +194,17 @@ func (s *PGStore) List() ([]string, error) {
 
 // Run represents a single pipeline execution.
 type Run struct {
-	ID            int              `json:"id"`
-	ProjectName   string           `json:"project_name"`
-	Status        string           `json:"status"` // running, passed, failed
-	Changed       []string         `json:"changed"`
-	IncludeManual bool             `json:"include_manual"`
+	ID            int               `json:"id"`
+	ProjectName   string            `json:"project_name"`
+	Status        string            `json:"status"` // running, passed, failed
+	Changed       []string          `json:"changed"`
+	IncludeManual bool              `json:"include_manual"`
 	PipelineDef   *PipelineSnapshot `json:"pipeline_def,omitempty"`
-	Output        string           `json:"output"`
-	Error         string           `json:"error,omitempty"`
-	TaskResults   []TaskResult     `json:"task_results,omitempty"`
-	StartedAt     time.Time        `json:"started_at"`
-	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	Output        string            `json:"output"`
+	Error         string            `json:"error,omitempty"`
+	TaskResults   []TaskResult      `json:"task_results,omitempty"`
+	StartedAt     time.Time         `json:"started_at"`
+	FinishedAt    *time.Time        `json:"finished_at,omitempty"`
 }
 
 // TaskResult is a per-task execution record stored in the runs table.
@@ -218,11 +219,11 @@ type TaskResult struct {
 // PipelineSnapshot captures the pipeline definition at the time of a run
 // so it can be reconstructed historically in the UI.
 type PipelineSnapshot struct {
-	Name         string           `json:"name"`
-	Repos        []SnapshotRepo   `json:"repos"`
-	Tasks        []SnapshotTask   `json:"tasks"`
-	DefaultImage string           `json:"default_image"`
-	Variables    []SnapshotVar    `json:"variables,omitempty"`
+	Name         string         `json:"name"`
+	Repos        []SnapshotRepo `json:"repos"`
+	Tasks        []SnapshotTask `json:"tasks"`
+	DefaultImage string         `json:"default_image"`
+	Variables    []SnapshotVar  `json:"variables,omitempty"`
 }
 
 type SnapshotRepo struct {
@@ -232,11 +233,11 @@ type SnapshotRepo struct {
 }
 
 type SnapshotTask struct {
-	Name       string         `json:"name"`
-	Trigger    string         `json:"trigger"`
-	DependsOn  []string       `json:"depends_on,omitempty"`
-	Manual     bool           `json:"manual"`
-	Execute    SnapshotExec   `json:"execute"`
+	Name      string       `json:"name"`
+	Trigger   string       `json:"trigger"`
+	DependsOn []string     `json:"depends_on,omitempty"`
+	Manual    bool         `json:"manual"`
+	Execute   SnapshotExec `json:"execute"`
 }
 
 type SnapshotExec struct {
@@ -427,6 +428,69 @@ func (s *PGStore) CancelRun(id int) error {
 		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now() WHERE id = $2`,
 		string(b), id,
 	)
+	return err
+}
+
+// ApplyTaskResult appends a task result and recomputes overall run status.
+func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) error {
+	run, err := s.GetRun(id)
+	if err != nil || run == nil {
+		return fmt.Errorf("run not found")
+	}
+	results := append(run.TaskResults, tr)
+	// Latest status per task name.
+	latest := make(map[string]string)
+	for _, r := range results {
+		latest[r.Name] = r.Status
+	}
+	status := "passed"
+	errMsg := ""
+	for _, st := range latest {
+		if st == "failed" {
+			status = "failed"
+			errMsg = tr.Error
+			break
+		}
+	}
+	if status != "failed" {
+		for _, st := range latest {
+			if st == "running" || st == "pending" {
+				status = "running"
+				break
+			}
+		}
+	}
+	if status == "passed" {
+		for _, st := range latest {
+			if st == "manual" {
+				status = "manual"
+				break
+			}
+		}
+	}
+	if status == "failed" && errMsg == "" {
+		errMsg = "task failed"
+	}
+	out := run.Output
+	if outputExtra != "" {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += outputExtra
+	}
+	b, _ := json.Marshal(results)
+	finished := status == "passed" || status == "failed" || status == "canceled"
+	if finished {
+		_, err = s.db.Exec(
+			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = COALESCE(finished_at, now()) WHERE id = $5`,
+			status, string(b), out, errMsg, id,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = NULL WHERE id = $5`,
+			status, string(b), out, errMsg, id,
+		)
+	}
 	return err
 }
 
