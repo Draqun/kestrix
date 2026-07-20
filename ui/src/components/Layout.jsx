@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon,
@@ -13,6 +13,7 @@ import {
   Menu as MenuIcon,
   Science as ScienceIcon,
 } from '@mui/icons-material';
+import { getVersion } from '../api/client';
 
 const DRAWER_WIDTH = 260;
 
@@ -26,6 +27,12 @@ const NAV_ITEMS = [
 export default function Layout({ children }) {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const navigate = useNavigate();
+  const [version, setVersion] = useState(null);
+  useEffect(() => {
+    getVersion().then(v => {
+      if (v && v.version) setVersion(v.version);
+    }).catch(() => {});
+  }, []);
   const location = useLocation();
 
   return (
@@ -48,7 +55,7 @@ export default function Layout({ children }) {
             MetaCI
           </Typography>
           <Chip
-            label="PoC v0.2"
+            label={version ? `v${version}` : ''}
             size="small"
             color="secondary"
             variant="outlined"

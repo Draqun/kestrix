@@ -180,3 +180,21 @@ export async function cancelRun(name, runID) {
   }
   return res.json();
 }
+
+export async function getVersion() {
+  const res = await fetch(`${API_BASE}/api/version`);
+  if (!res.ok) return { version: "unknown" };
+  return res.json();
+}
+
+export async function approveManualTask(name, runID, task) {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/tasks/${encodeURIComponent(task)}/run`,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Approve failed: ${res.statusText}`);
+  }
+  return res.json();
+}

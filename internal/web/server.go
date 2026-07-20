@@ -26,6 +26,7 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	httpSwagger "github.com/swaggo/http-swagger"
 	"gitlab.com/lunaris-bot/metaci/docs"
+	"gitlab.com/lunaris-bot/metaci/internal/version"
 )
 
 // SignatureConfig defines webhook authentication.
@@ -134,11 +135,13 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/projects/{name}/runs", s.handleListRuns)
 		r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
 		r.Post("/projects/{name}/runs/{runID}/cancel", s.handleCancelRun)
+		r.Post("/projects/{name}/runs/{runID}/tasks/{task}/run", s.handleApproveManualTask)
 		r.Get("/runs", s.handleListAllRuns)
 		r.Post("/resolve", s.handleResolve)
 		r.Post("/generate", s.handleGenerate)
 		r.Get("/validate", s.handleValidate)
 		r.Get("/logs", s.handleGetLogs)
+		r.Get("/version", s.handleVersion)
 	})
 
 	// Webhook
@@ -779,6 +782,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 			errMsg = err.Error()
 		}
 		// Also check task results — runner may not return error if it continues past failures.
+		hasManual := false
 		for _, tr := range taskResults {
 			if tr.Status == "failed" {
 				status = "failed"
@@ -787,6 +791,12 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
+			if tr.Status == "manual" {
+				hasManual = true
+			}
+		}
+		if status == "passed" && hasManual {
+			status = "manual"
 		}
 		if pgStore != nil && runID > 0 {
 			var trs []store.TaskResult
@@ -998,6 +1008,170 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(run)
+}
+
+// handleApproveManualTask runs a manual task that is waiting for approval on a run.
+func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request) {
+	pgStore, ok := s.store.(*store.PGStore)
+	if !ok {
+		http.Error(w, `{"error":"runs not supported"}`, http.StatusBadRequest)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	taskName := chi.URLParam(r, "task")
+	runID := 0
+	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
+	if runID == 0 {
+		http.Error(w, `{"error":"invalid run ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	run, err := pgStore.GetRun(runID)
+	if err != nil || run == nil || run.ProjectName != name {
+		http.Error(w, `{"error":"run not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Latest status per task.
+	latest := make(map[string]store.TaskResult)
+	for _, tr := range run.TaskResults {
+		latest[tr.Name] = tr
+	}
+	cur, ok := latest[taskName]
+	if !ok {
+		http.Error(w, `{"error":"task not in run"}`, http.StatusNotFound)
+		return
+	}
+	// Allow approve for "manual", or legacy "skipped" manual jobs (no dependency error).
+	isWaiting := cur.Status == "manual" ||
+		(cur.Status == "skipped" && cur.Error != "dependency failed" && cur.Error != "dependency canceled")
+	if !isWaiting {
+		http.Error(w, fmt.Sprintf(`{"error":"task %q is not waiting for manual approval (status=%s)"}`, taskName, cur.Status), http.StatusBadRequest)
+		return
+	}
+
+	// Confirm task is manual in snapshot or live pipeline.
+	manualOK := false
+	var dependsOn []string
+	if run.PipelineDef != nil {
+		for _, t := range run.PipelineDef.Tasks {
+			if t.Name == taskName {
+				manualOK = t.Manual
+				dependsOn = t.DependsOn
+				break
+			}
+		}
+	}
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	proj, err := s.parseProjectPipeline(p)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	var target *model.Task
+	for i := range proj.Tasks {
+		if proj.Tasks[i].Name == taskName {
+			target = &proj.Tasks[i]
+			if target.Manual {
+				manualOK = true
+			}
+			if len(dependsOn) == 0 {
+				dependsOn = target.DependsOn
+			}
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, fmt.Sprintf(`{"error":"task %q not found in pipeline"}`, taskName), http.StatusNotFound)
+		return
+	}
+	if !manualOK {
+		http.Error(w, `{"error":"task is not manual"}`, http.StatusBadRequest)
+		return
+	}
+	for _, dep := range dependsOn {
+		d, exists := latest[dep]
+		if !exists || d.Status != "passed" {
+			http.Error(w, fmt.Sprintf(`{"error":"dependency %q has not passed"}`, dep), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Build variables (same as full run).
+	varStore := variables.New()
+	for _, v := range proj.Variables {
+		val := v.Value
+		if val == "" {
+			val = v.Default
+		}
+		opts := []variables.Option{}
+		if v.Protected {
+			opts = append(opts, variables.WithProtected(true))
+		}
+		if v.Masked {
+			opts = append(opts, variables.WithMasked(true))
+		}
+		switch v.Scope {
+		case "repo":
+			varStore.SetRepo(v.Repo, v.Key, val, opts...)
+		case "job":
+			varStore.SetJob(v.Repo, v.Job, v.Key, val, opts...)
+		default:
+			varStore.SetProject(v.Key, val, opts...)
+		}
+	}
+	for _, v := range variables.FromEnv("METACI_").List() {
+		varStore.SetProject(v.Key, v.Value)
+	}
+	if s.cfg.Docker.Registry != "" {
+		varStore.SetProject("DOCKER_REGISTRY", s.cfg.Docker.Registry)
+	}
+	if s.cfg.Docker.Image != "" {
+		varStore.SetProject("DOCKER_IMAGE", s.cfg.Docker.Image)
+	}
+	if s.cfg.Docker.Username != "" {
+		varStore.SetProject("DOCKER_USERNAME", s.cfg.Docker.Username)
+	}
+	if s.cfg.Docker.Password != "" {
+		varStore.SetProject("DOCKER_PASSWORD", s.cfg.Docker.Password)
+	}
+
+	_ = pgStore.ApplyTaskResult(runID, store.TaskResult{Name: taskName, Status: "running"}, "")
+
+	// Return immediately; execute in background (deploy can take minutes).
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"run_id":  runID,
+		"task":    taskName,
+		"status":  "running",
+		"project": name,
+	})
+
+	workDir := p.RepoPath
+	go func() {
+		var output bytes.Buffer
+		tr, runErr := runner.RunOne(context.Background(), proj, taskName, runner.Options{
+			WorkDir:   workDir,
+			Variables: varStore,
+			Stdout:    &output,
+			Stderr:    &output,
+		})
+		st := store.TaskResult{
+			Name: tr.Name, Status: tr.Status, Output: tr.Output,
+			Error: tr.Error, Duration: tr.Duration,
+		}
+		if runErr != nil && st.Status == "" {
+			st.Status = "failed"
+			st.Error = runErr.Error()
+		}
+		if err := pgStore.ApplyTaskResult(runID, st, output.String()); err != nil {
+			log.Printf("approve task %s on run #%d: %v", taskName, runID, err)
+		}
+	}()
 }
 
 // handleCancelRun cancels a running pipeline run.
@@ -1360,7 +1534,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 <head><title>MetaCI</title></head>
 <body style="font-family:monospace;background:#0a1929;color:#e0e0e0;padding:40px">
 <h1>🚀 MetaCI — CI/CD Control Plane</h1>
-<p>PoC v0.2 — API endpoints:</p>
+<p>Version %s — API endpoints:</p>
 <ul>
   <li><a href="/docs/">/docs/</a> — Swagger UI</li>
   <li><a href="/health">/health</a> — Health check</li>
@@ -1370,5 +1544,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 </ul>
 <p>Frontend: <code>cd ui && npm run dev</code> (port 3000)</p>
 </body>
-</html>`)
+</html>`, version.Version)
+}
+
+// handleVersion returns the server version
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": version.Version})
 }
