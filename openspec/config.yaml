@@ -3,11 +3,12 @@ schema: spec-driven
 context: |
   Tech stack: Go 1.26, Chi HTTP framework, HCL (hashicorp/hcl/v2)
   Build system: Makefile (help as default target, self-documenting)
-  Testing: go test with coverage, 20+ unit tests
+  Testing: go test with coverage, 42+ unit tests
   CI/CD: GitLab (glab CLI), gitlab-ci-local for local testing
   Domain: Repo-agnostic CI/CD Control Plane
   Conventions: conventional commits, internal/ for private packages
   Language: Polish for conversation, English for code/PR/docs
+  Phase: MVP — deploy pipeline end-to-end
 
 rules:
   proposal:
@@ -25,3 +26,29 @@ rules:
     - Break tasks into chunks of max 2 hours
     - Mark completed tasks with [x]
     - Include verification steps
+
+capabilities:
+  existing:
+    - pipeline-definition    # HCL parser + model
+    - dag-engine             # Boolean triggers + cycle detection
+    - webhook-receiver       # GitLab push events + file classification
+    - ci-generator           # gitlab-ci.yml from DAG nodes
+    - variables-system       # Hierarchical variable store
+  mvp:
+    - dispatch-pipeline      # Webhook → parse → resolve → generate → trigger
+    - project-registration   # GitLab project binding + persistence
+  followup:
+    - file-push-dispatch     # Push .gitlab-ci.yml to repo via Files API
+    - postgres-persistence   # DB for projects, logs, audit
+    - webhook-log-history    # Queryable webhook event store
+    - multi-env-promotion    # staging → production with approval gates
+    - webhook-registration   # Auto-register webhook on GitLab
+    - rbac-auth              # JWT + project-level permissions
+    - notifications          # Slack/Teams/email on pipeline status
+    - artifact-handling      # S3/minio for build artifacts
+    - runner-selection       # Tag-based runner mapping + health
+    - tf-provider            # Terraform/OpenTofu provider for MetaCI
+    - secrets-integration    # Vault/AWS Secrets Manager JIT injection
+    - cli-enhancements       # projects list, dispatch, logs commands
+    - execution-dashboard    # Real-time pipeline status in UI
+    - multi-repo-workspace   # Clone + cross-repo execution

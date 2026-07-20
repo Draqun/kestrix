@@ -109,3 +109,51 @@
 - [x] OpenSpec proposal + 4 specs + design + tasks
 - [x] Swagger/OpenAPI docs at `/docs/`
 - [x] README with architecture and usage
+
+---
+
+## MVP: Deploy Pipeline
+
+**Full plan:** `openspec/tasks-mvp.md`  
+**Design:** `openspec/design-mvp.md`  
+**Specs:** `openspec/specs/dispatch-pipeline/spec.md`, `openspec/specs/project-registration/spec.md`
+
+### Task 15: File Store — persistent project config
+- [ ] Create `internal/store/filestore.go` (Load/Save/Get/Upsert/Delete)
+- [ ] Atomic write (temp file + rename)
+- [ ] Write `filestore_test.go`
+- [ ] Integrate into Server, replace in-memory map
+
+### Task 16: Extended ProjectConfig — GitLab binding
+- [ ] Add GitLabProjectID, DefaultBranch, WebhookSecret to ProjectConfig
+- [ ] Update API endpoints + swagger annotations
+- [ ] Extend e2e test
+
+### Task 17: GitLab client — pipeline trigger
+- [ ] Rewrite `internal/dispatch/client.go` (GitLabClient)
+- [ ] TriggerPipeline + GetPipelineStatus
+- [ ] Mock HTTP test server
+- [ ] Add `--dry-run` flag
+
+### Task 18: Webhook → dispatch integration
+- [ ] Modify handleWebhook: after resolve → dispatch
+- [ ] Extend PushEvent with ProjectID
+- [ ] Extend webhook response with dispatch result
+- [ ] E2e test with mock GitLab
+
+### Task 19: Config file
+- [ ] Create `internal/config/config.go` (~/.metaci/config.yaml)
+- [ ] Env var interpolation
+- [ ] CLI flag overrides
+- [ ] Config test
+
+### Task 20: Integration test — full flow
+- [ ] Write `integration_test.go` (webhook → dispatch)
+- [ ] Create `testutil/mock_gitlab.go`
+- [ ] Final quality gate
+
+### Task 21: Documentation + commit
+- [ ] Update README with MVP usage
+- [ ] Update CLAUDE.md
+- [ ] Regenerate swagger
+- [ ] Final commit + push
