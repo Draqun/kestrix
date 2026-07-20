@@ -8,15 +8,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	httpSwagger "github.com/swaggo/http-swagger"
-
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	_ "gitlab.com/lunaris-bot/metaci/docs"
 )
 
 // SignatureConfig defines webhook authentication.
@@ -44,41 +47,39 @@ type Server struct {
 	cfg        Config
 	router     chi.Router
 	webhookLog []map[string]interface{}
-
-	// projects holds user-created project configurations (in-memory for PoC).
-	projects map[string]*ProjectConfig
-}
-
-// ProjectConfig describes a project set up via the UI: where its repo lives
-// and which pipeline file to use. The repo path is currently a local
-// directory; later it will support a GitLab URL + clone.
-type ProjectConfig struct {
-	Name        string `json:"name"`
-	RepoPath    string `json:"repo_path"`
-	RepoURL     string `json:"repo_url,omitempty"`
-	PipelineFile string `json:"pipeline_file"`
-	CreatedAt   string `json:"created_at"`
+	store      *store.FileStore
 }
 
 // NewServer creates a new HTTP server.
 func NewServer(cfg Config) *Server {
 	s := &Server{cfg: cfg}
-	s.projects = make(map[string]*ProjectConfig)
 
-	// Pre-populate default project if pipeline directory exists.
+	// Initialize persistent project store.
+	storePath := store.DefaultPath()
+	fs, err := store.New(storePath)
+	if err != nil {
+		log.Printf("warning: could not init project store at %s: %v", storePath, err)
+		// Fall back to in-memory (will not persist).
+		fs, _ = store.New(filepath.Join(os.TempDir(), "metaci-projects.json"))
+	}
+	s.store = fs
+
+	// Auto-load default project if pipeline directory exists.
 	if cfg.PipelineDir != "" {
 		if _, err := os.Stat(filepath.Join(cfg.PipelineDir, "pipeline.tf")); err == nil {
-			// Find absolute path to pipeline dir.
 			absPath, _ := filepath.Abs(cfg.PipelineDir)
 			projName := "demo-mono"
 			if proj, parseErr := parser.ParseFile(filepath.Join(cfg.PipelineDir, "pipeline.tf")); parseErr == nil && proj.Name != "" {
 				projName = proj.Name
 			}
-			s.projects[projName] = &ProjectConfig{
-				Name:         projName,
-				RepoPath:     absPath,
-				PipelineFile: "pipeline.tf",
-				CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+			// Only auto-create if not already registered.
+			existing, _ := s.store.Get(projName)
+			if existing == nil {
+				s.store.Upsert(&store.ProjectConfig{
+					Name:         projName,
+					RepoPath:     absPath,
+					PipelineFile: "pipeline.tf",
+				})
 			}
 		}
 	}
@@ -209,7 +210,6 @@ func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
 		dir = s.cfg.PipelineDir
 	}
 
-	// Find first .tf file in dir.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
@@ -237,17 +237,26 @@ func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// ─── Project Handlers (use FileStore) ─────────────────────────
+
 // handleListProjects godoc
 // @Summary List configured projects
 // @Tags projects
 // @Produce json
-// @Success 200 {array} ProjectConfig
+// @Success 200 {array} store.ProjectConfig
 // @Router /api/projects [get]
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	list := make([]*ProjectConfig, 0, len(s.projects))
-	for _, p := range s.projects {
+	projects, err := s.store.Load()
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	list := make([]*store.ProjectConfig, 0, len(projects))
+	for _, p := range projects {
 		list = append(list, p)
 	}
+	// Sort by name for deterministic output.
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(list)
 }
@@ -257,11 +266,11 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 // @Tags projects
 // @Accept json
 // @Produce json
-// @Param request body ProjectConfig true "Project config"
-// @Success 201 {object} ProjectConfig
+// @Param request body store.ProjectConfig true "Project config"
+// @Success 201 {object} store.ProjectConfig
 // @Router /api/projects [post]
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
-	var req ProjectConfig
+	var req store.ProjectConfig
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -274,11 +283,11 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"repo_path or repo_url is required"}`, http.StatusBadRequest)
 		return
 	}
-	if req.PipelineFile == "" {
-		req.PipelineFile = "pipeline.tf"
+
+	if err := s.store.Upsert(&req); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
 	}
-	req.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-	s.projects[req.Name] = &req
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -290,12 +299,16 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 // @Tags projects
 // @Produce json
 // @Param name path string true "Project name"
-// @Success 200 {object} ProjectConfig
+// @Success 200 {object} store.ProjectConfig
 // @Router /api/projects/{name} [get]
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	p, ok := s.projects[name]
-	if !ok {
+	p, err := s.store.Get(name)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if p == nil {
 		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
 		return
 	}
@@ -312,17 +325,19 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects/{name} [delete]
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if _, ok := s.projects[name]; !ok {
-		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+	if err := s.store.Delete(name); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
 		return
 	}
-	delete(s.projects, name)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
 }
 
 // projectPipelinePath resolves the absolute path to a project's pipeline file.
-func (s *Server) projectPipelinePath(p *ProjectConfig) string {
+func (s *Server) projectPipelinePath(p *store.ProjectConfig) string {
+	if p.PipelineFile == "" {
+		p.PipelineFile = "pipeline.tf"
+	}
 	return filepath.Join(p.RepoPath, p.PipelineFile)
 }
 
@@ -335,8 +350,8 @@ func (s *Server) projectPipelinePath(p *ProjectConfig) string {
 // @Router /api/projects/{name}/pipeline [get]
 func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	p, ok := s.projects[name]
-	if !ok {
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
 		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
 		return
 	}
@@ -359,8 +374,8 @@ func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request
 // @Router /api/projects/{name}/pipeline [post]
 func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	p, ok := s.projects[name]
-	if !ok {
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
 		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
 		return
 	}
@@ -369,13 +384,12 @@ func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
 		return
 	}
-	// Ensure repo dir exists.
-	if err := os.MkdirAll(p.RepoPath, 0755); err != nil {
+	if err := os.MkdirAll(p.RepoPath, 0o755); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 	path := s.projectPipelinePath(p)
-	if err := os.WriteFile(path, body, 0644); err != nil {
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -397,8 +411,8 @@ func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Reques
 // @Router /api/projects/{name}/resolve [post]
 func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	p, ok := s.projects[name]
-	if !ok {
+	p, err := s.store.Get(name)
+	if err != nil || p == nil {
 		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
 		return
 	}
@@ -441,6 +455,8 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 		"all_tasks": len(proj.Tasks),
 	})
 }
+
+// ─── Pipeline Handlers (global, use --dir) ────────────────────
 
 // handleResolve godoc
 // @Summary Resolve trigger expressions against changed repos

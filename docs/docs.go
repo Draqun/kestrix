@@ -164,7 +164,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/web.ProjectConfig"
+                                "$ref": "#/definitions/store.ProjectConfig"
                             }
                         }
                     }
@@ -188,7 +188,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/web.ProjectConfig"
+                            "$ref": "#/definitions/store.ProjectConfig"
                         }
                     }
                 ],
@@ -196,7 +196,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/web.ProjectConfig"
+                            "$ref": "#/definitions/store.ProjectConfig"
                         }
                     }
                 }
@@ -224,7 +224,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/web.ProjectConfig"
+                            "$ref": "#/definitions/store.ProjectConfig"
                         }
                     }
                 }
@@ -579,11 +579,17 @@ const docTemplate = `{
                 }
             }
         },
-        "web.ProjectConfig": {
+        "store.ProjectConfig": {
             "type": "object",
             "properties": {
                 "created_at": {
                     "type": "string"
+                },
+                "default_branch": {
+                    "type": "string"
+                },
+                "gitlab_project_id": {
+                    "type": "integer"
                 },
                 "name": {
                     "type": "string"
@@ -595,6 +601,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "repo_url": {
+                    "type": "string"
+                },
+                "webhook_secret": {
                     "type": "string"
                 }
             }

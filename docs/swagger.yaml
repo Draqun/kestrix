@@ -119,10 +119,14 @@ definitions:
       value:
         type: string
     type: object
-  web.ProjectConfig:
+  store.ProjectConfig:
     properties:
       created_at:
         type: string
+      default_branch:
+        type: string
+      gitlab_project_id:
+        type: integer
       name:
         type: string
       pipeline_file:
@@ -130,6 +134,8 @@ definitions:
       repo_path:
         type: string
       repo_url:
+        type: string
+      webhook_secret:
         type: string
     type: object
 host: localhost:8080
@@ -236,7 +242,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/web.ProjectConfig'
+              $ref: '#/definitions/store.ProjectConfig'
             type: array
       summary: List configured projects
       tags:
@@ -250,14 +256,14 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/web.ProjectConfig'
+          $ref: '#/definitions/store.ProjectConfig'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/web.ProjectConfig'
+            $ref: '#/definitions/store.ProjectConfig'
       summary: Create a project (point at a repo containing pipeline.tf)
       tags:
       - projects
@@ -293,7 +299,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/web.ProjectConfig'
+            $ref: '#/definitions/store.ProjectConfig'
       summary: Get a project config
       tags:
       - projects
