@@ -190,16 +190,16 @@ func (s *PGStore) List() ([]string, error) {
 
 // Run represents a single pipeline execution.
 type Run struct {
-	ID            int              `json:"id"`
-	ProjectName   string           `json:"project_name"`
-	Status        string           `json:"status"` // running, passed, failed
-	Changed       []string         `json:"changed"`
-	IncludeManual bool             `json:"include_manual"`
-	Output        string           `json:"output"`
-	Error         string           `json:"error,omitempty"`
-	TaskResults   []TaskResult     `json:"task_results,omitempty"`
-	StartedAt     time.Time        `json:"started_at"`
-	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	ID            int          `json:"id"`
+	ProjectName   string       `json:"project_name"`
+	Status        string       `json:"status"` // running, passed, failed
+	Changed       []string     `json:"changed"`
+	IncludeManual bool         `json:"include_manual"`
+	Output        string       `json:"output"`
+	Error         string       `json:"error,omitempty"`
+	TaskResults   []TaskResult `json:"task_results,omitempty"`
+	StartedAt     time.Time    `json:"started_at"`
+	FinishedAt    *time.Time   `json:"finished_at,omitempty"`
 }
 
 // TaskResult is a per-task execution record stored in the runs table.

@@ -1,4 +1,6 @@
 project "metaci" {
+  default_image = "golang:1.25-alpine"
+
   ci_repo "metaci" {
     path = "."
     kind = "subpath"
@@ -10,7 +12,7 @@ project "metaci" {
     trigger = "repo.metaci.changed"
     execute {
       repo   = "metaci"
-      script = "bash scripts/lint.sh"
+      script = "sh scripts/lint.sh"
     }
   }
 
@@ -19,7 +21,7 @@ project "metaci" {
     depends_on = ["lint"]
     execute {
       repo   = "metaci"
-      script = "bash scripts/test.sh"
+      script = "sh scripts/test.sh"
     }
   }
 
@@ -28,7 +30,7 @@ project "metaci" {
     depends_on = ["test"]
     execute {
       repo   = "metaci"
-      script = "bash scripts/build.sh"
+      script = "sh scripts/build.sh"
     }
   }
 
@@ -38,7 +40,7 @@ project "metaci" {
     trigger = "repo.metaci.changed"
     execute {
       repo   = "metaci"
-      script = "bash scripts/lint-fe.sh"
+      script = "sh scripts/lint-fe.sh"
     }
   }
 
@@ -47,7 +49,7 @@ project "metaci" {
     depends_on = ["lint_fe"]
     execute {
       repo   = "metaci"
-      script = "bash scripts/build-fe.sh"
+      script = "sh scripts/build-fe.sh"
     }
   }
 
@@ -58,7 +60,7 @@ project "metaci" {
     depends_on = ["build", "build_fe"]
     execute {
       repo   = "metaci"
-      script = "bash scripts/docker-build.sh"
+      script = "sh scripts/docker-build.sh"
     }
   }
 
@@ -70,7 +72,7 @@ project "metaci" {
     manual     = true
     execute {
       repo   = "metaci"
-      script = "bash scripts/deploy.sh"
+      script = "sh scripts/deploy.sh"
     }
   }
 }
