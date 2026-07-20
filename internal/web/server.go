@@ -44,11 +44,26 @@ type Server struct {
 	cfg        Config
 	router     chi.Router
 	webhookLog []map[string]interface{}
+
+	// projects holds user-created project configurations (in-memory for PoC).
+	projects map[string]*ProjectConfig
+}
+
+// ProjectConfig describes a project set up via the UI: where its repo lives
+// and which pipeline file to use. The repo path is currently a local
+// directory; later it will support a GitLab URL + clone.
+type ProjectConfig struct {
+	Name        string `json:"name"`
+	RepoPath    string `json:"repo_path"`
+	RepoURL     string `json:"repo_url,omitempty"`
+	PipelineFile string `json:"pipeline_file"`
+	CreatedAt   string `json:"created_at"`
 }
 
 // NewServer creates a new HTTP server.
 func NewServer(cfg Config) *Server {
 	s := &Server{cfg: cfg}
+	s.projects = make(map[string]*ProjectConfig)
 	s.router = s.buildRouter()
 	return s
 }
@@ -66,6 +81,13 @@ func (s *Server) buildRouter() chi.Router {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.handleHealth)
 		r.Get("/pipeline", s.handleGetPipeline)
+		r.Get("/pipeline/raw", s.handleGetPipelineRaw)
+		r.Get("/projects", s.handleListProjects)
+		r.Post("/projects", s.handleCreateProject)
+		r.Get("/projects/{name}", s.handleGetProject)
+		r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
+		r.Post("/projects/{name}/pipeline", s.handleSaveProjectPipeline)
+		r.Post("/projects/{name}/resolve", s.handleResolveProject)
 		r.Post("/resolve", s.handleResolve)
 		r.Post("/generate", s.handleGenerate)
 		r.Get("/validate", s.handleValidate)
@@ -152,6 +174,234 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(proj)
+}
+
+// handleGetPipelineRaw godoc
+// @Summary Return raw pipeline HCL source
+// @Tags pipeline
+// @Produce text/plain
+// @Param dir query string false "Pipeline directory"
+// @Success 200 {string} string
+// @Router /api/pipeline/raw [get]
+func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		dir = s.cfg.PipelineDir
+	}
+
+	// Find first .tf file in dir.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	var tfFile string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tf") {
+			tfFile = filepath.Join(dir, e.Name())
+			break
+		}
+	}
+	if tfFile == "" {
+		http.Error(w, `{"error":"no .tf file found"}`, http.StatusNotFound)
+		return
+	}
+
+	data, err := os.ReadFile(tfFile)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(data)
+}
+
+// handleListProjects godoc
+// @Summary List configured projects
+// @Tags projects
+// @Produce json
+// @Success 200 {array} ProjectConfig
+// @Router /api/projects [get]
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	list := make([]*ProjectConfig, 0, len(s.projects))
+	for _, p := range s.projects {
+		list = append(list, p)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(list)
+}
+
+// handleCreateProject godoc
+// @Summary Create a project (point at a repo containing pipeline.tf)
+// @Tags projects
+// @Accept json
+// @Produce json
+// @Param request body ProjectConfig true "Project config"
+// @Success 201 {object} ProjectConfig
+// @Router /api/projects [post]
+func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	var req ProjectConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.RepoPath == "" && req.RepoURL == "" {
+		http.Error(w, `{"error":"repo_path or repo_url is required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.PipelineFile == "" {
+		req.PipelineFile = "pipeline.tf"
+	}
+	req.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.projects[req.Name] = &req
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(req)
+}
+
+// handleGetProject godoc
+// @Summary Get a project config
+// @Tags projects
+// @Produce json
+// @Param name path string true "Project name"
+// @Success 200 {object} ProjectConfig
+// @Router /api/projects/{name} [get]
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, ok := s.projects[name]
+	if !ok {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(p)
+}
+
+// projectPipelinePath resolves the absolute path to a project's pipeline file.
+func (s *Server) projectPipelinePath(p *ProjectConfig) string {
+	return filepath.Join(p.RepoPath, p.PipelineFile)
+}
+
+// handleGetProjectPipeline godoc
+// @Summary Get raw pipeline HCL for a project
+// @Tags projects
+// @Produce text/plain
+// @Param name path string true "Project name"
+// @Success 200 {string} string
+// @Router /api/projects/{name}/pipeline [get]
+func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, ok := s.projects[name]
+	if !ok {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	data, err := os.ReadFile(s.projectPipelinePath(p))
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(data)
+}
+
+// handleSaveProjectPipeline godoc
+// @Summary Save pipeline HCL for a project (writes pipeline.tf to repo path)
+// @Tags projects
+// @Accept plain
+// @Produce json
+// @Param name path string true "Project name"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/projects/{name}/pipeline [post]
+func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, ok := s.projects[name]
+	if !ok {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
+		return
+	}
+	// Ensure repo dir exists.
+	if err := os.MkdirAll(p.RepoPath, 0755); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	path := s.projectPipelinePath(p)
+	if err := os.WriteFile(path, body, 0644); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "saved",
+		"path":   path,
+	})
+}
+
+// handleResolveProject godoc
+// @Summary Resolve a project's triggers against changed repos
+// @Tags projects
+// @Accept json
+// @Produce json
+// @Param name path string true "Project name"
+// @Param request body object true "Changed repos"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/projects/{name}/resolve [post]
+func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	p, ok := s.projects[name]
+	if !ok {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	var req struct {
+		Changed []string `json:"changed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	proj, err := parser.ParseDir(p.RepoPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	changedSet := make(map[string]bool)
+	for _, c := range req.Changed {
+		changedSet[c] = true
+	}
+	e := dag.New(proj)
+	nodes, err := e.Resolve(changedSet)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	var triggered []map[string]interface{}
+	for _, n := range nodes {
+		if n.Triggered {
+			triggered = append(triggered, map[string]interface{}{
+				"name":   n.Task.Name,
+				"reason": n.TriggeredReason,
+			})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"project":   proj.Name,
+		"changed":   req.Changed,
+		"triggered": triggered,
+		"all_tasks": len(proj.Tasks),
+	})
 }
 
 // handleResolve godoc

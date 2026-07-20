@@ -165,3 +165,80 @@ project "p" {
 		t.Errorf("docs-only push should trigger 0 tasks, got %d", len(tasks))
 	}
 }
+
+func TestProjectLifecycle(t *testing.T) {
+	repoDir := t.TempDir()
+
+	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: "./examples"})
+
+	// 1. Create project pointing at repoDir.
+	createBody := `{"name":"tf-demo","repo_path":"` + repoDir + `"}`
+	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Save pipeline.tf (multi-line HCL).
+	pipeline := `
+project "tf-demo" {
+  ci_repo "tf_plugin" {
+    path = "tf-plugin"
+    kind = "subpath"
+  }
+  ci_repo "backend" {
+    path = "backend"
+    kind = "subpath"
+  }
+  ci_task "build_tf_plugin" {
+    trigger = "repo.tf_plugin.changed"
+    execute {
+      repo   = "tf_plugin"
+      script = "make build"
+    }
+  }
+  ci_task "build_backend" {
+    trigger = "repo.backend.changed"
+    execute {
+      repo   = "backend"
+      script = "make build"
+    }
+  }
+}
+`
+	req = httptest.NewRequest("POST", "/api/projects/tf-demo/pipeline", bytes.NewBufferString(pipeline))
+	req.Header.Set("Content-Type", "text/plain")
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	// File should exist on disk.
+	if _, err := os.Stat(filepath.Join(repoDir, "pipeline.tf")); err != nil {
+		t.Fatalf("pipeline.tf not written: %v", err)
+	}
+
+	// 3. Resolve with tf_plugin changed.
+	resolveBody := `{"changed":["tf_plugin"]}`
+	req = httptest.NewRequest("POST", "/api/projects/tf-demo/resolve", bytes.NewBufferString(resolveBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Triggered []struct {
+			Name string `json:"name"`
+		} `json:"triggered"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Triggered) != 1 || resp.Triggered[0].Name != "build_tf_plugin" {
+		t.Fatalf("expected [build_tf_plugin], got %+v", resp.Triggered)
+	}
+}

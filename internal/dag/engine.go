@@ -44,8 +44,14 @@ func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("tokenize: %w", err)
 	}
+	// Build the set of declared repos so triggers can reference any ci_repo,
+	// not only those present in the changed set.
+	knownRepos := make(map[string]bool)
+	for _, r := range e.Project.Repos {
+		knownRepos[r.Name] = true
+	}
 	parser := &exprParser{tokens: tokens}
-	result, err := parser.parseExpr(changed)
+	result, err := parser.parseExpr(changed, knownRepos)
 	if err != nil {
 		return false, fmt.Errorf("evaluate trigger %q: %w", expr, err)
 	}

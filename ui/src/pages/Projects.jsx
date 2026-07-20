@@ -1,192 +1,146 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Card, CardContent, Grid, Chip, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, Paper, IconButton,
-  Tooltip, Alert, LinearProgress
+  Tooltip, Alert, LinearProgress, TextField, Button, Divider, Stack
 } from '@mui/material';
 import {
   Folder as RepoIcon,
   PlayArrow as TaskIcon,
   Refresh as RefreshIcon,
+  Add as AddIcon,
+  AccountTree as PipelineIcon,
 } from '@mui/icons-material';
-import { parsePipeline } from '../api/client';
+import { listProjects, createProject } from '../api/client';
 
-// Client-side HCL parser (fallback when API unavailable)
-function parseHCLFallback() {
-  const example = `project "demo-mono" {
-  default_image = "golang:1.26"
-
-  ci_repo "auth_service" { path = "src/auth" kind = "subpath" }
-  ci_repo "billing_service" { path = "src/billing" kind = "subpath" }
-  ci_repo "docs" { path = "docs" }
-  ci_repo "api_gateway" { path = "src/api-gateway" kind = "subpath" }
-
-  ci_task "test_auth" {
-    trigger = "repo.auth_service.changed"
-    execute { repo = "auth_service" script = "make test" }
-  }
-  ci_task "test_billing" {
-    trigger = "repo.billing_service.changed"
-    execute { repo = "billing_service" script = "make test" }
-  }
-  ci_task "integration_tests" {
-    trigger = "repo.auth_service.changed || repo.billing_service.changed && !repo.docs.changed"
-    execute { repo = "api_gateway" script = "make test-integration" }
-  }
-  ci_task "deploy_docs" {
-    trigger = "repo.docs.changed"
-    execute { repo = "docs" script = "make docs-deploy" }
-  }
-}`;
-  return example;
-}
-
-export default function Projects() {
-  const [project, setProject] = useState(null);
+export default function Projects({ onOpenPipeline }) {
+  const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetchProject = async () => {
+  // Create form
+  const [name, setName] = useState('');
+  const [repoPath, setRepoPath] = useState('');
+  const [repoURL, setRepoURL] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState(null);
+
+  const fetchProjects = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await parsePipeline();
-      setProject(data);
+      const data = await listProjects();
+      setProjects(data || []);
     } catch (e) {
-      // Fallback to client-side parsing
-      try {
-        const text = parseHCLFallback();
-        // Simple client-side parse
-        const repos = [];
-        const tasks = [];
-        const repoRegex = /ci_repo\s+"([^"]+)"\s*\{([^}]+)\}/g;
-        const taskRegex = /ci_task\s+"([^"]+)"\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}/g;
-        let m;
-        while ((m = repoRegex.exec(text)) !== null) {
-          const attrs = {};
-          m[2].trim().split(/\s+/).forEach(part => {
-            const [k, v] = part.split('=');
-            if (k && v) attrs[k] = v.replace(/"/g, '');
-          });
-          repos.push({ name: m[1], ...attrs });
-        }
-        while ((m = taskRegex.exec(text)) !== null) {
-          const body = m[2];
-          const triggerMatch = body.match(/trigger\s*=\s*"([^"]+)"/);
-          const repoMatch = body.match(/repo\s*=\s*"([^"]+)"/);
-          const scriptMatch = body.match(/script\s*=\s*"([^"]+)"/);
-          tasks.push({
-            name: m[1],
-            trigger: triggerMatch?.[1] || '',
-            repo: repoMatch?.[1] || '',
-            script: scriptMatch?.[1] || '',
-          });
-        }
-        setProject({ name: 'demo-mono', repos, tasks });
-      } catch (e2) {
-        setError(e.message);
-      }
+      setError(e.message);
     }
     setLoading(false);
-  };
+  }, []);
 
-  useEffect(() => { fetchProject(); }, []);
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setCreating(true);
+    setFormError(null);
+    try {
+      await createProject({ name, repo_path: repoPath, repo_url: repoURL });
+      setName(''); setRepoPath(''); setRepoURL('');
+      await fetchProjects();
+    } catch (err) {
+      setFormError(err.message);
+    }
+    setCreating(false);
+  };
 
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" sx={{ flexGrow: 1 }}>Projects</Typography>
         <Tooltip title="Refresh">
-          <IconButton onClick={fetchProject}><RefreshIcon /></IconButton>
+          <IconButton onClick={fetchProjects}><RefreshIcon /></IconButton>
         </Tooltip>
       </Box>
 
       {loading && <LinearProgress sx={{ mb: 2 }} />}
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      {project && (
-        <>
-          <Card sx={{ mb: 3 }}>
-            <CardContent>
-              <Typography variant="h5" gutterBottom>📦 {project.name}</Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <Chip label={`${project.repos?.length || 0} repos`} color="primary" />
-                <Chip label={`${project.tasks?.length || 0} tasks`} color="secondary" />
+      {/* Create project form */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            <AddIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            New Project
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Point MetaCI at a repository that contains (or will contain) <code>pipeline.tf</code>.
+            For now use a local path; GitLab URL support is coming.
+          </Typography>
+          <Box component="form" onSubmit={handleCreate}>
+            <Stack spacing={2}>
+              <TextField
+                label="Project name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                size="small"
+                placeholder="my-tf-plugin"
+              />
+              <TextField
+                label="Repo path (local)"
+                value={repoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                size="small"
+                placeholder="/home/user/repos/my-tf-plugin"
+                helperText="Directory on this machine where pipeline.tf lives"
+              />
+              <TextField
+                label="Repo URL (GitLab, optional — future)"
+                value={repoURL}
+                onChange={(e) => setRepoURL(e.target.value)}
+                size="small"
+                placeholder="https://gitlab.com/group/repo"
+                disabled
+              />
+              {formError && <Alert severity="error">{formError}</Alert>}
+              <Box>
+                <Button type="submit" variant="contained" disabled={creating || !name}>
+                  {creating ? 'Creating…' : 'Create Project'}
+                </Button>
               </Box>
-            </CardContent>
-          </Card>
+            </Stack>
+          </Box>
+        </CardContent>
+      </Card>
 
-          <Grid container spacing={3}>
-            {/* Repos Table */}
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    <RepoIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                    Repositories
-                  </Typography>
-                  <TableContainer>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Name</TableCell>
-                          <TableCell>Path</TableCell>
-                          <TableCell>Kind</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {project.repos?.map(repo => (
-                          <TableRow key={repo.name}>
-                            <TableCell><strong>{repo.name}</strong></TableCell>
-                            <TableCell><code>{repo.path}</code></TableCell>
-                            <TableCell>
-                              <Chip label={repo.kind || 'git'} size="small"
-                                color={repo.kind === 'subpath' ? 'primary' : 'default'} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                </CardContent>
-              </Card>
-            </Grid>
-
-            {/* Tasks Table */}
-            <Grid item xs={12} md={6}>
-              <Card>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    <TaskIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                    Tasks
-                  </Typography>
-                  <TableContainer>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Name</TableCell>
-                          <TableCell>Repo</TableCell>
-                          <TableCell>Trigger</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {project.tasks?.map(task => (
-                          <TableRow key={task.name}>
-                            <TableCell><strong>{task.name}</strong></TableCell>
-                            <TableCell><code>{task.repo}</code></TableCell>
-                            <TableCell>
-                              <code style={{ fontSize: 11 }}>{task.trigger}</code>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </>
+      {/* Project list */}
+      {projects.length === 0 && !loading && (
+        <Alert severity="info">No projects yet. Create one above.</Alert>
       )}
+
+      <Grid container spacing={3}>
+        {projects.map(p => (
+          <Grid item xs={12} md={6} key={p.name}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>📦 {p.name}</Typography>
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                  {p.repo_path || p.repo_url}
+                </Typography>
+                <Stack direction="row" spacing={1}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<PipelineIcon />}
+                    onClick={() => onOpenPipeline && onOpenPipeline(p.name)}
+                  >
+                    Open Pipeline
+                  </Button>
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
     </Box>
   );
 }

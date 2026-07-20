@@ -65,24 +65,29 @@ func tokenize(s string) ([]token, error) {
 		case ch == '|' && i+1 < len(s) && s[i+1] == '|':
 			tokens = append(tokens, token{tkOr, "||"})
 			i += 2
-		case isIdentRune(rune(ch)):
+		case isIdentStart(ch):
 			start := i
-			for i < len(s) && isIdentRune(rune(s[i])) {
+			for i < len(s) && isIdentPart(s[i]) {
 				i++
 			}
 			tokens = append(tokens, token{tkIdent, s[start:i]})
 		default:
-			return nil, fmt.Errorf("unexpected char %q at position %d", ch, i)
+			return nil, fmt.Errorf("unexpected character %q at position %d", ch, i)
 		}
 	}
 	tokens = append(tokens, token{tkEOF, ""})
 	return tokens, nil
 }
 
-func isIdentRune(r rune) bool {
-	return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r)
+func isIdentStart(ch byte) bool {
+	return unicode.IsLetter(rune(ch)) || ch == '_'
 }
 
+func isIdentPart(ch byte) bool {
+	return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_'
+}
+
+// exprParser holds the token stream and parsing state.
 type exprParser struct {
 	tokens []token
 	pos    int
@@ -101,18 +106,25 @@ func (p *exprParser) advance() token {
 	return t
 }
 
-func (p *exprParser) parseExpr(changed map[string]bool) (bool, error) {
-	return p.parseOr(changed)
+// parseExpr evaluates the boolean expression given the set of changed repos
+// and the set of known (declared) repos. A repo not in the changed set is
+// treated as "not changed" (false), not as an error.
+func (p *exprParser) parseExpr(changed, knownRepos map[string]bool) (bool, error) {
+	left, err := p.parseOr(changed, knownRepos)
+	if err != nil {
+		return false, err
+	}
+	return left, nil
 }
 
-func (p *exprParser) parseOr(changed map[string]bool) (bool, error) {
-	left, err := p.parseAnd(changed)
+func (p *exprParser) parseOr(changed, knownRepos map[string]bool) (bool, error) {
+	left, err := p.parseAnd(changed, knownRepos)
 	if err != nil {
 		return false, err
 	}
 	for p.peek().kind == tkOr {
 		p.advance()
-		right, err := p.parseAnd(changed)
+		right, err := p.parseAnd(changed, knownRepos)
 		if err != nil {
 			return false, err
 		}
@@ -121,14 +133,14 @@ func (p *exprParser) parseOr(changed map[string]bool) (bool, error) {
 	return left, nil
 }
 
-func (p *exprParser) parseAnd(changed map[string]bool) (bool, error) {
-	left, err := p.parseNot(changed)
+func (p *exprParser) parseAnd(changed, knownRepos map[string]bool) (bool, error) {
+	left, err := p.parseNot(changed, knownRepos)
 	if err != nil {
 		return false, err
 	}
 	for p.peek().kind == tkAnd {
 		p.advance()
-		right, err := p.parseNot(changed)
+		right, err := p.parseNot(changed, knownRepos)
 		if err != nil {
 			return false, err
 		}
@@ -137,24 +149,24 @@ func (p *exprParser) parseAnd(changed map[string]bool) (bool, error) {
 	return left, nil
 }
 
-func (p *exprParser) parseNot(changed map[string]bool) (bool, error) {
+func (p *exprParser) parseNot(changed, knownRepos map[string]bool) (bool, error) {
 	if p.peek().kind == tkNot {
 		p.advance()
-		val, err := p.parseNot(changed)
+		val, err := p.parseNot(changed, knownRepos)
 		if err != nil {
 			return false, err
 		}
 		return !val, nil
 	}
-	return p.parsePrimary(changed)
+	return p.parsePrimary(changed, knownRepos)
 }
 
-func (p *exprParser) parsePrimary(changed map[string]bool) (bool, error) {
+func (p *exprParser) parsePrimary(changed, knownRepos map[string]bool) (bool, error) {
 	t := p.peek()
 	switch t.kind {
 	case tkLParen:
 		p.advance()
-		val, err := p.parseExpr(changed)
+		val, err := p.parseExpr(changed, knownRepos)
 		if err != nil {
 			return false, err
 		}
@@ -164,14 +176,14 @@ func (p *exprParser) parsePrimary(changed map[string]bool) (bool, error) {
 		p.advance()
 		return val, nil
 	case tkIdent:
-		return p.parsePredicate(changed)
+		return p.parsePredicate(changed, knownRepos)
 	default:
 		return false, fmt.Errorf("unexpected token %q", t.text)
 	}
 }
 
 // parsePredicate handles "repo.<name>.changed"
-func (p *exprParser) parsePredicate(changed map[string]bool) (bool, error) {
+func (p *exprParser) parsePredicate(changed, knownRepos map[string]bool) (bool, error) {
 	// repo
 	t := p.advance()
 	if t.text != "repo" {
@@ -198,10 +210,10 @@ func (p *exprParser) parsePredicate(changed map[string]bool) (bool, error) {
 		return false, fmt.Errorf("expected 'changed' got %q", propTok.text)
 	}
 	repoName := nameTok.text
-	_, exists := changed[repoName]
-	if !exists {
+	if !knownRepos[repoName] {
 		return false, fmt.Errorf("unknown repo %q in trigger (not declared as ci_repo)", repoName)
 	}
+	// Not in the changed set → treated as "not changed" (false).
 	return changed[repoName], nil
 }
 

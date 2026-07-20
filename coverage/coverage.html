@@ -61,9 +61,9 @@
 				
 				<option value="file2">gitlab.com/lunaris-bot/metaci/internal/dag/expr.go (77.6%)</option>
 				
-				<option value="file3">gitlab.com/lunaris-bot/metaci/internal/parser/hcl_parser.go (0.0%)</option>
+				<option value="file3">gitlab.com/lunaris-bot/metaci/internal/parser/hcl_parser.go (80.6%)</option>
 				
-				<option value="file4">gitlab.com/lunaris-bot/metaci/internal/web/generator.go (0.0%)</option>
+				<option value="file4">gitlab.com/lunaris-bot/metaci/internal/web/generator.go (98.2%)</option>
 				
 				<option value="file5">gitlab.com/lunaris-bot/metaci/internal/web/server.go (0.0%)</option>
 				
@@ -306,17 +306,17 @@ func New(p model.Project) *Engine <span class="cov7" title="10">{
 //
 //        repo.auth_service.changed &amp;&amp; !repo.docs.changed
 //        (repo.a.changed || repo.b.changed) &amp;&amp; !repo.docs.changed
-func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, error) <span class="cov9" title="27">{
+func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, error) <span class="cov10" title="27">{
         tokens, err := tokenize(expr)
         if err != nil </span><span class="cov0" title="0">{
                 return false, fmt.Errorf("tokenize: %w", err)
         }</span>
-        <span class="cov9" title="27">parser := &amp;exprParser{tokens: tokens}
+        <span class="cov10" title="27">parser := &amp;exprParser{tokens: tokens}
         result, err := parser.parseExpr(changed)
         if err != nil </span><span class="cov0" title="0">{
                 return false, fmt.Errorf("evaluate trigger %q: %w", expr, err)
         }</span>
-        <span class="cov9" title="27">return result, nil</span>
+        <span class="cov10" title="27">return result, nil</span>
 }
 
 // Resolve computes the full execution plan. It evaluates every task's trigger
@@ -384,18 +384,18 @@ func (e *Engine) detectCycles() error <span class="cov5" title="5">{
         }</span>
         <span class="cov5" title="5">visited := make(map[string]int) // 0=unvisited,1=in-stack,2=done
         var dfs func(name string, path []string) error
-        dfs = func(name string, path []string) error </span><span class="cov10" title="31">{
+        dfs = func(name string, path []string) error </span><span class="cov9" title="25">{
                 if visited[name] == 1 </span><span class="cov1" title="1">{
                         return fmt.Errorf("cycle detected: %s -&gt; %s", strings.Join(path, " -&gt; "), name)
                 }</span>
-                <span class="cov9" title="30">if visited[name] == 2 </span><span class="cov7" title="12">{
+                <span class="cov9" title="24">if visited[name] == 2 </span><span class="cov5" title="6">{
                         return nil
                 }</span>
                 <span class="cov8" title="18">if !taskNames[name] </span><span class="cov0" title="0">{
                         return fmt.Errorf("unknown dependency: %q", name)
                 }</span>
                 <span class="cov8" title="18">visited[name] = 1
-                for _, dep := range adj[name] </span><span class="cov7" title="14">{
+                for _, dep := range adj[name] </span><span class="cov8" title="14">{
                         if err := dfs(dep, append(path, name)); err != nil </span><span class="cov2" title="2">{
                                 return err
                         }</span>
@@ -404,7 +404,7 @@ func (e *Engine) detectCycles() error <span class="cov5" title="5">{
                 return nil</span>
         }
         <span class="cov5" title="5">for name := range taskNames </span><span class="cov8" title="17">{
-                if visited[name] == 0 </span><span class="cov8" title="17">{
+                if visited[name] == 0 </span><span class="cov7" title="11">{
                         if err := dfs(name, nil); err != nil </span><span class="cov1" title="1">{
                                 return err
                         }</span>
@@ -655,139 +655,139 @@ import (
 )
 
 // ParseFile reads a single HCL file and returns its Project definition.
-func ParseFile(path string) (model.Project, error) <span class="cov0" title="0">{
+func ParseFile(path string) (model.Project, error) <span class="cov5" title="5">{
         src, err := os.ReadFile(path)
-        if err != nil </span><span class="cov0" title="0">{
+        if err != nil </span><span class="cov1" title="1">{
                 return model.Project{}, fmt.Errorf("read %s: %w", path, err)
         }</span>
-        <span class="cov0" title="0">return ParseSource(src, path)</span>
+        <span class="cov4" title="4">return ParseSource(src, path)</span>
 }
 
 // ParseSource parses HCL source bytes into a Project.
-func ParseSource(src []byte, filename string) (model.Project, error) <span class="cov0" title="0">{
+func ParseSource(src []byte, filename string) (model.Project, error) <span class="cov5" title="6">{
         f, diags := hclsyntax.ParseConfig(src, filename, hcl.Pos{Line: 1, Column: 1})
-        if diags.HasErrors() </span><span class="cov0" title="0">{
+        if diags.HasErrors() </span><span class="cov1" title="1">{
                 return model.Project{}, formatDiags(diags, filename)
         }</span>
-        <span class="cov0" title="0">body := f.Body.(*hclsyntax.Body)
+        <span class="cov5" title="5">body := f.Body.(*hclsyntax.Body)
 
         var proj model.Project
-        for _, blk := range body.Blocks </span><span class="cov0" title="0">{
+        for _, blk := range body.Blocks </span><span class="cov5" title="5">{
                 switch blk.Type </span>{
-                case "project":<span class="cov0" title="0">
+                case "project":<span class="cov5" title="5">
                         p, err := decodeProjectBlock(blk)
                         if err != nil </span><span class="cov0" title="0">{
                                 return model.Project{}, fmt.Errorf("project block: %w", err)
                         }</span>
-                        <span class="cov0" title="0">proj = p</span>
+                        <span class="cov5" title="5">proj = p</span>
                 default:<span class="cov0" title="0">
                         // Top-level blocks must be `project`.
                         return model.Project{}, fmt.Errorf("unsupported top-level block %q", blk.Type)</span>
                 }
         }
-        <span class="cov0" title="0">return proj, nil</span>
+        <span class="cov5" title="5">return proj, nil</span>
 }
 
 // decodeProjectBlock reads the inner attributes (name, default_image) and
 // child blocks (ci_repo, ci_task) of a project block.
-func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) <span class="cov0" title="0">{
+func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) <span class="cov5" title="5">{
         if len(blk.Labels) != 1 </span><span class="cov0" title="0">{
                 return model.Project{}, fmt.Errorf("project block requires exactly 1 label, got %d", len(blk.Labels))
         }</span>
-        <span class="cov0" title="0">proj := model.Project{Name: blk.Labels[0]}
+        <span class="cov5" title="5">proj := model.Project{Name: blk.Labels[0]}
 
         // Iterate ALL top-level items of the body so we get both attributes and
         // blocks, delegating each to the proper extractor.
-        for _, item := range blk.Body.Attributes </span><span class="cov0" title="0">{
+        for _, item := range blk.Body.Attributes </span><span class="cov2" title="2">{
                 val, err := literal(item.Expr)
                 if err != nil </span><span class="cov0" title="0">{
                         return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
                 }</span>
-                <span class="cov0" title="0">switch item.Name </span>{
-                case "default_image":<span class="cov0" title="0">
+                <span class="cov2" title="2">switch item.Name </span>{
+                case "default_image":<span class="cov2" title="2">
                         proj.DefaultImage = val</span>
                 }
         }
 
-        <span class="cov0" title="0">for _, child := range blk.Body.Blocks </span><span class="cov0" title="0">{
+        <span class="cov5" title="5">for _, child := range blk.Body.Blocks </span><span class="cov7" title="10">{
                 switch child.Type </span>{
-                case "ci_repo":<span class="cov0" title="0">
+                case "ci_repo":<span class="cov5" title="6">
                         r, err := decodeRepoBlock(child)
                         if err != nil </span><span class="cov0" title="0">{
                                 return model.Project{}, fmt.Errorf("ci_repo: %w", err)
                         }</span>
-                        <span class="cov0" title="0">proj.Repos = append(proj.Repos, r)</span>
-                case "ci_task":<span class="cov0" title="0">
+                        <span class="cov5" title="6">proj.Repos = append(proj.Repos, r)</span>
+                case "ci_task":<span class="cov4" title="4">
                         t, err := decodeTaskBlock(child)
                         if err != nil </span><span class="cov0" title="0">{
                                 return model.Project{}, fmt.Errorf("ci_task: %w", err)
                         }</span>
-                        <span class="cov0" title="0">proj.Tasks = append(proj.Tasks, t)</span>
+                        <span class="cov4" title="4">proj.Tasks = append(proj.Tasks, t)</span>
                 default:<span class="cov0" title="0">
                         return model.Project{}, fmt.Errorf("unsupported child block %q in project", child.Type)</span>
                 }
         }
-        <span class="cov0" title="0">return proj, nil</span>
+        <span class="cov5" title="5">return proj, nil</span>
 }
 
-func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) <span class="cov0" title="0">{
+func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) <span class="cov5" title="6">{
         if len(blk.Labels) != 1 </span><span class="cov0" title="0">{
                 return model.Repo{}, fmt.Errorf("ci_repo requires 1 label")
         }</span>
-        <span class="cov0" title="0">r := model.Repo{Name: blk.Labels[0]}
-        for name, attr := range attrsMap(blk.Body) </span><span class="cov0" title="0">{
+        <span class="cov5" title="6">r := model.Repo{Name: blk.Labels[0]}
+        for name, attr := range attrsMap(blk.Body) </span><span class="cov7" title="10">{
                 val, err := literal(attr.Expr)
                 if err != nil </span><span class="cov0" title="0">{
                         return model.Repo{}, fmt.Errorf("attribute %q: %w", name, err)
                 }</span>
-                <span class="cov0" title="0">switch name </span>{
-                case "path":<span class="cov0" title="0">
+                <span class="cov7" title="10">switch name </span>{
+                case "path":<span class="cov5" title="6">
                         r.Path = val</span>
-                case "type":<span class="cov0" title="0">
-                        r.Type = val</span>
+                case "kind":<span class="cov4" title="4">
+                        r.Kind = val</span>
                 }
         }
-        <span class="cov0" title="0">return r, nil</span>
+        <span class="cov5" title="6">return r, nil</span>
 }
 
-func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) <span class="cov0" title="0">{
+func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) <span class="cov4" title="4">{
         if len(blk.Labels) != 1 </span><span class="cov0" title="0">{
                 return model.Task{}, fmt.Errorf("ci_task requires 1 label")
         }</span>
-        <span class="cov0" title="0">t := model.Task{Name: blk.Labels[0]}
+        <span class="cov4" title="4">t := model.Task{Name: blk.Labels[0]}
 
         // Top-level attributes of ci_task: trigger, manual, depends_on
-        for name, attr := range attrsMap(blk.Body) </span><span class="cov0" title="0">{
+        for name, attr := range attrsMap(blk.Body) </span><span class="cov6" title="8">{
                 val, err := literal(attr.Expr)
                 if err != nil </span><span class="cov0" title="0">{
                         return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
                 }</span>
-                <span class="cov0" title="0">switch name </span>{
-                case "trigger":<span class="cov0" title="0">
+                <span class="cov6" title="8">switch name </span>{
+                case "trigger":<span class="cov4" title="4">
                         t.Trigger = val</span>
-                case "manual":<span class="cov0" title="0">
+                case "manual":<span class="cov2" title="2">
                         t.Manual = val == "true"</span>
-                case "depends_on":<span class="cov0" title="0">
+                case "depends_on":<span class="cov2" title="2">
                         t.DependsOn = splitList(val)</span>
                 }
         }
 
         // execute block (optional, at most one)
-        <span class="cov0" title="0">for _, child := range blk.Body.Blocks </span><span class="cov0" title="0">{
+        <span class="cov4" title="4">for _, child := range blk.Body.Blocks </span><span class="cov4" title="4">{
                 switch child.Type </span>{
-                case "execute":<span class="cov0" title="0">
+                case "execute":<span class="cov4" title="4">
                         t.Execute = model.ExecuteSpec{}
-                        for name, attr := range attrsMap(child.Body) </span><span class="cov0" title="0">{
+                        for name, attr := range attrsMap(child.Body) </span><span class="cov6" title="9">{
                                 val, err := literal(attr.Expr)
                                 if err != nil </span><span class="cov0" title="0">{
                                         return model.Task{}, fmt.Errorf("execute.%s: %w", name, err)
                                 }</span>
-                                <span class="cov0" title="0">switch name </span>{
-                                case "repo":<span class="cov0" title="0">
+                                <span class="cov6" title="9">switch name </span>{
+                                case "repo":<span class="cov4" title="4">
                                         t.Execute.Repo = val</span>
-                                case "script":<span class="cov0" title="0">
+                                case "script":<span class="cov4" title="4">
                                         t.Execute.Script = val</span>
-                                case "image":<span class="cov0" title="0">
+                                case "image":<span class="cov1" title="1">
                                         t.Execute.Image = val</span>
                                 }
                         }
@@ -795,19 +795,19 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) <span class="cov0
                         return model.Task{}, fmt.Errorf("unsupported child block %q in ci_task", child.Type)</span>
                 }
         }
-        <span class="cov0" title="0">return t, nil</span>
+        <span class="cov4" title="4">return t, nil</span>
 }
 
 // attrsMap returns the block body's attributes as a name -&gt; *Attribute map by
 // reading the hclsyntax.Body.Attributes slice directly. We don't use
 // JustAttributes because it errors out if the body contains any sub-blocks
 // (which our bodies do).
-func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute <span class="cov0" title="0">{
+func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute <span class="cov7" title="14">{
         out := map[string]*hclsyntax.Attribute{}
-        for _, a := range body.Attributes </span><span class="cov0" title="0">{
+        for _, a := range body.Attributes </span><span class="cov9" title="27">{
                 out[a.Name] = a
         }</span>
-        <span class="cov0" title="0">return out</span>
+        <span class="cov7" title="14">return out</span>
 }
 
 // literal extracts the string value of a literal expression. We support:
@@ -817,23 +817,23 @@ func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute <span class=
 //
 // We deliberately do NOT support variable interpolation (functions, refs),
 // because pipeline configuration should be declarative and reproducible.
-func literal(expr hcl.Expression) (string, error) <span class="cov0" title="0">{
+func literal(expr hcl.Expression) (string, error) <span class="cov10" title="30">{
         switch e := expr.(type) </span>{
-        case *hclsyntax.TemplateExpr:<span class="cov0" title="0">
-                if len(e.Parts) == 1 </span><span class="cov0" title="0">{
-                        if ts, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok </span><span class="cov0" title="0">{
+        case *hclsyntax.TemplateExpr:<span class="cov9" title="26">
+                if len(e.Parts) == 1 </span><span class="cov9" title="26">{
+                        if ts, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok </span><span class="cov9" title="26">{
                                 return toString(ts.Val)
                         }</span>
                 }
                 <span class="cov0" title="0">return "", fmt.Errorf("interpolated strings are not supported in pipeline config")</span>
-        case *hclsyntax.LiteralValueExpr:<span class="cov0" title="0">
+        case *hclsyntax.LiteralValueExpr:<span class="cov2" title="2">
                 return toString(e.Val)</span>
-        case *hclsyntax.TupleConsExpr:<span class="cov0" title="0">
+        case *hclsyntax.TupleConsExpr:<span class="cov2" title="2">
                 parts, err := tupleStrings(e)
                 if err != nil </span><span class="cov0" title="0">{
                         return "", err
                 }</span>
-                <span class="cov0" title="0">return strings.Join(parts, ","), nil</span>
+                <span class="cov2" title="2">return strings.Join(parts, ","), nil</span>
         case *hclsyntax.ObjectConsExpr:<span class="cov0" title="0">
                 return "", fmt.Errorf("object literals are not supported here")</span>
         case *hclsyntax.SplatExpr, *hclsyntax.RelativeTraversalExpr, *hclsyntax.ScopeTraversalExpr:<span class="cov0" title="0">
@@ -843,30 +843,30 @@ func literal(expr hcl.Expression) (string, error) <span class="cov0" title="0">{
         }
 }
 
-func tupleStrings(e *hclsyntax.TupleConsExpr) ([]string, error) <span class="cov0" title="0">{
+func tupleStrings(e *hclsyntax.TupleConsExpr) ([]string, error) <span class="cov2" title="2">{
         out := make([]string, 0, len(e.Exprs))
-        for _, ex := range e.Exprs </span><span class="cov0" title="0">{
+        for _, ex := range e.Exprs </span><span class="cov1" title="1">{
                 s, err := literal(ex)
                 if err != nil </span><span class="cov0" title="0">{
                         return nil, err
                 }</span>
-                <span class="cov0" title="0">out = append(out, s)</span>
+                <span class="cov1" title="1">out = append(out, s)</span>
         }
-        <span class="cov0" title="0">return out, nil</span>
+        <span class="cov2" title="2">return out, nil</span>
 }
 
-func toString(v interface{}) (string, error) <span class="cov0" title="0">{
+func toString(v interface{}) (string, error) <span class="cov9" title="28">{
         // hclsyntax.LiteralValueExpr.Val is a cty.Value.
         switch x := v.(type) </span>{
-        case cty.Value:<span class="cov0" title="0">
-                if x.Type() == cty.String </span><span class="cov0" title="0">{
+        case cty.Value:<span class="cov9" title="28">
+                if x.Type() == cty.String </span><span class="cov9" title="26">{
                         return x.AsString(), nil
                 }</span>
-                <span class="cov0" title="0">if x.Type() == cty.Bool </span><span class="cov0" title="0">{
-                        if x.True() </span><span class="cov0" title="0">{
+                <span class="cov2" title="2">if x.Type() == cty.Bool </span><span class="cov2" title="2">{
+                        if x.True() </span><span class="cov1" title="1">{
                                 return "true", nil
                         }</span>
-                        <span class="cov0" title="0">return "false", nil</span>
+                        <span class="cov1" title="1">return "false", nil</span>
                 }
                 <span class="cov0" title="0">return "", fmt.Errorf("unsupported cty type %s", x.Type().FriendlyName())</span>
         case string:<span class="cov0" title="0">
@@ -881,56 +881,56 @@ func toString(v interface{}) (string, error) <span class="cov0" title="0">{
         }
 }
 
-func splitList(s string) []string <span class="cov0" title="0">{
+func splitList(s string) []string <span class="cov2" title="2">{
         parts := strings.Split(s, ",")
         out := make([]string, 0, len(parts))
-        for _, p := range parts </span><span class="cov0" title="0">{
+        for _, p := range parts </span><span class="cov2" title="2">{
                 p = strings.TrimSpace(p)
-                if p != "" </span><span class="cov0" title="0">{
+                if p != "" </span><span class="cov1" title="1">{
                         out = append(out, p)
                 }</span>
         }
-        <span class="cov0" title="0">return out</span>
+        <span class="cov2" title="2">return out</span>
 }
 
 // executeZero is a placeholder used for the optional check above.
 type executeZero = model.ExecuteSpec
 
 // ParseDir reads all .tf files in a directory and merges them into one Project.
-func ParseDir(dir string) (model.Project, error) <span class="cov0" title="0">{
+func ParseDir(dir string) (model.Project, error) <span class="cov3" title="3">{
         entries, err := os.ReadDir(dir)
         if err != nil </span><span class="cov0" title="0">{
                 return model.Project{}, fmt.Errorf("read dir %s: %w", dir, err)
         }</span>
-        <span class="cov0" title="0">var proj model.Project
-        for _, e := range entries </span><span class="cov0" title="0">{
-                if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") </span><span class="cov0" title="0">{
+        <span class="cov3" title="3">var proj model.Project
+        for _, e := range entries </span><span class="cov4" title="4">{
+                if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") </span><span class="cov1" title="1">{
                         continue</span>
                 }
-                <span class="cov0" title="0">path := filepath.Join(dir, e.Name())
+                <span class="cov3" title="3">path := filepath.Join(dir, e.Name())
                 p, err := ParseFile(path)
                 if err != nil </span><span class="cov0" title="0">{
                         return model.Project{}, fmt.Errorf("parse %s: %w", path, err)
                 }</span>
-                <span class="cov0" title="0">proj.Repos = append(proj.Repos, p.Repos...)
+                <span class="cov3" title="3">proj.Repos = append(proj.Repos, p.Repos...)
                 proj.Tasks = append(proj.Tasks, p.Tasks...)
-                if proj.Name == "" &amp;&amp; p.Name != "" </span><span class="cov0" title="0">{
+                if proj.Name == "" &amp;&amp; p.Name != "" </span><span class="cov2" title="2">{
                         proj.Name = p.Name
                 }</span>
-                <span class="cov0" title="0">if p.DefaultImage != "" </span><span class="cov0" title="0">{
+                <span class="cov3" title="3">if p.DefaultImage != "" </span><span class="cov1" title="1">{
                         proj.DefaultImage = p.DefaultImage
                 }</span>
         }
-        <span class="cov0" title="0">return proj, nil</span>
+        <span class="cov3" title="3">return proj, nil</span>
 }
 
-func formatDiags(diags hcl.Diagnostics, filename string) error <span class="cov0" title="0">{
+func formatDiags(diags hcl.Diagnostics, filename string) error <span class="cov1" title="1">{
         var sb strings.Builder
-        for _, d := range diags </span><span class="cov0" title="0">{
+        for _, d := range diags </span><span class="cov1" title="1">{
                 sb.WriteString(fmt.Sprintf("[%v] %s:%d:%d: %s\n",
                         d.Severity, filename, d.Subject.Start.Line, d.Subject.Start.Column, d.Summary))
         }</span>
-        <span class="cov0" title="0">return fmt.Errorf("%s", sb.String())</span>
+        <span class="cov1" title="1">return fmt.Errorf("%s", sb.String())</span>
 }
 </pre>
 		
@@ -950,7 +950,7 @@ import (
 // job. Dependencies are mapped to GitLab's "needs" keyword. Manual tasks get
 // "when: manual". Container images are set per-job (the per-job dynamic image
 // pulling concept).
-func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string <span class="cov0" title="0">{
+func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string <span class="cov5" title="3">{
         var sb strings.Builder
 
         // Header comment.
@@ -961,21 +961,21 @@ func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string <span class="
         // Simple approach: all jobs start in "build" unless they depend on something,
         // then they go to "test", and if they depend on test jobs, "deploy".
         stages := deriveStages(nodes)
-        if len(stages) &gt; 0 </span><span class="cov0" title="0">{
+        if len(stages) &gt; 0 </span><span class="cov5" title="3">{
                 sb.WriteString("stages:\n")
-                for _, s := range stages </span><span class="cov0" title="0">{
+                for _, s := range stages </span><span class="cov6" title="4">{
                         sb.WriteString(fmt.Sprintf("  - %s\n", s))
                 }</span>
-                <span class="cov0" title="0">sb.WriteString("\n")</span>
+                <span class="cov5" title="3">sb.WriteString("\n")</span>
         }
 
         // Default image (from project-level setting).
-        <span class="cov0" title="0">if proj.DefaultImage != "" </span><span class="cov0" title="0">{
+        <span class="cov5" title="3">if proj.DefaultImage != "" </span><span class="cov1" title="1">{
                 sb.WriteString(fmt.Sprintf("default:\n  image: %s\n\n", proj.DefaultImage))
         }</span>
 
         // Jobs.
-        <span class="cov0" title="0">for _, node := range nodes </span><span class="cov0" title="0">{
+        <span class="cov5" title="3">for _, node := range nodes </span><span class="cov6" title="4">{
                 job := node.Task
                 stage := assignStage(job, nodes)
 
@@ -983,86 +983,87 @@ func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string <span class="
                 sb.WriteString(fmt.Sprintf("  stage: %s\n", stage))
 
                 // Image: per-job override or project default.
-                if job.Execute.Image != "" </span><span class="cov0" title="0">{
+                if job.Execute.Image != "" </span><span class="cov1" title="1">{
                         sb.WriteString(fmt.Sprintf("  image: %s\n", job.Execute.Image))
                 }</span>
 
                 // Dependencies.
-                <span class="cov0" title="0">if len(job.DependsOn) &gt; 0 </span><span class="cov0" title="0">{
+                <span class="cov6" title="4">if len(job.DependsOn) &gt; 0 </span><span class="cov1" title="1">{
                         sb.WriteString("  needs:\n")
-                        for _, dep := range job.DependsOn </span><span class="cov0" title="0">{
+                        for _, dep := range job.DependsOn </span><span class="cov1" title="1">{
                                 sb.WriteString(fmt.Sprintf("    - %s\n", dep))
                         }</span>
                 }
 
                 // Manual approval gate.
-                <span class="cov0" title="0">if job.Manual </span><span class="cov0" title="0">{
+                <span class="cov6" title="4">if job.Manual </span><span class="cov1" title="1">{
                         sb.WriteString("  when: manual\n")
                 }</span>
 
                 // Script: clone the repo and run the script.
-                <span class="cov0" title="0">sb.WriteString("  script:\n")
+                <span class="cov6" title="4">sb.WriteString("  script:\n")
                 sb.WriteString(fmt.Sprintf("    - echo \"Running %s in repo %s\"\n", job.Name, job.Execute.Repo))
                 sb.WriteString(fmt.Sprintf("    - %s\n", job.Execute.Script))
 
                 sb.WriteString("\n")</span>
         }
 
-        <span class="cov0" title="0">return sb.String()</span>
+        <span class="cov5" title="3">return sb.String()</span>
 }
 
 // deriveStages computes the pipeline stages from the node dependency graph.
-func deriveStages(nodes []dag.Node) []string <span class="cov0" title="0">{
-        hasNoDeps := false
-        hasTestDeps := false
-        hasDeployDeps := false
+// deriveStages determines which stages the pipeline needs based on
+// the dependency graph. Tasks with no deps → "build", tasks with deps
+// that depend on build tasks → "test", manual tasks → "deploy".
+func deriveStages(nodes []dag.Node) []string <span class="cov8" title="6">{
+        hasBuild := false
+        hasTest := false
+        hasDeploy := false
 
-        for _, n := range nodes </span><span class="cov0" title="0">{
-                if len(n.Task.DependsOn) == 0 </span><span class="cov0" title="0">{
-                        hasNoDeps = true
+        // First pass: identify which stages are needed.
+        for _, n := range nodes </span><span class="cov10" title="10">{
+                if len(n.Task.DependsOn) == 0 &amp;&amp; !n.Task.Manual </span><span class="cov7" title="5">{
+                        hasBuild = true
                 }</span>
-                <span class="cov0" title="0">for _, dep := range n.Task.DependsOn </span><span class="cov0" title="0">{
-                        // Check if the dependency is a "test" job.
-                        if strings.Contains(dep, "test") </span><span class="cov0" title="0">{
-                                hasTestDeps = true
-                        }</span>
-                }
-                <span class="cov0" title="0">if n.Task.Manual </span><span class="cov0" title="0">{
-                        hasDeployDeps = true
+                <span class="cov10" title="10">if len(n.Task.DependsOn) &gt; 0 &amp;&amp; !n.Task.Manual </span><span class="cov5" title="3">{
+                        hasTest = true
+                }</span>
+                <span class="cov10" title="10">if n.Task.Manual </span><span class="cov3" title="2">{
+                        hasDeploy = true
                 }</span>
         }
 
-        <span class="cov0" title="0">var stages []string
-        if hasNoDeps </span><span class="cov0" title="0">{
+        <span class="cov8" title="6">var stages []string
+        if hasBuild </span><span class="cov7" title="5">{
                 stages = append(stages, "build")
         }</span>
-        <span class="cov0" title="0">if hasTestDeps </span><span class="cov0" title="0">{
+        <span class="cov8" title="6">if hasTest </span><span class="cov5" title="3">{
                 stages = append(stages, "test")
         }</span>
-        <span class="cov0" title="0">if hasDeployDeps </span><span class="cov0" title="0">{
+        <span class="cov8" title="6">if hasDeploy </span><span class="cov3" title="2">{
                 stages = append(stages, "deploy")
         }</span>
-        <span class="cov0" title="0">if len(stages) == 0 </span><span class="cov0" title="0">{
+        <span class="cov8" title="6">if len(stages) == 0 </span><span class="cov0" title="0">{
                 stages = append(stages, "build")
         }</span>
-        <span class="cov0" title="0">return stages</span>
+        <span class="cov8" title="6">return stages</span>
 }
 
 // assignStage determines which stage a task belongs to.
-func assignStage(task model.Task, nodes []dag.Node) string <span class="cov0" title="0">{
-        if task.Manual </span><span class="cov0" title="0">{
+func assignStage(task model.Task, nodes []dag.Node) string <span class="cov9" title="8">{
+        if task.Manual </span><span class="cov3" title="2">{
                 return "deploy"
         }</span>
         // If the task has dependencies, it's at least "test" level.
-        <span class="cov0" title="0">if len(task.DependsOn) &gt; 0 </span><span class="cov0" title="0">{
-                for _, dep := range task.DependsOn </span><span class="cov0" title="0">{
-                        if strings.Contains(dep, "test") </span><span class="cov0" title="0">{
+        <span class="cov8" title="6">if len(task.DependsOn) &gt; 0 </span><span class="cov5" title="3">{
+                for _, dep := range task.DependsOn </span><span class="cov5" title="3">{
+                        if strings.Contains(dep, "test") </span><span class="cov1" title="1">{
                                 return "deploy"
                         }</span>
                 }
-                <span class="cov0" title="0">return "test"</span>
+                <span class="cov3" title="2">return "test"</span>
         }
-        <span class="cov0" title="0">return "build"</span>
+        <span class="cov5" title="3">return "build"</span>
 }
 </pre>
 		

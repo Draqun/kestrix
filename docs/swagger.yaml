@@ -119,6 +119,19 @@ definitions:
       value:
         type: string
     type: object
+  web.ProjectConfig:
+    properties:
+      created_at:
+        type: string
+      name:
+        type: string
+      pipeline_file:
+        type: string
+      repo_path:
+        type: string
+      repo_url:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -197,6 +210,140 @@ paths:
       summary: Parse and return pipeline definition
       tags:
       - pipeline
+  /api/pipeline/raw:
+    get:
+      parameters:
+      - description: Pipeline directory
+        in: query
+        name: dir
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+      summary: Return raw pipeline HCL source
+      tags:
+      - pipeline
+  /api/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/web.ProjectConfig'
+            type: array
+      summary: List configured projects
+      tags:
+      - projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project config
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/web.ProjectConfig'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/web.ProjectConfig'
+      summary: Create a project (point at a repo containing pipeline.tf)
+      tags:
+      - projects
+  /api/projects/{name}:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.ProjectConfig'
+      summary: Get a project config
+      tags:
+      - projects
+  /api/projects/{name}/pipeline:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+      summary: Get raw pipeline HCL for a project
+      tags:
+      - projects
+    post:
+      consumes:
+      - text/plain
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Save pipeline HCL for a project (writes pipeline.tf to repo path)
+      tags:
+      - projects
+  /api/projects/{name}/resolve:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Changed repos
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Resolve a project's triggers against changed repos
+      tags:
+      - projects
   /api/resolve:
     post:
       consumes:
