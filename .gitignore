@@ -48,3 +48,5 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+ui/dist/
+node_modules/
