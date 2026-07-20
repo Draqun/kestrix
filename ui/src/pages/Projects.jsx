@@ -2,16 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Card, CardContent, Grid, Chip, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, Paper, IconButton,
-  Tooltip, Alert, LinearProgress, TextField, Button, Divider, Stack
+  Tooltip, Alert, LinearProgress, TextField, Button, Stack
 } from '@mui/material';
 import {
   Folder as RepoIcon,
   PlayArrow as TaskIcon,
   Refresh as RefreshIcon,
   Add as AddIcon,
+  Delete as DeleteIcon,
   AccountTree as PipelineIcon,
 } from '@mui/icons-material';
-import { listProjects, createProject } from '../api/client';
+import { listProjects, createProject, deleteProject } from '../api/client';
 
 export default function Projects({ onOpenPipeline }) {
   const [projects, setProjects] = useState([]);
@@ -27,6 +28,7 @@ export default function Projects({ onOpenPipeline }) {
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await listProjects();
       setProjects(data || []);
@@ -50,6 +52,16 @@ export default function Projects({ onOpenPipeline }) {
       setFormError(err.message);
     }
     setCreating(false);
+  };
+
+  const handleDelete = async (projName) => {
+    if (!window.confirm(`Delete project "${projName}"?`)) return;
+    try {
+      await deleteProject(projName);
+      await fetchProjects();
+    } catch (err) {
+      setError(err.message);
+    }
   };
 
   return (
@@ -122,7 +134,14 @@ export default function Projects({ onOpenPipeline }) {
           <Grid item xs={12} md={6} key={p.name}>
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom>📦 {p.name}</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="h6" sx={{ flexGrow: 1 }}>📦 {p.name}</Typography>
+                  <Tooltip title="Delete project">
+                    <IconButton size="small" color="error" onClick={() => handleDelete(p.name)}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
                   {p.repo_path || p.repo_url}
                 </Typography>

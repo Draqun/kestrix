@@ -64,6 +64,25 @@ type ProjectConfig struct {
 func NewServer(cfg Config) *Server {
 	s := &Server{cfg: cfg}
 	s.projects = make(map[string]*ProjectConfig)
+
+	// Pre-populate default project if pipeline directory exists.
+	if cfg.PipelineDir != "" {
+		if _, err := os.Stat(filepath.Join(cfg.PipelineDir, "pipeline.tf")); err == nil {
+			// Find absolute path to pipeline dir.
+			absPath, _ := filepath.Abs(cfg.PipelineDir)
+			projName := "demo-mono"
+			if proj, parseErr := parser.ParseDir(cfg.PipelineDir); parseErr == nil && proj.Name != "" {
+				projName = proj.Name
+			}
+			s.projects[projName] = &ProjectConfig{
+				Name:         projName,
+				RepoPath:     absPath,
+				PipelineFile: "pipeline.tf",
+				CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+			}
+		}
+	}
+
 	s.router = s.buildRouter()
 	return s
 }
@@ -85,6 +104,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/projects", s.handleListProjects)
 		r.Post("/projects", s.handleCreateProject)
 		r.Get("/projects/{name}", s.handleGetProject)
+		r.Delete("/projects/{name}", s.handleDeleteProject)
 		r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
 		r.Post("/projects/{name}/pipeline", s.handleSaveProjectPipeline)
 		r.Post("/projects/{name}/resolve", s.handleResolveProject)
@@ -281,6 +301,24 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(p)
+}
+
+// handleDeleteProject godoc
+// @Summary Delete a project config
+// @Tags projects
+// @Produce json
+// @Param name path string true "Project name"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/projects/{name} [delete]
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if _, ok := s.projects[name]; !ok {
+		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
+		return
+	}
+	delete(s.projects, name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
 }
 
 // projectPipelinePath resolves the absolute path to a project's pipeline file.

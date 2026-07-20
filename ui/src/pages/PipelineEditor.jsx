@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   ReactFlow, Background, Controls, MiniMap,
-  useNodesState, useEdgesState, MarkerType
+  useNodesState, useEdgesState, MarkerType, Handle, Position
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
   Box, Card, CardContent, Typography, Button, TextField, Chip,
-  Alert, LinearProgress, Stack
+  Alert, LinearProgress
 } from '@mui/material';
 import {
   PlayArrow as ResolveIcon,
@@ -15,9 +15,9 @@ import {
   AccountTree as DagIcon,
 } from '@mui/icons-material';
 import dagre from 'dagre';
-import { getProjectPipeline, saveProjectPipeline, resolveProject, parsePipeline } from '../api/client';
+import { getProjectPipeline, saveProjectPipeline, resolveProject, parsePipeline, getProject } from '../api/client';
 
-// Empty pipeline template for a new project (TF plugin build + BE + FE jobs).
+// Empty pipeline template for a new project
 const EMPTY_TEMPLATE = `project "new-project" {
   default_image = "golang:1.26"
 
@@ -36,7 +36,6 @@ const EMPTY_TEMPLATE = `project "new-project" {
     kind = "subpath"
   }
 
-  # Build the Terraform provider/plugin
   ci_task "build_tf_plugin" {
     trigger = "repo.tf_plugin.changed"
     execute {
@@ -45,7 +44,6 @@ const EMPTY_TEMPLATE = `project "new-project" {
     }
   }
 
-  # Build backend
   ci_task "build_backend" {
     trigger = "repo.backend.changed"
     execute {
@@ -54,7 +52,6 @@ const EMPTY_TEMPLATE = `project "new-project" {
     }
   }
 
-  # Build frontend
   ci_task "build_frontend" {
     trigger = "repo.frontend.changed"
     execute {
@@ -79,6 +76,7 @@ function layoutFromProject(project) {
   });
 
   project.Tasks?.forEach(task => {
+    // 1. Edge: repo → task (trigger)
     const trig = task.Trigger || '';
     const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
     reposInTrigger.forEach(rn => {
@@ -86,9 +84,17 @@ function layoutFromProject(project) {
         g.setEdge(`repo:${rn}`, `task:${task.Name}`);
       }
     });
+
+    // 2. Edge: task → repo (execution destination)
     if (task.Execute?.Repo) {
       g.setEdge(`task:${task.Name}`, `repo:${task.Execute.Repo}`);
     }
+
+    // 3. Edge: task → task (depends_on / dependencies between jobs!)
+    task.DependsOn?.forEach(depName => {
+      g.setNode(`task:${depName}`, { width: 190, height: 60 });
+      g.setEdge(`task:${depName}`, `task:${task.Name}`);
+    });
   });
 
   dagre.layout(g);
@@ -97,7 +103,7 @@ function layoutFromProject(project) {
   const edges = [];
 
   project.Repos?.forEach(repo => {
-    const pos = g.node(`repo:${repo.Name}`);
+    const pos = g.node(`repo:${repo.Name}`) || { x: 100, y: 100 };
     nodes.push({
       id: `repo:${repo.Name}`,
       position: { x: pos.x - 85, y: pos.y - 30 },
@@ -108,7 +114,7 @@ function layoutFromProject(project) {
   });
 
   project.Tasks?.forEach(task => {
-    const pos = g.node(`task:${task.Name}`);
+    const pos = g.node(`task:${task.Name}`) || { x: 200, y: 100 };
     nodes.push({
       id: `task:${task.Name}`,
       position: { x: pos.x - 95, y: pos.y - 30 },
@@ -119,6 +125,7 @@ function layoutFromProject(project) {
   });
 
   project.Tasks?.forEach(task => {
+    // Edge: repo → task
     const trig = task.Trigger || '';
     const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
     reposInTrigger.forEach(rn => {
@@ -129,10 +136,12 @@ function layoutFromProject(project) {
           target: `task:${task.Name}`,
           animated: true,
           markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: '#ff9800' },
+          style: { stroke: '#ff9800', strokeWidth: 1.5 },
         });
       }
     });
+
+    // Edge: task → repo
     if (task.Execute?.Repo) {
       edges.push({
         id: `e-exec-${task.Name}-${task.Execute.Repo}`,
@@ -140,9 +149,21 @@ function layoutFromProject(project) {
         target: `repo:${task.Execute.Repo}`,
         animated: true,
         markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#2196f3' },
+        style: { stroke: '#2196f3', strokeWidth: 1.5 },
       });
     }
+
+    // Edge: task → task (depends_on)
+    task.DependsOn?.forEach(depName => {
+      edges.push({
+        id: `e-dep-${depName}-${task.Name}`,
+        source: `task:${depName}`,
+        target: `task:${task.Name}`,
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        style: { stroke: '#9c27b0', strokeWidth: 2.5 }, // Purple for task-to-task dependency
+      });
+    });
   });
 
   return { nodes, edges };
@@ -154,7 +175,11 @@ function CustomNode({ data }) {
       background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
       border: `2px solid ${data.type === 'repo' ? '#2196f3' : '#4caf50'}`,
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
+      position: 'relative',
     }}>
+      {/* Target handle on the left */}
+      <Handle type="target" position={Position.Left} style={{ background: '#ffffff', width: 8, height: 8 }} />
+      
       <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
       {data.path && (
         <Typography variant="caption" color="text.secondary">{data.path}</Typography>
@@ -164,6 +189,9 @@ function CustomNode({ data }) {
           {data.trigger}
         </Typography>
       )}
+
+      {/* Source handle on the right */}
+      <Handle type="source" position={Position.Right} style={{ background: '#ffffff', width: 8, height: 8 }} />
     </Box>
   );
 }
@@ -186,12 +214,15 @@ export default function PipelineEditor({ projectName }) {
     setLoading(true);
     setError(null);
     try {
-      // Raw HCL from the project's repo.
+      // 1. Get project config to know its local path.
+      const projConfig = await getProject(projectName);
+
+      // 2. Raw HCL from the project's repo path.
       const raw = await getProjectPipeline(projectName);
       setHclText(raw || EMPTY_TEMPLATE);
 
-      // Parsed model (single source of truth = backend parser).
-      const proj = await parsePipeline();
+      // 3. Parsed model using backend parser pointing at repo path.
+      const proj = await parsePipeline(projConfig.repo_path);
       setProject(proj);
       const { nodes: n, edges: e } = layoutFromProject(proj);
       setNodes(n);
@@ -213,7 +244,6 @@ export default function PipelineEditor({ projectName }) {
     try {
       const res = await saveProjectPipeline(projectName, hclText);
       setSaveMsg(`Saved to ${res.path}`);
-      // Reload parsed model after save.
       await loadPipeline();
     } catch (e) {
       setError(e.message);
@@ -268,7 +298,7 @@ export default function PipelineEditor({ projectName }) {
       </Box>
 
       <Box sx={{ display: 'flex', gap: 2, height: 'calc(100% - 60px)' }}>
-        {/* HCL editor — editable, saves to repo */}
+        {/* HCL editor */}
         <Card sx={{ width: 440, display: 'flex', flexDirection: 'column' }}>
           <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 1, '&:last-child': { pb: 1 } }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>pipeline.tf</Typography>

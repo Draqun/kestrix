@@ -53,6 +53,12 @@ export async function listProjects() {
   return res.json();
 }
 
+export async function getProject(name) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`Get project failed: ${res.statusText}`);
+  return res.json();
+}
+
 export async function createProject(cfg) {
   const res = await fetch(`${API_BASE}/api/projects`, {
     method: 'POST',
@@ -62,6 +68,17 @@ export async function createProject(cfg) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Create failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteProject(name) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Delete failed: ${res.statusText}`);
   }
   return res.json();
 }

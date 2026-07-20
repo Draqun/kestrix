@@ -262,6 +262,24 @@ paths:
       tags:
       - projects
   /api/projects/{name}:
+    delete:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Delete a project config
+      tags:
+      - projects
     get:
       parameters:
       - description: Project name
