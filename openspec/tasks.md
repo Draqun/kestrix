@@ -1,4 +1,4 @@
-# Tasks: MetaCI PoC Implementation
+# Tasks: Kestrix PoC Implementation
 
 ## Completed
 
@@ -103,7 +103,7 @@
 - [x] CLAUDE.md (AI dev guide)
 - [x] .better-commits.json (conventional commits)
 - [x] .env.template (environment variables)
-- [x] .gitlab-ci.yml (MetaCI's own CI pipeline)
+- [x] .gitlab-ci.yml (Kestrix's own CI pipeline)
 
 ### Documentation ✅
 - [x] OpenSpec proposal + 4 specs + design + tasks

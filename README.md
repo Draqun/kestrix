@@ -1,4 +1,4 @@
-# MetaCI — CI/CD Control Plane
+# Kestrix — CI/CD Control Plane
 
 > Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 > Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
@@ -8,9 +8,9 @@
 
 ---
 
-## What is MetaCI?
+## What is Kestrix?
 
-MetaCI is a CI/CD control plane that orchestrates pipelines across multiple
+Kestrix is a CI/CD control plane that orchestrates pipelines across multiple
 repositories using declarative HCL configuration. Instead of scattering CI
 logic across dozens of `.gitlab-ci.yml` files, you define everything in one
 place with clear trigger conditions.
@@ -84,7 +84,7 @@ curl -X POST http://localhost:8080/api/resolve \
 
 ## Configuration
 
-MetaCI loads config from `~/.metaci/config.yaml` (auto-discovered).
+Kestrix loads config from `~/.metaci/config.yaml` (auto-discovered).
 
 ```yaml
 listen_addr: ":8080"
@@ -115,7 +115,7 @@ dispatch:
 
 ```
 ┌─────────────┐   push    ┌──────────────────┐   API    ┌───────────┐
-│  Developer   │─────────▶│   GitLab         │────────▶│  MetaCI   │
+│  Developer   │─────────▶│   GitLab         │────────▶│  Kestrix   │
 └─────────────┘           │   (repo + CI)    │ webhook │  Server   │
                           └──────────────────┘◀────────│           │
                                     ▲                 │  ┌────────┤
@@ -127,8 +127,8 @@ dispatch:
 
 **Flow:**
 1. Developer pushes code to GitLab
-2. GitLab fires webhook to MetaCI (`/webhook`)
-3. MetaCI parses `pipeline.tf`, resolves trigger conditions
+2. GitLab fires webhook to Kestrix (`/webhook`)
+3. Kestrix parses `pipeline.tf`, resolves trigger conditions
 4. If triggers match → dispatches pipeline to GitLab via API
 5. GitLab Runner picks up the job and executes
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,7 +186,7 @@ func (s *Server) buildRouter() chi.Router {
 
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
-	log.Printf("MetaCI server listening on %s", s.cfg.ListenAddr)
+	log.Printf("Kestrix server listening on %s", s.cfg.ListenAddr)
 	return http.ListenAndServe(s.cfg.ListenAddr, s.router)
 }
 
@@ -280,19 +281,89 @@ func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {array} store.ProjectConfig
 // @Router /api/projects [get]
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.store.Load()
+	// Parse pagination parameters
+	q := r.URL.Query()
+	limitStr := q.Get("limit")
+	offsetStr := q.Get("offset")
+	// Default values
+	limit := 25
+	offset := 0
+	// Allowed limits
+	allowed := map[int]bool{10: true, 25: true, 50: true, 100: true}
+	if limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil {
+			limit = v
+		} else {
+			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	if offsetStr != "" {
+		if v, err := strconv.Atoi(offsetStr); err == nil {
+			offset = v
+		} else {
+			http.Error(w, `{"error":"invalid offset"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	if !allowed[limit] {
+		http.Error(w, `{"error":"limit must be one of [10,25,50,100]"}`, http.StatusBadRequest)
+		return
+	}
+	// Load all projects (could be optimized)
+	projMap, err := s.store.Load()
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	list := make([]*store.ProjectConfig, 0, len(projects))
-	for _, p := range projects {
+	// Convert map to slice for sorting
+	list := make([]*store.ProjectConfig, 0, len(projMap))
+	for _, p := range projMap {
 		list = append(list, p)
 	}
-	// Sort by name for deterministic output.
+	// Sort by name (existing behavior)
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	total := len(list)
+	// Apply pagination slice
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	paged := list[start:end]
+	// Build pagination metadata
+	var next *string
+	var prev *string
+	if end < total {
+		nxt := fmt.Sprintf("/api/projects?limit=%d&offset=%d", limit, end)
+		next = &nxt
+	}
+	if offset > 0 {
+		prevOffset := offset - limit
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		prv := fmt.Sprintf("/api/projects?limit=%d&offset=%d", limit, prevOffset)
+		prev = &prv
+	}
+	// Construct response struct
+	type pagination struct {
+		Total  int     `json:"total"`
+		Limit  int     `json:"limit"`
+		Offset int     `json:"offset"`
+		Next   *string `json:"next"`
+		Prev   *string `json:"prev"`
+	}
+	resp := map[string]interface{}{
+		"items":      paged,
+		"pagination": pagination{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(list)
+	json.NewEncoder(w).Encode(resp)
+	return
 }
 
 // handleCreateProject godoc
@@ -969,16 +1040,82 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]interface{}{})
 		return
 	}
-	runs, err := pgStore.ListRuns(name, 50)
+	// Parse pagination parameters
+	q := r.URL.Query()
+	limitStr := q.Get("limit")
+	offsetStr := q.Get("offset")
+	limit := 25
+	offset := 0
+	allowed := map[int]bool{10: true, 25: true, 50: true, 100: true}
+	if limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil {
+			limit = v
+		} else {
+			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	if offsetStr != "" {
+		if v, err := strconv.Atoi(offsetStr); err == nil {
+			offset = v
+		} else {
+			http.Error(w, `{"error":"invalid offset"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	if !allowed[limit] {
+		http.Error(w, `{"error":"limit must be one of [10,25,50,100]"}`, http.StatusBadRequest)
+		return
+	}
+	// Retrieve enough runs to satisfy pagination (offset+limit)
+	runsAll, err := pgStore.ListRuns(name, offset+limit)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	if runs == nil {
-		runs = []store.Run{}
+	if runsAll == nil {
+		runsAll = []store.Run{}
+	}
+	total := len(runsAll)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	runs := runsAll[start:end]
+	// Build pagination metadata
+	var next *string
+	var prev *string
+	if end < total {
+		nxt := fmt.Sprintf("/api/projects/%s/runs?limit=%d&offset=%d", name, limit, end)
+		tnext := nxt
+		next = &tnext
+	}
+	if offset > 0 {
+		prevOffset := offset - limit
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		prv := fmt.Sprintf("/api/projects/%s/runs?limit=%d&offset=%d", name, limit, prevOffset)
+		pprev := prv
+		prev = &pprev
+	}
+	type pagination struct {
+		Total  int     `json:"total"`
+		Limit  int     `json:"limit"`
+		Offset int     `json:"offset"`
+		Next   *string `json:"next"`
+		Prev   *string `json:"prev"`
+	}
+	resp := map[string]interface{}{
+		"items":      runs,
+		"pagination": pagination{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(runs)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleGetRun godoc
@@ -1531,9 +1668,9 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
-<head><title>MetaCI</title></head>
+<head><title>Kestrix</title></head>
 <body style="font-family:monospace;background:#0a1929;color:#e0e0e0;padding:40px">
-<h1>🚀 MetaCI — CI/CD Control Plane</h1>
+<h1>🚀 Kestrix — CI/CD Control Plane</h1>
 <p>Version %s — API endpoints:</p>
 <ul>
   <li><a href="/docs/">/docs/</a> — Swagger UI</li>

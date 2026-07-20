@@ -1,12 +1,19 @@
 # Spec: dispatch-pipeline (MVP)
 
+## Purpose
+Dispatch pipeline triggers a GitLab pipeline after the DAG engine resolves tasks from a webhook event.
+
 ## Summary
 Complete the webhook → parse → resolve → generate → dispatch flow so that a Git push actually triggers a pipeline execution on a GitLab Runner.
 
 ## Requirements
 
-### REQ-1: Webhook triggers dispatch
+### REQ-1: Webhook triggers dispatch (implemented)
 The webhook handler SHALL, after resolving triggered tasks, call the dispatch client to trigger a pipeline on GitLab.
+
+#### Scenario: Webhook triggers dispatch
+- **WHEN** a valid push webhook arrives AND the project has `gitlab_project_id` configured
+- **THEN** the server SHALL generate `gitlab-ci.yml` from triggered tasks AND call `GitLabClient.TriggerPipeline()`
 
 **WHEN** a valid push webhook arrives AND the project has `gitlab_project_id` configured  
 **THEN** the server SHALL generate `gitlab-ci.yml` from triggered tasks AND call `GitLabClient.TriggerPipeline()`
@@ -14,8 +21,13 @@ The webhook handler SHALL, after resolving triggered tasks, call the dispatch cl
 **WHEN** the project does NOT have `gitlab_project_id` configured  
 **THEN** the server SHALL return the result without dispatching (backward-compatible PoC mode)
 
-### REQ-2: GitLab pipeline trigger
+### REQ-2: GitLab pipeline trigger (implemented)
 The dispatch client SHALL trigger pipelines via the GitLab Pipeline API.
+
+#### Scenario: GitLab pipeline trigger
+- **WHEN** `TriggerPipeline(projectID, ref, variables)` is called
+- **THEN** the client SHALL POST to `/api/v4/projects/:id/pipeline` with `ref` and optional `variables`
+- **AND** return the pipeline ID and URL
 
 **WHEN** `TriggerPipeline(projectID, ref, variables)` is called  
 **THEN** the client SHALL POST to `/api/v4/projects/:id/pipeline` with `ref` and optional `variables`  
@@ -24,8 +36,15 @@ The dispatch client SHALL trigger pipelines via the GitLab Pipeline API.
 **WHEN** the GitLab API returns an error  
 **THEN** the client SHALL return a descriptive error (HTTP status, message)
 
-### REQ-3: Pipeline variables injection
+### REQ-3: Pipeline variables injection (implemented)
 Triggered task names and changed repo list SHALL be passed as pipeline variables.
+
+#### Scenario: Pipeline variables injection
+- **WHEN** a pipeline is triggered
+- **THEN** the following variables SHALL be set:
+  - `METACI_TRIGGERED_TASKS` — comma-separated task names
+  - `METACI_CHANGED_REPOS` — comma-separated repo names
+  - `METACI_DISPATCH_TIME` — ISO 8601 timestamp
 
 **WHEN** a pipeline is triggered  
 **THEN** the following variables SHALL be set:
@@ -33,8 +52,14 @@ Triggered task names and changed repo list SHALL be passed as pipeline variables
 - `METACI_CHANGED_REPOS` — comma-separated repo names
 - `METACI_DISPATCH_TIME` — ISO 8601 timestamp
 
-### REQ-4: Dispatch response
+### REQ-4: Dispatch response (implemented)
 The webhook response SHALL include dispatch status.
+
+#### Scenario: Dispatch response handling
+- **WHEN** dispatch succeeds
+- **THEN** the response SHALL include `{"pipeline_url": "...", "pipeline_id": N, "dispatched": true}`
+- **WHEN** dispatch fails
+- **THEN** the response SHALL include `{"dispatched": false, "error": "..."}` and HTTP status 200
 
 **WHEN** dispatch succeeds  
 **THEN** the response SHALL include `{"pipeline_url": "...", "pipeline_id": N, "dispatched": true}`
@@ -42,8 +67,12 @@ The webhook response SHALL include dispatch status.
 **WHEN** dispatch fails  
 **THEN** the response SHALL include `{"dispatched": false, "error": "..."}` AND the HTTP status SHALL still be 200 (webhook acknowledged, dispatch retriable)
 
-### REQ-5: Dry-run mode
+### REQ-5: Dry-run mode (implemented)
 Dispatch SHALL support dry-run mode for testing.
+
+#### Scenario: Dry-run mode
+- **WHEN** `METACI_DRY_RUN=true` OR `--dry-run` flag is set
+- **THEN** the dispatch client SHALL log the request WITHOUT calling GitLab API and return a mock response
 
 **WHEN** `METACI_DRY_RUN=true` OR `--dry-run` flag  
 **THEN** the dispatch client SHALL log the request WITHOUT calling GitLab API  

@@ -1,7 +1,7 @@
-# CLAUDE.md — MetaCI
+# CLAUDE.md — Kestrix
 
 ## What is this?
-MetaCI is a repo-agnostic CI/CD control plane. It uses HCL to define pipelines,
+Kestrix is a repo-agnostic CI/CD control plane. It uses HCL to define pipelines,
 parses trigger conditions via a DAG engine, and dispatches jobs to GitLab runners.
 
 ## Tech Stack

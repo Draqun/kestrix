@@ -1,12 +1,15 @@
 # Spec: CI Generator
 
+## Purpose
+The CI generator provides automatic conversion of Kestrix pipeline definitions into a `gitlab-ci.yml` file.
+
 ## Overview
 
 The CI generator produces a valid `.gitlab-ci.yml` from the resolved DAG nodes. It maps task dependencies to GitLab's `needs` keyword, sets per-job container images, and handles manual approval gates.
 
 ## Requirements
 
-### Requirement: YAML Generation
+### Requirement: YAML Generation (implemented)
 
 The generator SHALL produce valid GitLab CI YAML from a list of resolved DAG nodes. The output SHALL include:
 - A header comment identifying it as auto-generated
@@ -21,7 +24,7 @@ THEN the output SHALL contain one stage "build"
 AND the task SHALL be assigned to the "build" stage
 ```
 
-### Requirement: Stage Derivation
+### Requirement: Stage Derivation (implemented)
 
 Stages SHALL be derived from the dependency graph:
 - Tasks with no dependencies → "build"
@@ -38,7 +41,7 @@ AND test_integration SHALL be in "test" stage
 AND deploy SHALL be in "deploy" stage
 ```
 
-### Requirement: Dependency Mapping
+### Requirement: Dependency Mapping (implemented)
 
 Task dependencies SHALL be mapped to GitLab's `needs` keyword. Each dependency SHALL be listed as a job name reference.
 
@@ -52,7 +55,7 @@ THEN the generated job SHALL include:
     - build_b
 ```
 
-### Requirement: Manual Approval
+### Requirement: Manual Approval (implemented)
 
 Tasks with `manual = true` SHALL include `when: manual` in the generated YAML, requiring human approval in the GitLab UI.
 
@@ -63,7 +66,7 @@ WHEN a task has manual = true
 THEN the generated job SHALL include "when: manual"
 ```
 
-### Requirement: Per-Job Container Images
+### Requirement: Per-Job Container Images (implemented)
 
 If a task specifies an image, the generated job SHALL include that image. If no image is specified, the project-level default SHALL be used.
 
@@ -74,7 +77,7 @@ WHEN a task has execute.image = "rust:1.75"
 THEN the generated job SHALL include "image: rust:1.75"
 ```
 
-### Requirement: Script Generation
+### Requirement: Script Generation (implemented)
 
 Each job SHALL include a script section that:
 1. Logs the task name and repo context
@@ -89,3 +92,10 @@ THEN the generated job SHALL include:
     - echo "Running <task_name> in repo <repo>"
     - ./build.sh
 ```
+
+### REQ-1: Documentation inclusion (pending)
+The CI generator documentation SHALL be included in the project‑docs site and shall be kept up‑to‑date with any behaviour changes.
+
+#### Scenario: Documentation included in UI build
+- **WHEN** the UI build runs,
+- **THEN** the generated docs for the CI generator shall be present in `ui/dist/docs`.

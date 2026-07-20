@@ -1,6 +1,6 @@
-// Package config provides YAML-based configuration for MetaCI.
+// Package config provides YAML-based configuration for Kestrix.
 //
-// Config file: ~/.metaci/config.yaml (auto-discovered)
+// Config file: ~/.kestrix/config.yaml (auto-discovered)
 // CLI flags override file values.
 package config
 
@@ -76,26 +76,26 @@ func DefaultConfig() *Config {
 	}
 }
 
-// DefaultDir returns ~/.metaci, creating it if needed.
+// DefaultDir returns ~/.kestrix, creating it if needed.
 func DefaultDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	dir := filepath.Join(home, ".metaci")
+	dir := filepath.Join(home, ".kestrix")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
 	return dir, nil
 }
 
-// DefaultPath returns ~/.metaci/config.yaml.
+// DefaultPath returns ~/.kestrix/config.yaml.
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		home = "."
 	}
-	return filepath.Join(home, ".metaci", "config.yaml")
+	return filepath.Join(home, ".kestrix", "config.yaml")
 }
 
 // Load reads config from the given YAML file. Missing file → defaults.

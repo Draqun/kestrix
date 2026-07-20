@@ -1,14 +1,14 @@
-# Design: MetaCI Architecture
+# Design: Kestrix Architecture
 
 ## Overview
 
-MetaCI is a Go-based control plane that sits between git repositories and CI runners. It receives webhook events, evaluates trigger conditions against a pipeline definition, and dispatches execution to GitLab Runners.
+Kestrix is a Go-based control plane that sits between git repositories and CI runners. It receives webhook events, evaluates trigger conditions against a pipeline definition, and dispatches execution to GitLab Runners.
 
 ## Architecture
 
 ```
 ┌──────────────┐     webhook     ┌────────────────┐     dispatch    ┌──────────────┐
-│  Git Repo    │ ──────────────▶ │  MetaCI        │ ──────────────▶ │  GitLab      │
+│  Git Repo    │ ──────────────▶ │  Kestrix        │ ──────────────▶ │  GitLab      │
 │  (push)      │                 │  Control Plane │                 │  Runner      │
 └──────────────┘                 │                │                 └──────────────┘
                                  │  ┌──────────┐  │
@@ -55,7 +55,7 @@ Produces GitLab CI YAML from resolved DAG nodes. Maps dependencies to `needs`, d
 ## Data Flow
 
 1. Developer pushes code to a repository
-2. GitLab sends a webhook to MetaCI's `/webhook` endpoint
+2. GitLab sends a webhook to Kestrix's `/webhook` endpoint
 3. Webhook receiver parses the payload and extracts changed files
 4. File classifier determines which repos have code changes
 5. DAG engine evaluates trigger expressions against the changed repos

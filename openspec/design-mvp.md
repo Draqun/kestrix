@@ -1,4 +1,4 @@
-# Design: MetaCI MVP — Deploy Pipeline
+# Design: Kestrix MVP — Deploy Pipeline
 
 ## Architecture
 
@@ -11,7 +11,7 @@
                                   │ webhook                        │
                                   ▼                                │
                          ┌──────────────────┐                     │
-                         │   MetaCI Server   │                     │
+                         │   Kestrix Server   │                     │
                          │                    │                     │
                          │  ┌──────────────┐ │   ┌─────────────┐  │
                          │  │ Webhook       │ │   │ Dispatch    │◀─┘

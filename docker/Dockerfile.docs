@@ -1,0 +1,9 @@
+# Simple nginx container serving documentation static site
+FROM nginx:alpine
+
+# Copy generated documentation HTML files
+COPY ui/dist/docs /usr/share/nginx/html
+
+EXPOSE 80
+
+# Nginx runs in foreground by default

@@ -1,4 +1,4 @@
-// Package runner executes a resolved MetaCI pipeline on the local machine.
+// Package runner executes a resolved Kestrix pipeline on the local machine.
 package runner
 
 import (

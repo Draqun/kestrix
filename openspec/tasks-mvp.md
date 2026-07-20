@@ -1,4 +1,4 @@
-# Tasks: MetaCI MVP — Deploy Pipeline
+# Tasks: Kestrix MVP — Deploy Pipeline
 
 ## MVP Tasks (deploy pipeline end-to-end)
 

@@ -1,12 +1,12 @@
-# Proposal: MetaCI MVP — Deploy Pipeline
+# Proposal: Kestrix MVP — Deploy Pipeline
 
 ## Why
 
-MetaCI PoC has all the building blocks (parser, DAG, generator, webhook, UI) but they are disconnected. A webhook arrives, a result is computed — and nothing happens. The MVP connects these blocks into a single flow: **push → webhook → parse → resolve → dispatch → deploy**.
+Kestrix PoC has all the building blocks (parser, DAG, generator, webhook, UI) but they are disconnected. A webhook arrives, a result is computed — and nothing happens. The MVP connects these blocks into a single flow: **push → webhook → parse → resolve → dispatch → deploy**.
 
 The goal is to reach a state where a user can:
 1. Define a pipeline in HCL
-2. Point a GitLab repo at MetaCI
+2. Point a GitLab repo at Kestrix
 3. Push code and see a real deployment happen end-to-end
 
 ## What Changes
@@ -21,7 +21,7 @@ The webhook handler currently returns JSON and stops. In MVP it continues:
 6. Return execution status in webhook response
 
 ### GitLab Project Registration
-MetaCI must know each project's GitLab project ID, URL, and webhook secret. The in-memory `ProjectConfig` expands with:
+Kestrix must know each project's GitLab project ID, URL, and webhook secret. The in-memory `ProjectConfig` expands with:
 - `gitlab_project_id` (int) — for API calls
 - `gitlab_url` (string) — instance URL
 - `webhook_secret` (string) — per-project HMAC key

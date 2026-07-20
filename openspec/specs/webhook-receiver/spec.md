@@ -1,12 +1,15 @@
 # Spec: Webhook Receiver
 
+## Purpose
+The webhook receiver processes Git push events, extracts relevant data, and forwards it to the DAG engine for task resolution.
+
 ## Overview
 
 The webhook receiver is an HTTP server that accepts push events from GitLab (and other git hosts), classifies the changed files, and passes the event to the DAG engine for evaluation.
 
 ## Requirements
 
-### Requirement: HTTP Endpoint
+### Requirement: HTTP Endpoint (implemented)
 
 The server SHALL expose a `POST /webhook` endpoint that accepts JSON payloads from GitLab push webhooks. The server SHALL also expose `GET /health` and `GET /ping` endpoints for monitoring.
 
@@ -17,7 +20,7 @@ WHEN a client sends GET /health
 THEN the server SHALL respond with 200 OK and JSON {"status": "ok"}
 ```
 
-### Requirement: Push Event Parsing
+### Requirement: Push Event Parsing (implemented)
 
 The server SHALL parse GitLab push event payloads, extracting:
 - Repository path_with_namespace
@@ -40,7 +43,7 @@ WHEN the server receives an event with object_kind != "push"
 THEN it SHALL respond with 400 Bad Request
 ```
 
-### Requirement: File Classification
+### Requirement: File Classification (implemented)
 
 The server SHALL classify changed files as "code" or "non-code" based on configurable patterns. Files matching exclude patterns (docs/, .md, LICENSE) SHALL be classified as non-code.
 
@@ -60,7 +63,7 @@ THEN the file SHALL be classified as non-code
 AND no tasks SHALL be triggered
 ```
 
-### Requirement: Pipeline Loading
+### Requirement: Pipeline Loading (implemented)
 
 The server SHALL load pipeline definitions from a configured directory on each webhook request. Multiple .tf files in the directory SHALL be merged into a single project.
 
@@ -72,7 +75,7 @@ AND the pipeline directory contains repos.tf and tasks.tf
 THEN both files SHALL be parsed and merged into one project
 ```
 
-### Requirement: Response Format
+### Requirement: Response Format (implemented)
 
 The webhook handler SHALL respond with JSON containing:
 - status: "ok" or "skipped"
@@ -89,3 +92,10 @@ WHEN the webhook is processed successfully
 THEN the response SHALL include the generated gitlab-ci.yml
 AND the tasks list SHALL show each task's name, trigger status, and dependencies
 ```
+
+### REQ-1: Documentation inclusion (pending)
+The webhook receiver documentation SHALL be included in the project‑docs site and shall be kept up‑to‑date with any behaviour changes.
+
+#### Scenario: Documentation included in UI build
+- **WHEN** the UI build runs,
+- **THEN** the webhook receiver documentation shall be present in `ui/dist/docs`.

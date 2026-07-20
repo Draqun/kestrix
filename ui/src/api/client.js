@@ -47,8 +47,12 @@ export async function validatePipeline(dir = './examples/demo-mono') {
 
 // ─── Projects (UI-driven setup) ─────────────────────────────────
 
-export async function listProjects() {
-  const res = await fetch(`${API_BASE}/api/projects`);
+export async function listProjects(limit = 25, offset = 0) {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', limit);
+  if (offset) params.append('offset', offset);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE}/api/projects${query}`);
   if (!res.ok) throw new Error(`List projects failed: ${res.statusText}`);
   return res.json();
 }
@@ -152,8 +156,12 @@ export async function runProject(name, changed = [], includeManual = false) {
   return data;
 }
 
-export async function listRuns(name) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs`);
+export async function listRuns(name, limit = 25, offset = 0) {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', limit);
+  if (offset) params.append('offset', offset);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs${query}`);
   if (!res.ok) return [];
   return res.json();
 }

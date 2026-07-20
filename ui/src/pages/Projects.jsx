@@ -17,11 +17,13 @@ import {
   Save as SaveIcon,
 } from '@mui/icons-material';
 import { listProjects, createProject, deleteProject, getProject, updateProject, getProjectDefinition } from '../api/client';
+import Pagination from '../components/Pagination';
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+const [pagination, setPagination] = useState(null);
 
   const [config, setConfig] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -38,12 +40,13 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState(null);
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (limit = 25, offset = 0) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await listProjects();
-      setProjects(data || []);
+      const resp = await listProjects(limit, offset);
+      setProjects(resp.items || []);
+      setPagination(resp.pagination);
     } catch (e) {
       setError(e.message);
     }
@@ -390,11 +393,15 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         ))}
       </List>
 
+        {pagination && (
+          <Pagination pagination={pagination} onPageChange={(newOffset) => fetchProjects(pagination.limit, newOffset)} />
+        )}
+
       <Dialog open={showCreate} onClose={() => setShowCreate(false)} maxWidth="sm" fullWidth>
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Point MetaCI at a local repository and the directory containing its pipeline files.
+            Point Kestrix at a local repository and the directory containing its pipeline files.
           </Typography>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField

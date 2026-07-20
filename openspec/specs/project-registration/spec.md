@@ -1,12 +1,26 @@
 # Spec: project-registration (MVP)
 
+## Purpose
+Project registration enables storing GitLab project metadata and linking webhook events to pipeline definitions.
+
 ## Summary
-Register GitLab projects with MetaCI so the webhook handler knows which pipeline to run, which GitLab project to trigger, and which secret to verify.
+Register GitLab projects with Kestrix so the webhook handler knows which pipeline to run, which GitLab project to trigger, and which secret to verify.
 
 ## Requirements
 
-### REQ-1: Project config includes GitLab binding
+### REQ-1: Project config includes GitLab binding (implemented)
 Each project configuration SHALL include GitLab-specific fields.
+
+#### Scenario: Project config includes required fields
+- **WHEN** a project is created via API or config file
+- **THEN** it SHALL have:
+  - `name` (string, required)
+  - `repo_path` (string)
+  - `gitlab_project_id` (int, optional)
+  - `gitlab_url` (string, optional)
+  - `default_branch` (string, default: "main")
+  - `webhook_secret` (string, optional)
+  - `created_at` (string)
 
 **WHEN** a project is created via API or config file  
 **THEN** it SHALL have:
@@ -18,8 +32,12 @@ Each project configuration SHALL include GitLab-specific fields.
 - `webhook_secret` (string, optional) — per-project HMAC secret
 - `created_at` (string) — RFC 3339 timestamp
 
-### REQ-2: Project persistence
+### REQ-2: Project persistence (implemented)
 Project configurations SHALL survive server restarts.
+
+#### Scenario: Persistence across restarts
+- **WHEN** the server starts
+- **THEN** it SHALL load projects from `~/.metaci/projects.json`
 
 **WHEN** the server starts  
 **THEN** it SHALL load projects from `~/.metaci/projects.json`
@@ -30,8 +48,14 @@ Project configurations SHALL survive server restarts.
 **WHEN** `~/.metaci/projects.json` does not exist  
 **THEN** the server SHALL create it on first write
 
-### REQ-3: Project lookup by GitLab project ID
+### REQ-3: Project lookup by GitLab project ID (implemented)
 The webhook handler SHALL find projects by GitLab project ID.
+
+#### Scenario: Lookup by GitLab project ID
+- **WHEN** a webhook payload contains `project.id`
+- **THEN** the server SHALL look up the project by `gitlab_project_id`
+- **WHEN** no project matches
+- **THEN** the server SHALL return HTTP 200 with `{"status": "ignored", "reason": "unknown project"}`
 
 **WHEN** a webhook payload contains `project.id`  
 **THEN** the server SHALL look up the project by `gitlab_project_id`
@@ -39,8 +63,14 @@ The webhook handler SHALL find projects by GitLab project ID.
 **WHEN** no project matches  
 **THEN** the server SHALL return HTTP 200 with `{"status": "ignored", "reason": "unknown project"}`
 
-### REQ-4: Auto-load from pipeline_dir
+### REQ-4: Auto-load from pipeline_dir (implemented)
 The server SHALL auto-create a project from `--dir` on startup.
+
+#### Scenario: Auto-load from pipeline_dir
+- **WHEN** `--dir` is specified AND `pipeline.tf` exists in that directory
+- **THEN** the server SHALL create a project config pointing at that directory and use the project name from the HCL `project` block
+- **WHEN** `--dir` contains multiple `.tf` files
+- **THEN** only `pipeline.tf` SHALL be used for auto-load
 
 **WHEN** `--dir` is specified AND `pipeline.tf` exists in that directory  
 **THEN** the server SHALL create a project config pointing at that directory  
@@ -49,8 +79,14 @@ The server SHALL auto-create a project from `--dir` on startup.
 **WHEN** `--dir` contains multiple `.tf` files  
 **THEN** only `pipeline.tf` SHALL be used for auto-load
 
-### REQ-5: API CRUD for projects
+### REQ-5: API CRUD for projects (implemented)
 Existing CRUD endpoints SHALL be extended with new fields.
+
+#### Scenario: API CRUD for projects
+- **WHEN** `POST /api/projects` receives a payload with `name`, `repo_path`, and `gitlab_project_id`
+- **THEN** the project SHALL be created with all fields persisted
+- **WHEN** `GET /api/projects` returns project list
+- **THEN** each project SHALL include `gitlab_project_id`, `default_branch`, and masked `webhook_secret`
 
 **WHEN** `POST /api/projects` receives `{"name": "x", "repo_path": "/path", "gitlab_project_id": 12345}`  
 **THEN** the project SHALL be created with all fields persisted

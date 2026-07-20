@@ -52,7 +52,7 @@ export default function Layout({ children }) {
           </IconButton>
           <ScienceIcon sx={{ mr: 1 }} />
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
-            MetaCI
+            Kestrix
           </Typography>
           <Chip
             label={version ? `v${version}` : ''}

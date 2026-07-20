@@ -26,6 +26,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import dagre from 'dagre';
 import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
+import Pagination from '../components/Pagination';
 
 function layoutFromProject(project) {
   const g = new dagre.graphlib.Graph();
@@ -345,6 +346,7 @@ export function RunDetail({ projectName, runId, onBack }) {
           <CardContent sx={{ flex: 1, overflow: 'auto', py: 1, '&:last-child': { pb: 1 } }}>
             <Typography variant="subtitle2" gutterBottom>Jobs</Typography>
             {jobs.length > 0 ? (
+        <>
               <List dense disablePadding>
                 {jobs.map(job => {
                   const js = formatStatus(job.status);
@@ -372,7 +374,12 @@ export function RunDetail({ projectName, runId, onBack }) {
                     </ListItem>
                   );
                 })}
-              </List>
+</List>
+
+        {pagination && (
+          <Pagination pagination={pagination} onPageChange={(newOffset) => loadRuns(pagination.limit, newOffset)} />
+        )}
+            </>
             ) : (
               <Typography variant="body2" color="text.secondary">
                 {loading ? 'Loading…' : 'No job data yet.'}
@@ -408,7 +415,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                 <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                   {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
                 </Box>
-              </>
+            </>
             ) : (
               <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }}>
                 {dagNodes.length > 0 ? (
@@ -422,7 +429,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                     <Controls />
                     <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
                   </ReactFlow>
-                ) : (
+            ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
                     <Typography variant="body2" color="text.secondary">
                       {loading ? 'Loading pipeline…' : 'No pipeline definition'}
@@ -445,14 +452,28 @@ export function RunDetail({ projectName, runId, onBack }) {
 
 export function RunList({ onNewRun, onOpenRun }) {
   const [runs, setRuns] = useState([]);
+  const [allRuns, setAllRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [pagination, setPagination] = useState({ total: 0, limit: 25, offset: 0, next: null, prev: null });
 
-  const loadRuns = useCallback(async () => {
+  const loadRuns = useCallback(async (limit = 25, offset = 0) => {
     setLoading(true);
     try {
       const data = await listAllRuns();
-      setRuns(Array.isArray(data) ? data : []);
-    } catch { setRuns([]); }
+      const full = Array.isArray(data) ? data : [];
+      const total = full.length;
+      const start = offset;
+      const end = Math.min(offset + limit, total);
+      setAllRuns(full);
+      setRuns(full.slice(start, end));
+      const nextUrl = end < total ? `/api/runs?limit=${limit}&offset=${end}` : null;
+      const prevUrl = offset > 0 ? `/api/runs?limit=${limit}&offset=${Math.max(0, offset - limit)}` : null;
+      setPagination({ total, limit, offset, next: nextUrl, prev: prevUrl });
+    } catch {
+      setRuns([]);
+      setAllRuns([]);
+      setPagination({ total: 0, limit: 25, offset: 0, next: null, prev: null });
+    }
     setLoading(false);
   }, []);
 

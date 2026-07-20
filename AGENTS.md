@@ -1,4 +1,4 @@
-# AGENTS.md — MetaCI
+# AGENTS.md — Kestrix
 
 ## What this is
 Repo-agnostic CI/CD control plane. HCL pipelines → DAG trigger resolution → local/Docker/GitLab-runner execution. Dogfoods itself via `ci/pipeline.tf` + `scripts/`.

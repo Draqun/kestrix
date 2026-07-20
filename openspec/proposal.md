@@ -1,10 +1,10 @@
-# Proposal: MetaCI — Repo-Agnostic CI/CD Control Plane
+# Proposal: Kestrix — Repo-Agnostic CI/CD Control Plane
 
 ## Why
 
 Standard CI/CD tools (GitLab CI, GitHub Actions) are deeply coupled to individual repositories. In multirepo setups, each service has its own pipeline with no native way to express cross-repo conditional triggers. This leads to duplicated pipeline configurations, manual coordination between teams, and fragile integration testing workflows.
 
-MetaCI decouples pipeline definitions from repositories, treating them as data sources rather than pipeline owners. This enables a single, centralized pipeline definition that orchestrates builds, tests, and deployments across an entire system.
+Kestrix decouples pipeline definitions from repositories, treating them as data sources rather than pipeline owners. This enables a single, centralized pipeline definition that orchestrates builds, tests, and deployments across an entire system.
 
 ## What Changes
 
@@ -31,5 +31,5 @@ None — this is a greenfield project.
 
 - **Code**: New Go project with `cmd/metaci`, `internal/{model,dag,parser,web}`
 - **Dependencies**: `hashicorp/hcl/v2` (HCL parsing), `go-chi/chi` (HTTP router), `go-cty` (HCL value types)
-- **Infrastructure**: Requires a GitLab Runner (user-supplied) and a GitLab webhook pointing to the MetaCI server
+- **Infrastructure**: Requires a GitLab Runner (user-supplied) and a GitLab webhook pointing to the Kestrix server
 - **Security**: Webhook payloads are untrusted; pipeline definitions are trusted (user-managed)

@@ -1,12 +1,12 @@
-// Package model defines the core domain entities of MetaCI.
+// Package model defines the core domain entities of Kestrix.
 //
-// These types represent the in-memory representation of a MetaCI project:
+// These types represent the in‑memory representation of a Kestrix project:
 // repositories, tasks, trigger conditions, and the project itself that ties them
 // together. They are populated by the HCL parser and consumed by the DAG engine.
 package model
 
 // Repo represents a source repository (or a path within a monorepo) that
-// participates in a MetaCI project. It is the unit of change detection.
+// participates in a Kestrix project. It is the unit of change detection.
 type Repo struct {
 	// Name is the local identifier used in trigger expressions, e.g. "auth_service".
 	// It corresponds to the HCL label: ci_repo "auth_service" { ... }

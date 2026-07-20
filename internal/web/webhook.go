@@ -1,4 +1,4 @@
-// Package web implements the HTTP webhook receiver for MetaCI.
+// Package web implements the HTTP webhook receiver for Kestrix.
 //
 // It receives push events from GitLab (and other git hosts), extracts the
 // changed-file information, and passes it to the DAG engine for evaluation.

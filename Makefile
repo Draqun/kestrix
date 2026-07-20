@@ -124,6 +124,7 @@ ui-dev: ui-install
 ## ui-build: Build frontend for production (ui/dist)
 ui-build: ui-install
 	cd ui && npm run build
+	cp -r docs ui/dist/docs
 
 ## ui-serve: Build frontend + serve via Go (single binary, port 8080)
 ui-serve: ui-build $(BINARY)
@@ -140,3 +141,11 @@ docker-down:
 ## docker-logs: Follow Docker logs
 docker-logs:
 	cd docker && make logs
+
+## ci-validate-docs: Validate the presence of documentation after UI build
+ci-validate-docs:
+	@if [ -d ui/dist/docs ]; then echo "Documentation present"; else echo "Documentation missing"; exit 1; fi
+
+## serve-docs: Serve documentation locally (after UI build)
+serve-docs: ui-build
+	@cd ui/dist && python3 -m http.server 8000

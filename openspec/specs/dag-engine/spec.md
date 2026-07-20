@@ -1,12 +1,15 @@
 # Spec: DAG Engine
 
+## Purpose
+The DAG engine resolves task execution order based on trigger expressions and validates the dependency graph.
+
 ## Overview
 
 The DAG engine evaluates trigger expressions against a set of changed repositories and determines which tasks should run. It also validates the dependency graph for cycles and unknown references.
 
 ## Requirements
 
-### Requirement: Boolean Expression Evaluation
+### Requirement: Boolean Expression Evaluation (implemented)
 
 The engine SHALL evaluate trigger expressions using the following operators:
 - `&&` (AND): both sides must be true
@@ -54,7 +57,7 @@ AND auth is changed and docs is changed
 THEN the expression SHALL evaluate to false (docs blocks it)
 ```
 
-### Requirement: Cycle Detection
+### Requirement: Cycle Detection (implemented)
 
 The engine SHALL detect cycles in the depends_on dependency graph. If a cycle is found, resolution SHALL fail with a descriptive error.
 
@@ -66,7 +69,7 @@ AND task B depends on task A
 THEN resolution SHALL fail with a cycle detection error
 ```
 
-### Requirement: Unknown Reference Validation
+### Requirement: Unknown Reference Validation (implemented)
 
 The engine SHALL verify that all depends_on references point to declared tasks, and all execute.repo references point to declared ci_repo entries.
 
@@ -78,7 +81,7 @@ AND "nonexistent" is not a declared task
 THEN validation SHALL fail
 ```
 
-### Requirement: Manual Task Support
+### Requirement: Manual Task Support (implemented)
 
 Tasks with `manual = true` SHALL be included in the resolved set if their trigger is satisfied, but SHALL be annotated as requiring human approval.
 
@@ -89,3 +92,10 @@ WHEN a task has manual = true
 AND its trigger expression is satisfied
 THEN the task SHALL appear in the resolved set with manual = true
 ```
+
+### REQ-1: Documentation inclusion (pending)
+The DAG engine documentation SHALL be included in the project‑docs site and shall be kept up‑to‑date with any behaviour changes.
+
+#### Scenario: Documentation included in UI build
+- **WHEN** the UI build runs,
+- **THEN** the DAG engine documentation shall be present in `ui/dist/docs`.
