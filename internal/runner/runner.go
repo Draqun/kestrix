@@ -226,7 +226,7 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		}
 
 		var taskOut bytes.Buffer
-		cmd := exec.CommandContext(ctx, "sh", "-c", task.Execute.Script)
+		cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
 		cmd.Dir = taskDir
 		cmd.Env = env
 		cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)

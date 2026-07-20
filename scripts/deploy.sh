@@ -8,7 +8,7 @@ IMAGE="${DOCKER_IMAGE:-${REGISTRY}/lunaris-bot/metaci}"
 TAG="${DOCKER_TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo 'dev')}"
 COMPOSE_DIR="${COMPOSE_DIR:-docker}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
-HEALTH_URL="${HEALTH_URL:-http://localhost:8080/health}"
+HEALTH_URL="${HEALTH_URL:-http://localhost:8081/health}"
 
 FULL_IMAGE="${IMAGE}:${TAG}"
 
@@ -35,8 +35,8 @@ if [ -n "$DEPLOY_HOST" ]; then
   scp "${COMPOSE_DIR}/docker-compose.prod.yml" "${DEPLOY_HOST}:~/metaci-docker-compose.yml"
   ssh "${DEPLOY_HOST}" "METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml pull 2>/dev/null || true && METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml up -d"
 else
-  echo "Deploying locally..."
-  METACI_IMAGE="${FULL_IMAGE}" docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d
+echo "Deploying locally..."
+METACI_IMAGE="${FULL_IMAGE}" docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d --force-recreate
 fi
 
 echo "Waiting for health check..."

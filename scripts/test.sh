@@ -1,14 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 set -euo pipefail
 
 echo "=== Test ==="
 
-go test ./... -v -count=1 -coverprofile=coverage.out -covermode=atomic
-
-if [ -f coverage.out ]; then
-  echo ""
-  echo "--- Coverage ---"
-  go tool cover -func=coverage.out | tail -1
-fi
+go test ./... -v -count=1
 
 echo "=== Test passed ==="
