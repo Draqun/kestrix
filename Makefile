@@ -101,6 +101,18 @@ install-tools:
 	$(GO) install honnef.co/go/tools/cmd/staticcheck@latest
 	$(GO) install github.com/air-verse/air@latest
 
+## ui-install: Install frontend dependencies
+ui-install:
+	cd ui && npm install
+
+## ui-dev: Start frontend dev server (port 3000)
+ui-dev: ui-install
+	cd ui && npm run dev
+
+## ui-build: Build frontend for production
+ui-build: ui-install
+	cd ui && npm run build
+
 ## docker-up: Start local Docker environment
 docker-up:
 	cd docker && make up-d
