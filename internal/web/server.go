@@ -733,6 +733,8 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 					Name: tr.Name, Status: tr.Status, Output: tr.Output,
 					Error: tr.Error, Duration: tr.Duration,
 				})
+				// Flush aggregate output so the FE can show logs during execution.
+				pgStore.FlushRunOutput(runID, bgOutput.String())
 			}
 		}
 

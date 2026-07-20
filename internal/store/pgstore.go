@@ -250,6 +250,12 @@ func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
 	return err
 }
 
+// FlushRunOutput overwrites the run's aggregate output (called periodically during execution).
+func (s *PGStore) FlushRunOutput(runID int, output string) error {
+	_, err := s.db.Exec(`UPDATE runs SET output = $1 WHERE id = $2`, output, runID)
+	return err
+}
+
 // GetRun returns a run by ID.
 func (s *PGStore) GetRun(id int) (*Run, error) {
 	var r Run

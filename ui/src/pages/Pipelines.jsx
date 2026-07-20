@@ -483,6 +483,9 @@ export function RunProject({ projectName, onBack }) {
               setRunResult(run);
               clearInterval(pollInterval);
               setRunning(false);
+            } else {
+              // Update runResult on every poll so output is visible during execution.
+              setRunResult(run);
             }
           } catch { /* retry */ }
         }, 1500);
