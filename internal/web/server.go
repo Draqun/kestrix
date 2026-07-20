@@ -71,7 +71,7 @@ func NewServer(cfg Config) *Server {
 			// Find absolute path to pipeline dir.
 			absPath, _ := filepath.Abs(cfg.PipelineDir)
 			projName := "demo-mono"
-			if proj, parseErr := parser.ParseDir(cfg.PipelineDir); parseErr == nil && proj.Name != "" {
+			if proj, parseErr := parser.ParseFile(filepath.Join(cfg.PipelineDir, "pipeline.tf")); parseErr == nil && proj.Name != "" {
 				projName = proj.Name
 			}
 			s.projects[projName] = &ProjectConfig{
