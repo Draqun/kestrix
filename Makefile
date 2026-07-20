@@ -5,7 +5,7 @@ BINARY    := bin/metaci
 GO        := go
 GOFLAGS   :=
 
-.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve serve install-tools
+.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve serve dev install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
 ## help: Show this help message
 help:
@@ -105,13 +105,17 @@ install-tools:
 ui-install:
 	cd ui && npm install
 
-## ui-dev: Start frontend dev server (port 3000)
+## ui-dev: Start frontend dev server (port 3000, proxies to :8080)
 ui-dev: ui-install
 	cd ui && npm run dev
 
-## ui-build: Build frontend for production
+## ui-build: Build frontend for production (ui/dist)
 ui-build: ui-install
 	cd ui && npm run build
+
+## ui-serve: Build frontend + serve via Go (single binary, port 8080)
+ui-serve: ui-build $(BINARY)
+	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples)
 
 ## docker-up: Start local Docker environment
 docker-up:
