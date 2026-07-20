@@ -93,7 +93,6 @@ func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(chiMiddleware.RequestID)
-	r.Use(chiMiddleware.RealIP)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Heartbeat("/ping"))
@@ -735,8 +734,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Printf("webhook: dispatched pipeline %d (%s)", resp.PipelineID, resp.WebURL)
 				logEntry["dispatch"] = map[string]interface{}{
-					"dispatched":  true,
-					"pipeline_id": resp.PipelineID,
+					"dispatched":   true,
+					"pipeline_id":  resp.PipelineID,
 					"pipeline_url": resp.WebURL,
 				}
 				dispatchResult = logEntry["dispatch"].(map[string]interface{})

@@ -264,9 +264,6 @@ func splitList(s string) []string {
 	return out
 }
 
-// executeZero is a placeholder used for the optional check above.
-type executeZero = model.ExecuteSpec
-
 // ParseDir reads all .tf files in a directory and merges them into one Project.
 func ParseDir(dir string) (model.Project, error) {
 	entries, err := os.ReadDir(dir)

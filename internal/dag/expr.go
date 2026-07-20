@@ -15,7 +15,6 @@ package dag
 
 import (
 	"fmt"
-	"strings"
 	"unicode"
 )
 
@@ -215,15 +214,4 @@ func (p *exprParser) parsePredicate(changed, knownRepos map[string]bool) (bool, 
 	}
 	// Not in the changed set → treated as "not changed" (false).
 	return changed[repoName], nil
-}
-
-// String returns a human-readable label for the changed set — useful for logging.
-func changedString(changed map[string]bool) string {
-	var parts []string
-	for name, v := range changed {
-		if v {
-			parts = append(parts, name)
-		}
-	}
-	return strings.Join(parts, ", ")
 }
