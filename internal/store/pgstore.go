@@ -240,6 +240,16 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 	return err
 }
 
+// AppendTaskResult atomically adds a single task result to the run's task_results array.
+func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
+	b, _ := json.Marshal(tr)
+	_, err := s.db.Exec(
+		`UPDATE runs SET task_results = task_results::jsonb || $1::jsonb WHERE id = $2`,
+		string(b), runID,
+	)
+	return err
+}
+
 // GetRun returns a run by ID.
 func (s *PGStore) GetRun(id int) (*Run, error) {
 	var r Run

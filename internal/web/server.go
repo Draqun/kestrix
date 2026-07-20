@@ -717,35 +717,46 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		var taskResults []runner.TaskResult
 		var err error
 
+		// Append each task result to PG as it completes so the FE can poll progress.
+		pgStore, _ := s.store.(*store.PGStore)
+		onStart := func(name string) {
+			if pgStore != nil && runID > 0 {
+				pgStore.AppendTaskResult(runID, store.TaskResult{
+					Name:   name,
+					Status: "running",
+				})
+			}
+		}
+		onComplete := func(tr runner.TaskResult) {
+			if pgStore != nil && runID > 0 {
+				pgStore.AppendTaskResult(runID, store.TaskResult{
+					Name: tr.Name, Status: tr.Status, Output: tr.Output,
+					Error: tr.Error, Duration: tr.Duration,
+				})
+			}
+		}
+
+		opts := runner.Options{
+			WorkDir:        p.RepoPath,
+			IncludeManual:  req.IncludeManual,
+			Variables:      varStore,
+			Stdout:         &bgOutput,
+			Stderr:         &bgOutput,
+			OnTaskStart:    onStart,
+			OnTaskComplete: onComplete,
+		}
+
 		if s.cfg.Runner.Mode == "gitlab-runner" {
 			nodes, resErr := dag.New(proj).Resolve(changedSet)
 			if resErr != nil {
 				err = resErr
 			} else {
-				taskResults, err = runner.RunGitLabRunner(context.Background(), proj, nodes, runner.Options{
-					WorkDir:       p.RepoPath,
-					IncludeManual: req.IncludeManual,
-					Variables:     varStore,
-					Stdout:        &bgOutput,
-					Stderr:        &bgOutput,
-				}, GenerateGitLabCI)
+				taskResults, err = runner.RunGitLabRunner(context.Background(), proj, nodes, opts, GenerateGitLabCI)
 			}
 		} else if s.cfg.Runner.Mode == "local" {
-			taskResults, err = runner.RunLocal(context.Background(), proj, changedSet, runner.Options{
-				WorkDir:       p.RepoPath,
-				IncludeManual: req.IncludeManual,
-				Variables:     varStore,
-				Stdout:        &bgOutput,
-				Stderr:        &bgOutput,
-			})
+			taskResults, err = runner.RunLocal(context.Background(), proj, changedSet, opts)
 		} else {
-			taskResults, err = runner.Run(context.Background(), proj, changedSet, runner.Options{
-				WorkDir:       p.RepoPath,
-				IncludeManual: req.IncludeManual,
-				Variables:     varStore,
-				Stdout:        &bgOutput,
-				Stderr:        &bgOutput,
-			})
+			taskResults, err = runner.Run(context.Background(), proj, changedSet, opts)
 		}
 
 		status := "passed"
@@ -754,7 +765,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 			status = "failed"
 			errMsg = err.Error()
 		}
-		if pgStore, ok := s.store.(*store.PGStore); ok && runID > 0 {
+		if pgStore != nil && runID > 0 {
 			var trs []store.TaskResult
 			for _, tr := range taskResults {
 				trs = append(trs, store.TaskResult{

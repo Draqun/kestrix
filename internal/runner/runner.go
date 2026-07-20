@@ -37,6 +37,10 @@ type Options struct {
 	// Stdout and Stderr receive aggregate command output. Nil values discard output.
 	Stdout io.Writer
 	Stderr io.Writer
+	// OnTaskStart is called before a task begins executing.
+	OnTaskStart func(name string)
+	// OnTaskComplete is called after each task finishes (pass or fail).
+	OnTaskComplete func(TaskResult)
 }
 
 // Run resolves and executes the tasks selected by changed. Each task runs
@@ -88,7 +92,11 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
-			results = append(results, TaskResult{Name: task.Name, Status: "skipped"})
+			skipped := TaskResult{Name: task.Name, Status: "skipped"}
+			results = append(results, skipped)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
 			continue
 		}
 		repo := repos[task.Execute.Repo]
@@ -108,6 +116,9 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		}
 
 		fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
+		if opts.OnTaskStart != nil {
+			opts.OnTaskStart(task.Name)
+		}
 
 		// Build docker run command.
 		args := []string{
@@ -147,11 +158,17 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
 			results = append(results, tr)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(tr)
+			}
 			return results, fmt.Errorf("task %q failed: %w", task.Name, runErr)
 		}
 		tr.Status = "passed"
 		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
 		results = append(results, tr)
+		if opts.OnTaskComplete != nil {
+			opts.OnTaskComplete(tr)
+		}
 	}
 	return results, nil
 }
@@ -200,7 +217,11 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
-			results = append(results, TaskResult{Name: task.Name, Status: "skipped"})
+			skipped := TaskResult{Name: task.Name, Status: "skipped"}
+			results = append(results, skipped)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
 			continue
 		}
 		repo := repos[task.Execute.Repo]
@@ -215,6 +236,9 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		}
 
 		fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
+		if opts.OnTaskStart != nil {
+			opts.OnTaskStart(task.Name)
+		}
 
 		env := os.Environ()
 		env = append(env, "CI_PROJECT_DIR="+taskDir)
@@ -246,11 +270,17 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
 			results = append(results, tr)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(tr)
+			}
 			return results, fmt.Errorf("task %q failed: %w", task.Name, runErr)
 		}
 		tr.Status = "passed"
 		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
 		results = append(results, tr)
+		if opts.OnTaskComplete != nil {
+			opts.OnTaskComplete(tr)
+		}
 	}
 	return results, nil
 }

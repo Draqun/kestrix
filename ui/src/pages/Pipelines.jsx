@@ -466,24 +466,26 @@ export function RunProject({ projectName, onBack }) {
         const pollInterval = setInterval(async () => {
           try {
             const run = await getRun(projectName, result.run_id);
-            if (run && run.status !== 'running') {
+            if (!run) return;
+            // Update DAG nodes with current task_results on every poll.
+            if (run.task_results && run.task_results.length > 0) {
+              const resultMap = {};
+              run.task_results.forEach(t => { resultMap[t.name] = t.status; });
+              setNodes(prev => prev.map(node => {
+                const taskName = node.id.replace('task:', '');
+                if (node.data.type === 'task' && resultMap[taskName]) {
+                  return { ...node, data: { ...node.data, runStatus: resultMap[taskName] } };
+                }
+                return node;
+              }));
+            }
+            if (run.status !== 'running') {
               setRunResult(run);
               clearInterval(pollInterval);
               setRunning(false);
-              if (run.task_results) {
-                const resultMap = {};
-                run.task_results.forEach(t => { resultMap[t.name] = t.status; });
-                setNodes(prev => prev.map(node => {
-                  const taskName = node.id.replace('task:', '');
-                  if (node.data.type === 'task') {
-                    return { ...node, data: { ...node.data, runStatus: resultMap[taskName] || 'pending' } };
-                  }
-                  return node;
-                }));
-              }
             }
           } catch { /* retry */ }
-        }, 2000);
+        }, 1500);
       } else {
         setRunning(false);
       }
