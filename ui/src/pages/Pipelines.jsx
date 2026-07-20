@@ -560,8 +560,8 @@ export function RunProject({ projectName, onBack }) {
 
             {runResult && (
               <Box sx={{ mt: 1 }}>
-                <Alert severity={runResult.status === 'passed' ? 'success' : 'error'} sx={{ mb: 1 }}>
-                  {runResult.status === 'passed' ? 'Pipeline passed.' : `Pipeline failed: ${runResult.error}`}
+                <Alert severity={runResult.status === 'passed' ? 'success' : runResult.status === 'running' ? 'info' : 'error'} sx={{ mb: 1 }}>
+                  {runResult.status === 'passed' ? 'Pipeline passed.' : runResult.status === 'running' ? 'Pipeline is running…' : `Pipeline failed: ${runResult.error}`}
                 </Alert>
                 <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                   {runResult.output || '(No output)'}
