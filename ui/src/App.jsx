@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import { useState } from 'react';
 import theme from './theme/theme';
@@ -8,31 +8,38 @@ import PipelineEditor from './pages/PipelineEditor';
 import Projects from './pages/Projects';
 import WebhookLogs from './pages/WebhookLogs';
 
-export default function App() {
+function AppRoutes() {
   const [activeProject, setActiveProject] = useState(null);
+  const navigate = useNavigate();
 
   const openPipeline = (name) => {
     setActiveProject(name);
-    window.history.pushState({}, '', '/pipeline');
+    navigate('/pipeline');
   };
 
   return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route
+          path="/pipeline"
+          element={<PipelineEditor projectName={activeProject} />}
+        />
+        <Route
+          path="/projects"
+          element={<Projects onOpenPipeline={openPipeline} />}
+        />
+        <Route path="/webhooks" element={<WebhookLogs />} />
+      </Routes>
+    </Layout>
+  );
+}
+
+export default function App() {
+  return (
     <ThemeProvider theme={theme}>
       <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route
-              path="/pipeline"
-              element={<PipelineEditor projectName={activeProject} />}
-            />
-            <Route
-              path="/projects"
-              element={<Projects onOpenPipeline={openPipeline} />}
-            />
-            <Route path="/webhooks" element={<WebhookLogs />} />
-          </Routes>
-        </Layout>
+        <AppRoutes />
       </BrowserRouter>
     </ThemeProvider>
   );

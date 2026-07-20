@@ -2,7 +2,7 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
 export async function healthCheck() {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await fetch(`${API_BASE}/api/health`);
   return res.json();
 }
 
