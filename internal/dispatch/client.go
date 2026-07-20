@@ -130,6 +130,37 @@ func (c *Client) setPipelineVariable(projectID, pipelineID int, key, value strin
 	return nil
 }
 
+// GetPipelineStatus returns the current status of a pipeline.
+func (c *Client) GetPipelineStatus(projectID, pipelineID int) (*DispatchResponse, error) {
+	if c.HTTPClient == nil {
+		c.HTTPClient = http.DefaultClient
+	}
+
+	url := fmt.Sprintf("%s/api/v4/projects/%d/pipelines/%d", c.BaseURL, projectID, pipelineID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("PRIVATE-TOKEN", c.Token)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("status request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gitlab returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result DispatchResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &result, nil
+}
+
 // DispatchDryRun simulates a dispatch without hitting the API.
 // Returns what would be sent.
 type DryRunResult struct {
