@@ -730,6 +730,14 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 					Stderr:        &bgOutput,
 				}, GenerateGitLabCI)
 			}
+		} else if s.cfg.Runner.Mode == "local" {
+			taskResults, err = runner.RunLocal(context.Background(), proj, changedSet, runner.Options{
+				WorkDir:       p.RepoPath,
+				IncludeManual: req.IncludeManual,
+				Variables:     varStore,
+				Stdout:        &bgOutput,
+				Stderr:        &bgOutput,
+			})
 		} else {
 			taskResults, err = runner.Run(context.Background(), proj, changedSet, runner.Options{
 				WorkDir:       p.RepoPath,
@@ -851,13 +859,24 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var output bytes.Buffer
-	taskResults, err := runner.Run(r.Context(), proj, changedSet, runner.Options{
-		WorkDir:       p.RepoPath,
-		IncludeManual: true,
-		Variables:     varStore,
-		Stdout:        &output,
-		Stderr:        &output,
-	})
+	var taskResults []runner.TaskResult
+	if s.cfg.Runner.Mode == "local" {
+		taskResults, err = runner.RunLocal(r.Context(), proj, changedSet, runner.Options{
+			WorkDir:       p.RepoPath,
+			IncludeManual: true,
+			Variables:     varStore,
+			Stdout:        &output,
+			Stderr:        &output,
+		})
+	} else {
+		taskResults, err = runner.Run(r.Context(), proj, changedSet, runner.Options{
+			WorkDir:       p.RepoPath,
+			IncludeManual: true,
+			Variables:     varStore,
+			Stdout:        &output,
+			Stderr:        &output,
+		})
+	}
 
 	status := "passed"
 	errMsg := ""

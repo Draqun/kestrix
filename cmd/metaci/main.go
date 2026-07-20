@@ -75,6 +75,7 @@ func cmdRun(args []string) {
 	changedFlag := fs.String("changed", "", "comma-separated list of changed repo names")
 	workDir := fs.String("workdir", ".", "checkout containing the pipeline repositories")
 	includeManual := fs.Bool("include-manual", false, "run tasks marked manual")
+	localFlag := fs.Bool("local", true, "run tasks locally (no Docker)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -97,12 +98,17 @@ func cmdRun(args []string) {
 			changed[name] = true
 		}
 	}
-	_, err = runner.Run(context.Background(), proj, changed, runner.Options{
+	opts := runner.Options{
 		WorkDir:       *workDir,
 		IncludeManual: *includeManual,
 		Stdout:        os.Stdout,
 		Stderr:        os.Stderr,
-	})
+	}
+	if *localFlag {
+		_, err = runner.RunLocal(context.Background(), proj, changed, opts)
+	} else {
+		_, err = runner.Run(context.Background(), proj, changed, opts)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pipeline failed: %v\n", err)
 		os.Exit(1)

@@ -156,6 +156,105 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 	return results, nil
 }
 
+// RunLocal resolves and executes tasks directly on the host without Docker.
+// Each task runs via `sh -c` in the repo directory.
+func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	if err := dag.New(project).Validate(); err != nil {
+		return nil, fmt.Errorf("validate pipeline: %w", err)
+	}
+	if opts.WorkDir == "" {
+		opts.WorkDir = "."
+	}
+	workDir, err := filepath.Abs(opts.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workdir: %w", err)
+	}
+	if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
+		if err != nil {
+			return nil, fmt.Errorf("workdir %q: %w", workDir, err)
+		}
+		return nil, fmt.Errorf("workdir %q is not a directory", workDir)
+	}
+
+	nodes, err := dag.New(project).Resolve(changed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pipeline: %w", err)
+	}
+	ordered, err := order(nodes)
+	if err != nil {
+		return nil, err
+	}
+	repos := make(map[string]model.Repo, len(project.Repos))
+	for _, repo := range project.Repos {
+		repos[repo.Name] = repo
+	}
+
+	var results []TaskResult
+	for _, node := range ordered {
+		task := node.Task
+		if task.Manual && !opts.IncludeManual {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
+			results = append(results, TaskResult{Name: task.Name, Status: "skipped"})
+			continue
+		}
+		repo := repos[task.Execute.Repo]
+		taskDir, err := repoDir(workDir, repo)
+		if err != nil {
+			return results, fmt.Errorf("task %q: %w", task.Name, err)
+		}
+
+		relDir, _ := filepath.Rel(workDir, taskDir)
+		if relDir == "" {
+			relDir = "."
+		}
+
+		fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
+
+		env := os.Environ()
+		env = append(env, "CI_PROJECT_DIR="+taskDir)
+		if opts.Variables != nil {
+			vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
+			for k, v := range vars {
+				env = append(env, k+"="+v)
+			}
+		}
+
+		var taskOut bytes.Buffer
+		cmd := exec.CommandContext(ctx, "sh", "-c", task.Execute.Script)
+		cmd.Dir = taskDir
+		cmd.Env = env
+		cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
+		cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+
+		start := time.Now()
+		runErr := cmd.Run()
+		dur := time.Since(start)
+
+		tr := TaskResult{
+			Name:     task.Name,
+			Output:   taskOut.String(),
+			Duration: dur,
+		}
+		if runErr != nil {
+			tr.Status = "failed"
+			tr.Error = runErr.Error()
+			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
+			results = append(results, tr)
+			return results, fmt.Errorf("task %q failed: %w", task.Name, runErr)
+		}
+		tr.Status = "passed"
+		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
+		results = append(results, tr)
+	}
+	return results, nil
+}
+
 // RunGitLabRunner executes tasks via `gitlab-runner exec`.
 func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
 	if opts.Stdout == nil {

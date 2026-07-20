@@ -26,21 +26,26 @@ if [ -n "${DOCKER_USERNAME:-}" ] && [ -n "${DOCKER_PASSWORD:-}" ]; then
   docker push "${FULL_IMAGE}"
 fi
 
+# Stop dev container if running (free port 8080).
+docker stop metaci-dev 2>/dev/null || true
+docker rm metaci-dev 2>/dev/null || true
+
 if [ -n "$DEPLOY_HOST" ]; then
   echo "Deploying to remote host ${DEPLOY_HOST}..."
-  ssh "${DEPLOY_HOST}" "cd $(pwd) && docker compose -f ${COMPOSE_DIR}/docker-compose.yml pull && docker compose -f ${COMPOSE_DIR}/docker-compose.yml up -d"
+  scp "${COMPOSE_DIR}/docker-compose.prod.yml" "${DEPLOY_HOST}:~/metaci-docker-compose.yml"
+  ssh "${DEPLOY_HOST}" "METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml pull 2>/dev/null || true && METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml up -d"
 else
   echo "Deploying locally..."
-  docker compose -f "${COMPOSE_DIR}/docker-compose.yml" pull 2>/dev/null || true
-  docker compose -f "${COMPOSE_DIR}/docker-compose.yml" up -d
+  METACI_IMAGE="${FULL_IMAGE}" docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" up -d
 fi
 
 echo "Waiting for health check..."
-RETRIES=10
+RETRIES=15
 until curl -sf "${HEALTH_URL}" >/dev/null 2>&1; do
   RETRIES=$((RETRIES - 1))
   if [ "$RETRIES" -le 0 ]; then
     echo "Health check failed after retries"
+    docker logs metaci-prod 2>&1 | tail -20 || true
     exit 1
   fi
   sleep 2

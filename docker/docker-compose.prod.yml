@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────
+# MetaCI — Production deployment
+# ─────────────────────────────────────────────────────────────
+#
+# Usage:
+#   METACI_IMAGE=metaci:latest docker compose -f docker-compose.prod.yml up -d
+#
+services:
+  metaci:
+    image: ${METACI_IMAGE:-metaci:latest}
+    container_name: metaci-prod
+    ports:
+      - "${METACI_PORT:-8080}:8080"
+    environment:
+      - DATABASE_URL=postgres://metaci:metaci@postgres:5432/metaci?sslmode=disable
+      - METACI_WEBHOOK_SECRET=${METACI_WEBHOOK_SECRET:-dev-secret}
+      - METACI_GITLAB_URL=${METACI_GITLAB_URL:-https://gitlab.com}
+      - METACI_GITLAB_TOKEN=${METACI_GITLAB_TOKEN:-}
+      - METACI_DISPATCH_PROJECT=${METACI_DISPATCH_PROJECT:-}
+      - DOCKER_REGISTRY=${DOCKER_REGISTRY:-registry.gitlab.com}
+      - DOCKER_IMAGE=${DOCKER_IMAGE:-registry.gitlab.com/lunaris-bot/metaci}
+      - DOCKER_USERNAME=${DOCKER_USERNAME:-}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: metaci-postgres
+    environment:
+      POSTGRES_DB: metaci
+      POSTGRES_USER: metaci
+      POSTGRES_PASSWORD: metaci
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metaci"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: metaci-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
