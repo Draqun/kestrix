@@ -366,8 +366,6 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.\nSupports OR/AND/NOT trigger logic for cross-repo conditional builds.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "{{",
-	RightDelim:       "}}",
 }
 
 func init() {
