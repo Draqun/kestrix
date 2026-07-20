@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 
+	"gitlab.com/lunaris-bot/metaci/internal/config"
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/variables"
@@ -66,18 +67,27 @@ Usage:
 
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	addr := fs.String("addr", ":8080", "listen address (e.g. :8080, 0.0.0.0:9000)")
-	dir := fs.String("dir", "./examples", "pipeline directory containing .tf files")
+	configPath := fs.String("config", config.DefaultPath(), "config file path")
+	addr := fs.String("addr", "", "listen address (overrides config)")
+	dir := fs.String("dir", "", "pipeline directory (overrides config)")
 	secret := fs.String("secret", "", "webhook verification secret (env: METACI_WEBHOOK_SECRET)")
-	method := fs.String("method", "gitlab", "verification method: gitlab or hmac")
+	method := fs.String("method", "", "verification method: gitlab or hmac")
 	dispatchFlag := fs.String("dispatch", "", "GitLab project ID to dispatch pipelines to (env: METACI_DISPATCH_PROJECT)")
-	gitlabURL := fs.String("gitlab-url", "https://gitlab.com", "GitLab instance URL (env: METACI_GITLAB_URL)")
+	gitlabURL := fs.String("gitlab-url", "", "GitLab instance URL (overrides config)")
 	gitlabToken := fs.String("gitlab-token", "", "GitLab API token (env: METACI_GITLAB_TOKEN)")
+	branchFlag := fs.String("branch", "", "default branch (overrides config)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	// Resolve secrets from env if not set via flags.
+	// Load config from file (defaults if missing).
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Resolve secrets from env.
 	if *secret == "" {
 		*secret = os.Getenv("METACI_WEBHOOK_SECRET")
 	}
@@ -88,27 +98,60 @@ func cmdServe(args []string) {
 		*gitlabToken = os.Getenv("METACI_GITLAB_TOKEN")
 	}
 
-	cfg := web.Config{
-		ListenAddr:  *addr,
-		PipelineDir: *dir,
+	// Apply env secrets to config.
+	if *secret != "" {
+		cfg.Webhook.Secret = *secret
+	}
+	if *gitlabURL != "" {
+		cfg.Dispatch.GitLabURL = *gitlabURL
+	}
+	if *gitlabToken != "" {
+		cfg.Dispatch.GitLabToken = *gitlabToken
+	}
+	if *dispatchFlag != "" {
+		cfg.Dispatch.Enabled = true
+		fmt.Sscanf(*dispatchFlag, "%d", &cfg.Dispatch.ProjectID)
+	}
+	if *branchFlag != "" {
+		cfg.Branch = *branchFlag
+	}
+
+	// Apply CLI flags (non-empty overrides config).
+	if *addr != "" {
+		cfg.ListenAddr = *addr
+	}
+	if *dir != "" {
+		cfg.Pipeline.Dir = *dir
+	}
+	if *method != "" {
+		// method is used for SignatureConfig
+	}
+
+	// Convert to web.Config.
+	webCfg := web.Config{
+		ListenAddr:  cfg.ListenAddr,
+		PipelineDir: cfg.Pipeline.Dir,
+		Branch:      cfg.Branch,
 		Signature: web.SignatureConfig{
-			Enabled: *secret != "",
-			Secret:  *secret,
+			Enabled: cfg.Webhook.Secret != "",
+			Secret:  cfg.Webhook.Secret,
 			Method:  *method,
+		},
+		Dispatch: web.DispatchConfig{
+			Enabled:     cfg.Dispatch.Enabled,
+			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),
+			GitLabURL:   cfg.Dispatch.GitLabURL,
+			GitLabToken: cfg.Dispatch.GitLabToken,
 		},
 	}
 
-	// Setup dispatch if configured.
-	if *dispatchFlag != "" && *gitlabToken != "" {
-		cfg.Dispatch = web.DispatchConfig{
-			Enabled:     true,
-			ProjectID:   *dispatchFlag,
-			GitLabURL:   *gitlabURL,
-			GitLabToken: *gitlabToken,
-		}
+	// Show config file location.
+	fmt.Fprintf(os.Stderr, "config: %s\n", *configPath)
+	if _, statErr := os.Stat(*configPath); os.IsNotExist(statErr) {
+		fmt.Fprintf(os.Stderr, "config: no config file found, using defaults + CLI flags\n")
 	}
 
-	server := web.NewServer(cfg)
+	server := web.NewServer(webCfg)
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
