@@ -25,7 +25,7 @@ import {
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import dagre from 'dagre';
-import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun } from '../api/client';
+import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun } from '../api/client';
 
 function layoutFromProject(project) {
   const g = new dagre.graphlib.Graph();
@@ -129,6 +129,7 @@ function CustomNode({ data }) {
     : data.runStatus === 'skipped' ? '#757575'
     : data.runStatus === 'running' ? '#ff9800'
     : data.runStatus === 'pending' ? '#616161'
+    : data.runStatus === 'canceled' ? '#ff9800'
     : null;
   const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50');
 
@@ -138,7 +139,7 @@ function CustomNode({ data }) {
       border: `2px solid ${borderColor}`,
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
       position: 'relative',
-      opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' ? 0.5 : 1,
+      opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' || data.runStatus === 'canceled' ? 0.5 : 1,
     }}>
       <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
       <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
@@ -173,6 +174,7 @@ const nodeTypes = { custom: CustomNode };
 function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
   if (status === 'failed') return { color: 'error', label: 'FAILED' };
+  if (status === 'canceled') return { color: 'warning', label: 'CANCELED' };
   if (status === 'skipped') return { color: 'default', label: 'SKIPPED' };
   if (status === 'pending') return { color: 'default', label: 'PENDING' };
   return { color: 'warning', label: 'RUNNING' };
@@ -190,6 +192,20 @@ function RunDetailView({ run, onClose }) {
   const [selectedJob, setSelectedJob] = useState(null);
   const [dagNodes, setDagNodes, onDagNodesChange] = useNodesState([]);
   const [dagEdges, setDagEdges, onDagEdgesChange] = useEdgesState([]);
+  const [canceling, setCanceling] = useState(false);
+  const r = detail || run;
+
+  const handleCancel = async () => {
+    const cur = detail || run;
+    if (!cur) return;
+    setCanceling(true);
+    try {
+      await cancelRun(cur.project_name, cur.id);
+      const updated = await getRun(cur.project_name, cur.id);
+      setDetail(updated);
+    } catch { /* ignore */ }
+    setCanceling(false);
+  };
 
   useEffect(() => {
     if (!run) { setDetail(null); setSelectedJob(null); return; }
@@ -200,8 +216,6 @@ function RunDetailView({ run, onClose }) {
       .catch(() => { setDetail(run); setSelectedJob(null); })
       .finally(() => setLoading(false));
   }, [run]);
-
-  const r = detail || run;
 
   // Build DAG from pipeline_def snapshot when detail loads.
   useEffect(() => {
@@ -246,7 +260,14 @@ function RunDetailView({ run, onClose }) {
     <Dialog open={!!run} onClose={onClose} maxWidth="lg" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         Run #{r.id} — {r.project_name}
-        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          {r.status === 'running' && (
+            <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
+              {canceling ? 'Canceling…' : 'Cancel'}
+            </Button>
+          )}
+          <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+        </Box>
       </DialogTitle>
       <DialogContent sx={{ display: 'flex', gap: 2, minHeight: 400 }}>
         {loading && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0 }} />}
@@ -588,6 +609,18 @@ export function RunProject({ projectName, onBack }) {
               <Button color="success" variant="contained" startIcon={<RunIcon />} onClick={handleRun} disabled={running}>
                 {running ? 'Running…' : 'Run'}
               </Button>
+              {running && runResult?.run_id && (
+                <Button color="warning" variant="outlined" size="small" onClick={async () => {
+                  try {
+                    await cancelRun(projectName, runResult.run_id);
+                    const updated = await getRun(projectName, runResult.run_id);
+                    setRunResult(updated);
+                    setRunning(false);
+                  } catch (e) { setError(e.message); }
+                }}>
+                  Cancel
+                </Button>
+              )}
             </Box>
             <FormControlLabel
               sx={{ mb: 1, ml: 0 }}

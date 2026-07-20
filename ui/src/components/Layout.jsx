@@ -105,12 +105,6 @@ export default function Layout({ children }) {
         sx={{
           flexGrow: 1,
           p: 3,
-          ml: drawerOpen ? `${DRAWER_WIDTH}px` : 0,
-          transition: (theme) =>
-            theme.transitions.create('margin', {
-              easing: theme.transitions.easing.sharp,
-              duration: theme.transitions.duration.leavingScreen,
-            }),
         }}
       >
         <Toolbar />

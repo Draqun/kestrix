@@ -340,6 +340,96 @@ func (s *PGStore) FlushRunOutput(runID int, output string) error {
 	return err
 }
 
+// CancelRun marks a running run as "canceled":
+// - running → canceled
+// - pending (no incomplete deps) → canceled
+// - pending (depends on incomplete/failed) → skipped
+// - passed left unchanged
+func (s *PGStore) CancelRun(id int) error {
+	var taskResultsJSON string
+	var status string
+	err := s.db.QueryRow(
+		`SELECT status, task_results FROM runs WHERE id = $1`, id,
+	).Scan(&status, &taskResultsJSON)
+	if err != nil {
+		return err
+	}
+	if status != "running" {
+		return nil
+	}
+
+	var results []TaskResult
+	json.Unmarshal([]byte(taskResultsJSON), &results)
+
+	// Deduplicate by name keeping last status (append model may have running+passed pairs).
+	latest := make(map[string]TaskResult)
+	order := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, tr := range results {
+		if !seen[tr.Name] {
+			order = append(order, tr.Name)
+			seen[tr.Name] = true
+		}
+		latest[tr.Name] = tr
+	}
+
+	incomplete := make(map[string]bool)
+	for name, tr := range latest {
+		if tr.Status == "pending" || tr.Status == "running" {
+			incomplete[name] = true
+		}
+	}
+
+	depMap := make(map[string][]string)
+	var snapJSON sql.NullString
+	_ = s.db.QueryRow(`SELECT pipeline_def FROM runs WHERE id = $1`, id).Scan(&snapJSON)
+	if snapJSON.Valid {
+		var snap PipelineSnapshot
+		if json.Unmarshal([]byte(snapJSON.String), &snap) == nil {
+			for _, t := range snap.Tasks {
+				depMap[t.Name] = t.DependsOn
+			}
+		}
+	}
+
+	var final []TaskResult
+	for _, name := range order {
+		tr := latest[name]
+		switch tr.Status {
+		case "running":
+			tr.Status = "canceled"
+			tr.Error = "canceled"
+		case "pending":
+			blocked := false
+			for _, dep := range depMap[name] {
+				if incomplete[dep] {
+					blocked = true
+					break
+				}
+				if d, ok := latest[dep]; ok && (d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped") {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				tr.Status = "skipped"
+				tr.Error = "dependency canceled"
+			} else {
+				tr.Status = "canceled"
+				tr.Error = "canceled"
+			}
+		}
+		final = append(final, tr)
+	}
+
+	b, _ := json.Marshal(final)
+	_, err = s.db.Exec(
+		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now() WHERE id = $2`,
+		string(b), id,
+	)
+	return err
+}
+
 // GetRun returns a run by ID.
 func (s *PGStore) GetRun(id int) (*Run, error) {
 	var r Run

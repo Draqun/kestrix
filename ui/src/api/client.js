@@ -169,3 +169,14 @@ export async function listAllRuns() {
   if (!res.ok) return [];
   return res.json();
 }
+
+export async function cancelRun(name, runID) {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Cancel failed: ${res.statusText}`);
+  }
+  return res.json();
+}

@@ -133,6 +133,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/projects/{name}/tasks/{task}/run", s.handleRunTask)
 		r.Get("/projects/{name}/runs", s.handleListRuns)
 		r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
+		r.Post("/projects/{name}/runs/{runID}/cancel", s.handleCancelRun)
 		r.Get("/runs", s.handleListAllRuns)
 		r.Post("/resolve", s.handleResolve)
 		r.Post("/generate", s.handleGenerate)
@@ -997,6 +998,27 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(run)
+}
+
+// handleCancelRun cancels a running pipeline run.
+func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	pgStore, ok := s.store.(*store.PGStore)
+	if !ok {
+		http.Error(w, `{"error":"runs not supported"}`, http.StatusBadRequest)
+		return
+	}
+	runID := 0
+	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
+	if runID == 0 {
+		http.Error(w, `{"error":"invalid run ID"}`, http.StatusBadRequest)
+		return
+	}
+	if err := pgStore.CancelRun(runID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "canceled"})
 }
 
 // handleListAllRuns godoc
