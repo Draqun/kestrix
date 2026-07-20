@@ -128,6 +128,7 @@ function CustomNode({ data }) {
     : data.runStatus === 'failed' ? '#f44336'
     : data.runStatus === 'skipped' ? '#757575'
     : data.runStatus === 'running' ? '#ff9800'
+    : data.runStatus === 'pending' ? '#616161'
     : null;
   const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#ff9800' : '#4caf50');
 
@@ -172,6 +173,8 @@ const nodeTypes = { custom: CustomNode };
 function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
   if (status === 'failed') return { color: 'error', label: 'FAILED' };
+  if (status === 'skipped') return { color: 'default', label: 'SKIPPED' };
+  if (status === 'pending') return { color: 'default', label: 'PENDING' };
   return { color: 'warning', label: 'RUNNING' };
 }
 
@@ -199,7 +202,6 @@ function RunDetailView({ run, onClose }) {
   }, [run]);
 
   const r = detail || run;
-  if (!r) return null;
 
   // Build DAG from pipeline_def snapshot when detail loads.
   useEffect(() => {
@@ -233,6 +235,8 @@ function RunDetailView({ run, onClose }) {
     setDagNodes(patchedNodes);
     setDagEdges(e);
   }, [r?.pipeline_def, r?.task_results]);
+
+  if (!r) return null;
 
   const st = formatStatus(r.status);
   const jobs = r.task_results || [];

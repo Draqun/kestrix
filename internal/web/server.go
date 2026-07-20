@@ -701,6 +701,15 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		if runErr != nil {
 			log.Printf("warning: could not create run record: %v", runErr)
 		}
+		// Pre-populate all tasks as pending so the DAG shows them gray from the start.
+		if runErr == nil {
+			for _, t := range proj.Tasks {
+				pgStore.AppendTaskResult(runID, store.TaskResult{
+					Name:   t.Name,
+					Status: "pending",
+				})
+			}
+		}
 	}
 
 	// Return immediately so the frontend doesn't timeout.
@@ -767,6 +776,16 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			status = "failed"
 			errMsg = err.Error()
+		}
+		// Also check task results — runner may not return error if it continues past failures.
+		for _, tr := range taskResults {
+			if tr.Status == "failed" {
+				status = "failed"
+				if errMsg == "" {
+					errMsg = tr.Error
+				}
+				break
+			}
 		}
 		if pgStore != nil && runID > 0 {
 			var trs []store.TaskResult

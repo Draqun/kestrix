@@ -88,12 +88,31 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 	}
 
 	var results []TaskResult
+	failedTasks := make(map[string]bool)
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
 			skipped := TaskResult{Name: task.Name, Status: "skipped"}
 			results = append(results, skipped)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
+			continue
+		}
+		// Skip tasks whose dependencies failed.
+		blocked := false
+		for _, dep := range task.DependsOn {
+			if failedTasks[dep] {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
+			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			results = append(results, skipped)
+			failedTasks[task.Name] = true
 			if opts.OnTaskComplete != nil {
 				opts.OnTaskComplete(skipped)
 			}
@@ -158,10 +177,11 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
 			results = append(results, tr)
+			failedTasks[task.Name] = true
 			if opts.OnTaskComplete != nil {
 				opts.OnTaskComplete(tr)
 			}
-			return results, fmt.Errorf("task %q failed: %w", task.Name, runErr)
+			continue
 		}
 		tr.Status = "passed"
 		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
@@ -213,12 +233,30 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 	}
 
 	var results []TaskResult
+	failedTasks := make(map[string]bool)
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
 			skipped := TaskResult{Name: task.Name, Status: "skipped"}
 			results = append(results, skipped)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
+			continue
+		}
+		blocked := false
+		for _, dep := range task.DependsOn {
+			if failedTasks[dep] {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
+			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			results = append(results, skipped)
+			failedTasks[task.Name] = true
 			if opts.OnTaskComplete != nil {
 				opts.OnTaskComplete(skipped)
 			}
@@ -270,10 +308,11 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
 			results = append(results, tr)
+			failedTasks[task.Name] = true
 			if opts.OnTaskComplete != nil {
 				opts.OnTaskComplete(tr)
 			}
-			return results, fmt.Errorf("task %q failed: %w", task.Name, runErr)
+			continue
 		}
 		tr.Status = "passed"
 		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
@@ -325,11 +364,32 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 	}
 
 	var results []TaskResult
+	failedTasks := make(map[string]bool)
 	for _, node := range ordered {
 		task := node.Task
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (manual)\n", task.Name)
 			results = append(results, TaskResult{Name: task.Name, Status: "skipped"})
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(TaskResult{Name: task.Name, Status: "skipped"})
+			}
+			continue
+		}
+		blocked := false
+		for _, dep := range task.DependsOn {
+			if failedTasks[dep] {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
+			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			results = append(results, skipped)
+			failedTasks[task.Name] = true
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
 			continue
 		}
 
@@ -363,11 +423,18 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 			tr.Status = "failed"
 			tr.Error = runErr.Error()
 			results = append(results, tr)
-			return results, fmt.Errorf("task %q failed (gitlab-runner exec): %w", task.Name, runErr)
+			failedTasks[task.Name] = true
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(tr)
+			}
+			continue
 		}
 		tr.Status = "passed"
 		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
 		results = append(results, tr)
+		if opts.OnTaskComplete != nil {
+			opts.OnTaskComplete(tr)
+		}
 	}
 	return results, nil
 }
