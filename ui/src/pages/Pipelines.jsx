@@ -222,8 +222,10 @@ export function RunDetail({ projectName, runId, onBack }) {
                         <ListItemText
                           primary={job.name}
                           secondary={formatDuration(job.duration)}
-                          primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }}
-                          secondaryTypographyProps={{ variant: 'caption' }}
+                          slotProps={{
+                            primary: { variant: 'body2', fontWeight: 600 },
+                            secondary: { variant: 'caption' },
+                          }}
                         />
                       </ListItemButton>
                       {canRun && (

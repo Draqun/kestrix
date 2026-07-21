@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect } from 'react';
 import {
   ReactFlow, Background, Controls, MiniMap,
   useNodesState, useEdgesState, Handle, Position
@@ -55,31 +55,29 @@ function CustomNode({ data }) {
 
 const nodeTypes = { custom: CustomNode };
 
-export default function DAGViewer({ nodes: initialNodes, edges: initialEdges, onNodeClick, fitView = true, ...props }) {
+export default function DAGViewer({ nodes: initialNodes, edges: initialEdges, onNodeClick, fitView = true }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
-  useMemo(() => {
+  useEffect(() => {
     setNodes(initialNodes);
     setEdges(initialEdges);
   }, [initialNodes, initialEdges]);
 
   return (
-    <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }} {...props}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        fitView={fitView}
-        onNodeClick={onNodeClick}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background color="#1e3a5f" />
-        <Controls />
-        <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
-      </ReactFlow>
-    </Box>
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      nodeTypes={nodeTypes}
+      fitView={fitView}
+      onNodeClick={onNodeClick}
+      proOptions={{ hideAttribution: true }}
+    >
+      <Background color="#1e3a5f" />
+      <Controls />
+      <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
+    </ReactFlow>
   );
 }
