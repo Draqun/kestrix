@@ -58,9 +58,9 @@
 
 ## 8. Business Website (`specs/business-website`)
 
-- [ ] REQ-1: Business website build step
-- [ ] REQ-2: Content pages specific to business
-- [ ] REQ-3: Deployment pipeline for business site
+- [x] REQ-1: Business website build step
+- [x] REQ-2: Content pages specific to business
+- [x] REQ-3: Deployment pipeline for business site
 
 ## 9. Project Docs (`specs/project-docs`)
 

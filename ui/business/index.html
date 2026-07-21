@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kestrix — CI/CD Control Plane</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+      color: #e0e0e0; background: #0a1929; line-height: 1.6;
+    }
+    a { color: #ffb300; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+    /* Header */
+    header {
+      position: fixed; top: 0; width: 100%; z-index: 100;
+      background: rgba(10,25,41,0.9); backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    header .container { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+    header .logo { font-size: 1.4rem; font-weight: 700; color: #fff; }
+    header .logo span { color: #ffb300; }
+    header nav a { margin-left: 24px; font-size: 0.9rem; color: #b0b0b0; }
+    header nav a:hover { color: #fff; }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh; display: flex; align-items: center;
+      background: linear-gradient(135deg, #0a1929 0%, #0d2137 50%, #0a1929 100%);
+      padding-top: 64px;
+    }
+    .hero h1 { font-size: 3rem; font-weight: 800; color: #fff; margin-bottom: 16px; }
+    .hero h1 span { color: #ffb300; }
+    .hero p { font-size: 1.2rem; color: #90a0b0; max-width: 600px; margin-bottom: 32px; }
+    .hero .cta {
+      display: inline-block; padding: 14px 36px; border-radius: 8px;
+      background: #ffb300; color: #0a1929; font-weight: 700; font-size: 1rem;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .hero .cta:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(255,179,0,0.3); }
+
+    /* Sections */
+    section { padding: 96px 0; }
+    section:nth-child(even) { background: #0d2137; }
+    h2 { font-size: 2rem; font-weight: 700; color: #fff; margin-bottom: 48px; text-align: center; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 32px; }
+    .card {
+      padding: 32px; border-radius: 12px;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    }
+    .card h3 { font-size: 1.2rem; color: #ffb300; margin-bottom: 12px; }
+    .card p { color: #90a0b0; font-size: 0.95rem; }
+
+    /* Features */
+    .features .card { text-align: center; }
+    .features .icon { font-size: 2.5rem; margin-bottom: 16px; }
+
+    /* Product */
+    .product .content { max-width: 700px; margin: 0 auto; text-align: center; }
+    .product p { color: #90a0b0; font-size: 1.05rem; margin-bottom: 16px; }
+    .product ul { list-style: none; text-align: left; max-width: 500px; margin: 24px auto; }
+    .product ul li { padding: 8px 0; color: #c0c8d0; }
+    .product ul li::before { content: "✓ "; color: #4caf50; font-weight: 700; }
+
+    /* About */
+    .about .content { max-width: 700px; margin: 0 auto; text-align: center; }
+    .about p { color: #90a0b0; font-size: 1.05rem; margin-bottom: 16px; }
+
+    /* Contact */
+    .contact p { text-align: center; color: #90a0b0; margin-bottom: 12px; }
+    .contact .info { text-align: center; }
+    .contact .info a { color: #ffb300; }
+
+    /* Footer */
+    footer {
+      text-align: center; padding: 32px 0; border-top: 1px solid rgba(255,255,255,0.08);
+      color: #606870; font-size: 0.85rem;
+    }
+
+    @media (max-width: 600px) {
+      header nav a { margin-left: 12px; font-size: 0.8rem; }
+      .hero h1 { font-size: 2rem; }
+      .hero p { font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="logo">Kestrix<span>.</span></div>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#product">Product</a>
+        <a href="#about">About</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="container">
+      <h1>CI/CD <span>Control Plane</span><br/>for Modern Teams</h1>
+      <p>Kestrix orchestrates multi-repo pipelines with dynamic DAG resolution, GitLab Runner execution, and real-time visibility — from one declarative configuration.</p>
+      <a class="cta" href="#features">Explore Features</a>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="container">
+      <h2>Key Features</h2>
+      <div class="grid">
+        <div class="card">
+          <div class="icon">🔀</div>
+          <h3>Multi-Repo Orchestration</h3>
+          <p>Define pipelines that span multiple repositories. Trigger tasks based on changes across your entire codebase.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📐</div>
+          <h3>DAG Resolution</h3>
+          <p>Declarative HCL pipelines with automatic dependency resolution. Cycle detection and deadlock prevention built-in.</p>
+        </div>
+        <div class="card">
+          <div class="icon">⚡</div>
+          <h3>GitLab Native</h3>
+          <p>First-class GitLab integration — webhook receiver, pipeline dispatch, and runner execution out of the box.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🎨</div>
+          <h3>Rich Dashboard</h3>
+          <p>Real-time pipeline visualization with DAG graphs, dark/light mode, and responsive mobile layout.</p>
+        </div>
+        <div class="card">
+          <div class="icon">🔧</div>
+          <h3>Local & Cloud</h3>
+          <p>Run pipelines locally for development, then deploy to GitLab Runners for production — same configuration.</p>
+        </div>
+        <div class="card">
+          <div class="icon">📄</div>
+          <h3>Dogfooded</h3>
+          <p>Kestrix builds itself. Every merge runs through the same pipeline engine you use — tested in production daily.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="product" id="product">
+    <div class="container">
+      <h2>How It Works</h2>
+      <div class="content">
+        <p>Write your pipeline in a single <code>pipeline.tf</code> file using the HCL language. Define repos, tasks with triggers and dependencies, and execution scripts — all in one place.</p>
+        <p>Kestrix resolves the DAG on every push, determines which tasks to run, and dispatches them to your GitLab Runner or local shell.</p>
+        <ul>
+          <li>Declarative HCL syntax — no YAML spaghetti</li>
+          <li>Boolean trigger expressions with AND/OR/NOT</li>
+          <li>Automatic stage ordering from task dependencies</li>
+          <li>Manual gates for production deployments</li>
+          <li>CI generator produces <code>.gitlab-ci.yml</code> automatically</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="about" id="about">
+    <div class="container">
+      <h2>About Kestrix</h2>
+      <div class="content">
+        <p>Kestrix is an open-source CI/CD control plane built for teams that manage complex multi-repository systems. It was born from the frustration of maintaining dozens of <code>.gitlab-ci.yml</code> files across microservices, each with duplicated logic and inconsistent patterns.</p>
+        <p>Instead of configuring CI per-repo, Kestrix lets you define your entire pipeline in a single place — then resolves, triggers, and monitors execution across all your repositories.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="contact" id="contact">
+    <div class="container">
+      <h2>Get In Touch</h2>
+      <p>Questions, feedback, or contributions? We'd love to hear from you.</p>
+      <div class="info">
+        <p>📧 <a href="mailto:kestrix@lunaris-bot.com">kestrix@lunaris-bot.com</a></p>
+        <p>🐙 <a href="https://gitlab.com/lunaris-bot/metaci" target="_blank">gitlab.com/lunaris-bot/metaci</a></p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>Kestrix — CI/CD Control Plane. Open source under MIT License.</p>
+    </div>
+  </footer>
+</body>
+</html>

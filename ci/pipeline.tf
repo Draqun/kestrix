@@ -95,6 +95,27 @@ project "metaci" {
     }
   }
 
+  # ─── Business Website ──────────────────────────────────────
+
+  ci_task "business_build" {
+    trigger    = "repo.metaci.changed"
+    depends_on = ["build_fe"]
+    execute {
+      repo   = "metaci"
+      script = "bash scripts/build-business.sh"
+    }
+  }
+
+  ci_task "business_deploy" {
+    trigger    = "repo.metaci.changed"
+    depends_on = ["business_build"]
+    manual     = true
+    execute {
+      repo   = "metaci"
+      script = "bash scripts/deploy-business.sh"
+    }
+  }
+
   # ─── Deploy ────────────────────────────────────────────────
 
   ci_task "deploy" {
