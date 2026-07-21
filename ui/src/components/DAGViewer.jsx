@@ -24,28 +24,29 @@ function CustomNode({ data }) {
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
       position: 'relative',
       color: '#fff',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
       opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' || data.runStatus === 'canceled' ? 0.5 : 1,
     }}>
       <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
       <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
-      {data.path && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>{data.path}</Typography>}
+      {data.path && <Typography variant="caption" display="block" sx={{ color: 'rgba(255,255,255,0.7)' }}>{data.path}</Typography>}
       {data.trigger && (
         <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
           {data.trigger}
         </Typography>
       )}
       {data.manual && !data.runStatus && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5, color: '#42a5f5' }}>
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, color: '#42a5f5' }}>
           MANUAL
         </Typography>
       )}
       {data.runStatus && data.runStatus !== 'passed' && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: borderColor }}>
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, color: borderColor }}>
           {data.runStatus.toUpperCase()}
         </Typography>
       )}
       {data.runStatus === 'passed' && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: '#4caf50' }}>
+        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, color: '#4caf50' }}>
           PASSED
         </Typography>
       )}
