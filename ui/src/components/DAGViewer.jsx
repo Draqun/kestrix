@@ -23,10 +23,11 @@ function CustomNode({ data }) {
       border: `2px solid ${borderColor}`,
       borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
       position: 'relative',
+      color: '#fff',
       opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' || data.runStatus === 'canceled' ? 0.5 : 1,
     }}>
       <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
-      <Typography variant="body2" fontWeight={600} sx={{ color: '#fff' }}>{data.label}</Typography>
+      <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
       {data.path && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>{data.path}</Typography>}
       {data.trigger && (
         <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
