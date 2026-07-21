@@ -195,6 +195,12 @@ export async function getVersion() {
   return res.json();
 }
 
+export async function getDashboard() {
+  const res = await fetch(`${API_BASE}/api/dashboard`);
+  if (!res.ok) throw new Error(`Dashboard failed: ${res.statusText}`);
+  return res.json();
+}
+
 export async function approveManualTask(name, runID, task) {
   const res = await fetch(
     `${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/tasks/${encodeURIComponent(task)}/run`,

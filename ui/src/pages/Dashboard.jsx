@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react';
 import {
   Grid, Card, CardContent, Typography, Box, LinearProgress,
-  Alert, IconButton, Tooltip
+  Alert, IconButton, Tooltip, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Chip,
 } from '@mui/material';
 import {
   CheckCircle as OkIcon,
   Error as ErrIcon,
   Refresh as RefreshIcon,
-  Webhook as WebhookIcon,
-  AccountTree as DagIcon,
   Folder as FolderIcon,
+  PlayArrow as RunIcon,
+  CheckCircle as PassedIcon,
+  Cancel as FailedIcon,
+  HourglassEmpty as PendingIcon,
+  RadioButtonUnchecked as SkippedIcon,
+  Block as CanceledIcon,
 } from '@mui/icons-material';
-import { healthCheck } from '../api/client';
+import { getDashboard } from '../api/client';
 
 function StatCard({ title, value, icon, color = 'primary', loading = false }) {
   return (
@@ -35,26 +40,60 @@ function StatCard({ title, value, icon, color = 'primary', loading = false }) {
   );
 }
 
-export default function Dashboard() {
-  const [health, setHealth] = useState(null);
-  const [loading, setLoading] = useState(true);
+function statusIcon(status) {
+  switch (status) {
+    case 'passed': return <PassedIcon fontSize="small" color="success" />;
+    case 'failed': return <FailedIcon fontSize="small" color="error" />;
+    case 'running': return <RunIcon fontSize="small" color="warning" />;
+    case 'pending': return <PendingIcon fontSize="small" color="disabled" />;
+    case 'skipped': return <SkippedIcon fontSize="small" color="disabled" />;
+    case 'canceled': return <CanceledIcon fontSize="small" color="disabled" />;
+    default: return null;
+  }
+}
 
-  const fetchHealth = async () => {
+function statusChip(status) {
+  const colors = {
+    passed: 'success', failed: 'error', running: 'warning',
+    pending: 'default', skipped: 'default', canceled: 'default',
+  };
+  return (
+    <Chip
+      icon={statusIcon(status)}
+      label={status}
+      size="small"
+      color={colors[status] || 'default'}
+      variant="outlined"
+    />
+  );
+}
+
+export default function Dashboard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchDashboard = async () => {
     setLoading(true);
     try {
-      const data = await healthCheck();
-      setHealth(data);
+      const d = await getDashboard();
+      setData(d);
+      setError(null);
     } catch (e) {
-      setHealth({ status: 'error', error: e.message });
+      setError(e.message);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 30000);
+    fetchDashboard();
+    const interval = setInterval(fetchDashboard, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  const stats = data?.run_stats || {};
+  const totalRuns = Object.values(stats).reduce((a, b) => a + b, 0);
+  const recentRuns = data?.recent_runs || [];
 
   return (
     <Box>
@@ -63,55 +102,112 @@ export default function Dashboard() {
           Dashboard
         </Typography>
         <Tooltip title="Refresh">
-          <IconButton onClick={fetchHealth}>
+          <IconButton onClick={fetchDashboard}>
             <RefreshIcon />
           </IconButton>
         </Tooltip>
       </Box>
 
-      {health?.status === 'error' && (
+      {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          Server unreachable: {health.error}. Start with <code>make serve</code> or <code>make dev</code>.
+          Server unreachable: {error}. Start with <code>make dev</code>.
         </Alert>
       )}
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={6} sm={3} md={2}>
           <StatCard
-            title="Server Status"
-            value={health?.status === 'ok' ? 'Online' : 'Offline'}
-            icon={health?.status === 'ok'
-              ? <OkIcon color="success" />
-              : <ErrIcon color="error" />}
-            color={health?.status === 'ok' ? 'success.main' : 'error.main'}
+            title="Projects"
+            value={data?.project_count ?? '—'}
+            icon={<FolderIcon color="primary" />}
             loading={loading}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={6} sm={3} md={2}>
           <StatCard
-            title="Pipelines"
-            value={health?.pipelines ?? '—'}
-            icon={<DagIcon color="primary" />}
+            title="Total Runs"
+            value={totalRuns}
+            icon={<RunIcon color="primary" />}
             loading={loading}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={6} sm={3} md={2}>
           <StatCard
-            title="Webhooks Today"
-            value={health?.webhooks ?? '—'}
-            icon={<WebhookIcon color="secondary" />}
+            title="Passed"
+            value={stats.passed ?? 0}
+            icon={<PassedIcon color="success" />}
+            color="success.main"
             loading={loading}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={6} sm={3} md={2}>
           <StatCard
-            title="Repos Tracked"
-            value={health?.repos ?? '—'}
-            icon={<FolderIcon color="warning" />}
+            title="Failed"
+            value={stats.failed ?? 0}
+            icon={<FailedIcon color="error" />}
+            color="error.main"
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} sm={3} md={2}>
+          <StatCard
+            title="Running"
+            value={stats.running ?? 0}
+            icon={<RunIcon color="warning" />}
+            color="warning.main"
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} sm={3} md={2}>
+          <StatCard
+            title="Pending"
+            value={stats.pending ?? 0}
+            icon={<PendingIcon color="disabled" />}
+            color="text.secondary"
             loading={loading}
           />
         </Grid>
       </Grid>
+
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            Recent Runs
+          </Typography>
+          {!data?.pg_available ? (
+            <Alert severity="info">
+              Run history requires PostgreSQL. Start with <code>make docker-up</code> and set <code>DATABASE_URL</code>.
+            </Alert>
+          ) : recentRuns.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              No runs yet. Trigger a pipeline to see results here.
+            </Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Project</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Started</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {recentRuns.map((run) => (
+                    <TableRow key={run.id} hover>
+                      <TableCell>{run.project_name}</TableCell>
+                      <TableCell>{statusChip(run.status)}</TableCell>
+                      <TableCell>
+                        {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </CardContent>
+      </Card>
 
       <Card sx={{ mt: 3 }}>
         <CardContent>

@@ -629,3 +629,23 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 	}
 	return runs, rows.Err()
 }
+
+// CountRunsByStatus returns a map of status -> count across all projects.
+func (s *PGStore) CountRunsByStatus() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT status, COUNT(*) as cnt FROM runs GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := map[string]int{}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		result[status] = count
+	}
+	return result, rows.Err()
+}

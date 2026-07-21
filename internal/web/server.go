@@ -134,6 +134,7 @@ func (s *Server) buildRouter() chi.Router {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/health", s.handleHealth)
 		r.Get("/pipeline", s.handleGetPipeline)
 		r.Get("/pipeline/raw", s.handleGetPipelineRaw)
@@ -206,6 +207,43 @@ func (s *Server) ListenAndServe() error {
 }
 
 // ─── API Handlers ─────────────────────────────────────────────
+
+// handleDashboard returns aggregate metrics for the overview dashboard.
+// @Summary Dashboard metrics
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/dashboard [get]
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	projects, _ := s.store.List()
+	projectCount := len(projects)
+
+	resp := map[string]interface{}{
+		"project_count": projectCount,
+		"run_stats":     map[string]int{},
+		"recent_runs":   []store.Run{},
+		"pg_available":  false,
+	}
+
+	if pgStore, ok := s.store.(*store.PGStore); ok {
+		stats, err := pgStore.CountRunsByStatus()
+		if err == nil {
+			resp["run_stats"] = stats
+		}
+		runs, err := pgStore.ListAllRuns(10)
+		if err == nil {
+			if runs == nil {
+				runs = []store.Run{}
+			}
+			resp["recent_runs"] = runs
+		}
+		resp["pg_available"] = true
+	}
+
+	json.NewEncoder(w).Encode(resp)
+}
 
 // handleHealth godoc
 // @Summary Health check
@@ -386,7 +424,6 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-	return
 }
 
 // handleCreateProject godoc
