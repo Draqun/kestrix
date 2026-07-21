@@ -64,6 +64,17 @@ project "metaci" {
     }
   }
 
+  # ─── Coverage ────────────────────────────────────────────────
+
+  ci_task "coverage" {
+    trigger    = "repo.metaci.changed"
+    depends_on = ["test", "test_fe"]
+    execute {
+      repo   = "metaci"
+      script = "bash scripts/coverage.sh"
+    }
+  }
+
   # ─── Docker ────────────────────────────────────────────────
 
   ci_task "docker_build" {

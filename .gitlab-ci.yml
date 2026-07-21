@@ -46,6 +46,24 @@ test:
       - coverage.out
     expire_in: 7 days
 
+coverage:
+  stage: test
+  image: node:26-alpine
+  before_script:
+    - apk add --no-cache git go
+  script:
+    - echo "=== BE Coverage ==="
+    - go test ./... -count=1 -coverprofile=coverage.out -covermode=atomic
+    - go tool cover -func=coverage.out
+    - echo ""
+    - echo "=== FE Coverage ==="
+    - cd ui
+    - npm install --silent
+    - node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
+    - echo ""
+    - echo "=== Coverage complete ==="
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+%)/'
+
 # ─── Build ──────────────────────────────────────────────────
 
 build:
