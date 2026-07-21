@@ -272,7 +272,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                 )}
                 <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                   <CopyButton text={activeJob.output || ''} />
-                  <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                     {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
                   </Box>
                 </Box>
@@ -296,7 +296,7 @@ export function RunDetail({ projectName, runId, onBack }) {
             {r?.output && !activeJob && (
               <Box sx={{ position: 'relative', mt: 1 }}>
                 <CopyButton text={r.output} />
-                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
                   {r.output}
                 </Box>
               </Box>

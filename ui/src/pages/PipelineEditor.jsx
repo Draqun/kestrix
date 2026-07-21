@@ -255,7 +255,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
                 </Alert>
                 <Box sx={{ position: 'relative' }}>
                   <CopyButton text={runResult.output || ''} />
-                  <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                     {runResult.output || '(No output)'}
                   </Box>
                 </Box>
@@ -342,7 +342,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
               {selectedRun.error && <Alert severity="error" sx={{ mb: 1 }}>{selectedRun.error}</Alert>}
               <Box sx={{ position: 'relative' }}>
                 <CopyButton text={selectedRun.output || ''} />
-                <Box component="pre" sx={{ p: 1.5, maxHeight: 400, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                <Box component="pre" sx={{ p: 1.5, maxHeight: 400, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                   {selectedRun.output || '(No output)'}
                 </Box>
               </Box>
