@@ -106,6 +106,20 @@ func NewServer(cfg Config) *Server {
 		s.store = fs
 	}
 
+	// Auto-create project from --dir on startup.
+	if cfg.PipelineDir != "" {
+		if proj, err := parser.ParseDir(cfg.PipelineDir); err == nil && proj.Name != "" {
+			_ = s.store.Upsert(&store.ProjectConfig{
+				Name:            proj.Name,
+				RepoPath:        cfg.PipelineDir,
+				PipelineDir:     cfg.PipelineDir,
+				PipelineFile:    "pipeline.tf",
+				DefaultBranch:   "main",
+				GitLabProjectID: 0,
+			})
+		}
+	}
+
 	s.router = s.buildRouter()
 	return s
 }
@@ -1523,7 +1537,36 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"status":    "received",
 	}
 
-	proj, err := parser.ParseDir(s.cfg.PipelineDir)
+	// ─── Look up project by GitLab project ID ────────────────
+	var pipelineDir string
+	if event.GitLabProjectID > 0 && s.store != nil {
+		projCfg, err := s.store.FindByGitLabID(event.GitLabProjectID)
+		if err != nil {
+			log.Printf("webhook: store lookup error: %v", err)
+			logEntry["status"] = "error"
+			logEntry["error"] = err.Error()
+			s.webhookLog = append(s.webhookLog, logEntry)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(logEntry)
+			return
+		}
+		if projCfg == nil {
+			log.Printf("webhook: unknown project gitlab_id=%d", event.GitLabProjectID)
+			logEntry["status"] = "ignored"
+			logEntry["error"] = "unknown project"
+			s.webhookLog = append(s.webhookLog, logEntry)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "ignored", "reason": "unknown project",
+			})
+			return
+		}
+		pipelineDir = filepath.Join(projCfg.RepoPath, projCfg.PipelineDir)
+	} else {
+		pipelineDir = s.cfg.PipelineDir
+	}
+
+	proj, err := parser.ParseDir(pipelineDir)
 	if err != nil {
 		log.Printf("webhook: parse error: %v", err)
 		logEntry["status"] = "error"
@@ -1563,15 +1606,20 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// ─── Dispatch to GitLab (if configured) ──────────────────
 	var dispatchResult map[string]interface{}
-	if s.cfg.Dispatch.Enabled && s.cfg.Dispatch.ProjectID != "" && len(triggeredTasks) > 0 {
+	dispatchID := s.cfg.Dispatch.ProjectID
+	if event.GitLabProjectID > 0 && s.store != nil {
+		if projCfg, _ := s.store.FindByGitLabID(event.GitLabProjectID); projCfg != nil && projCfg.GitLabProjectID > 0 {
+			dispatchID = fmt.Sprintf("%d", projCfg.GitLabProjectID)
+		}
+	}
+	if s.cfg.Dispatch.Enabled && dispatchID != "" && len(triggeredTasks) > 0 {
 		var projectID int
-		fmt.Sscanf(s.cfg.Dispatch.ProjectID, "%d", &projectID)
+		fmt.Sscanf(dispatchID, "%d", &projectID)
 		if projectID > 0 {
 			client := &dispatch.Client{
 				BaseURL: s.cfg.Dispatch.GitLabURL,
 				Token:   s.cfg.Dispatch.GitLabToken,
 			}
-			// Build variables for the pipeline.
 			vars := map[string]string{
 				"METACI_TRIGGERED_TASKS": strings.Join(triggeredTasks, ","),
 				"METACI_CHANGED_REPOS":   strings.Join(changedRepos, ","),

@@ -37,8 +37,8 @@
 
 - [x] REQ-1: GitLab binding fields (project_id, branch, secret)
 - [x] REQ-2: Persistence (FileStore atomic save/load)
-- [ ] REQ-3: Lookup by GitLab project ID in webhook
-- [ ] REQ-4: Auto-create project from `--dir` on server start
+- [x] REQ-3: Lookup by GitLab project ID in webhook
+- [x] REQ-4: Auto-create project from `--dir` on server start
 - [x] REQ-5: API CRUD endpoints (POST/GET/PUT/DELETE)
 
 ## 6. Webhook Receiver (`specs/webhook-receiver`)

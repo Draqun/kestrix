@@ -17,6 +17,7 @@ type Store interface {
 	Load() (map[string]*ProjectConfig, error)
 	Save(projects map[string]*ProjectConfig) error
 	Get(name string) (*ProjectConfig, error)
+	FindByGitLabID(id int) (*ProjectConfig, error)
 	Upsert(cfg *ProjectConfig) error
 	Delete(name string) error
 	List() ([]string, error)
@@ -132,6 +133,20 @@ func (s *FileStore) Get(name string) (*ProjectConfig, error) {
 		return nil, nil
 	}
 	return proj, nil
+}
+
+// FindByGitLabID returns the project with the given GitLab project ID, or nil if not found.
+func (s *FileStore) FindByGitLabID(id int) (*ProjectConfig, error) {
+	projects, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	for _, proj := range projects {
+		if proj.GitLabProjectID == id {
+			return proj, nil
+		}
+	}
+	return nil, nil
 }
 
 // Upsert creates or updates a project.

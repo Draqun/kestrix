@@ -141,6 +141,22 @@ func (s *PGStore) Get(name string) (*ProjectConfig, error) {
 	return &p, nil
 }
 
+func (s *PGStore) FindByGitLabID(id int) (*ProjectConfig, error) {
+	var p ProjectConfig
+	var createdAt time.Time
+	err := s.db.QueryRow(
+		`SELECT name, repo_path, repo_url, pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at FROM projects WHERE gitlab_project_id = $1`, id,
+	).Scan(&p.Name, &p.RepoPath, &p.RepoURL, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find by gitlab id %d: %w", id, err)
+	}
+	p.CreatedAt = createdAt.Format(time.RFC3339)
+	return &p, nil
+}
+
 func (s *PGStore) Upsert(cfg *ProjectConfig) error {
 	if cfg.CreatedAt == "" {
 		cfg.CreatedAt = time.Now().UTC().Format(time.RFC3339)

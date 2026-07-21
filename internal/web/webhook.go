@@ -25,6 +25,7 @@ type GitLabPushEvent struct {
 
 // GitLabProject holds the project metadata from the webhook.
 type GitLabProject struct {
+	ID                int    `json:"id"`
 	PathWithNamespace string `json:"path_with_namespace"`
 	DefaultBranch     string `json:"default_branch"`
 }
@@ -56,6 +57,9 @@ type PushEvent struct {
 
 	// CommitCount is the number of commits in this push.
 	CommitCount int
+
+	// GitLabProjectID is the numeric GitLab project ID from the webhook payload.
+	GitLabProjectID int
 }
 
 // IsEmpty returns true if the event contains no file changes.
@@ -195,9 +199,10 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 	}
 
 	return &PushEvent{
-		Repo:         raw.Project.PathWithNamespace,
-		Branch:       branch,
-		FilesChanged: files,
-		CommitCount:  len(raw.Commits),
+		Repo:            raw.Project.PathWithNamespace,
+		Branch:          branch,
+		FilesChanged:    files,
+		CommitCount:     len(raw.Commits),
+		GitLabProjectID: raw.Project.ID,
 	}, nil
 }
