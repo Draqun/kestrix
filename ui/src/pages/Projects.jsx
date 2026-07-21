@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, IconButton, Tooltip, Alert,
   LinearProgress, TextField, Button, Stack,
@@ -20,10 +21,18 @@ import { listProjects, createProject, deleteProject, getProject, updateProject, 
 import Pagination from '../components/Pagination';
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const allowedLimits = [10, 25, 50, 100];
+  const limit = allowedLimits.includes(Number(searchParams.get('limit')))
+    ? Number(searchParams.get('limit'))
+    : 25;
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const offset = (page - 1) * limit;
+
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-const [pagination, setPagination] = useState(null);
+  const [pagination, setPagination] = useState(null);
 
   const [config, setConfig] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -40,7 +49,7 @@ const [pagination, setPagination] = useState(null);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState(null);
 
-  const fetchProjects = useCallback(async (limit = 25, offset = 0) => {
+  const fetchProjects = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -51,9 +60,28 @@ const [pagination, setPagination] = useState(null);
       setError(e.message);
     }
     setLoading(false);
-  }, []);
+  }, [limit, offset]);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  const handlePageChange = (newOffset) => {
+    const newPage = Math.floor(newOffset / limit) + 1;
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('page', String(newPage));
+      next.set('limit', String(limit));
+      return next;
+    });
+  };
+
+  const handleLimitChange = (newLimit) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('limit', String(newLimit));
+      next.set('page', '1');
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!selectedName) { setConfig(null); setDetail(null); return; }
@@ -396,8 +424,8 @@ const [pagination, setPagination] = useState(null);
         {pagination && (
           <Pagination
             pagination={pagination}
-            onPageChange={(newOffset) => fetchProjects(pagination.limit, newOffset)}
-            onLimitChange={(newLimit) => fetchProjects(newLimit, 0)}
+            onPageChange={handlePageChange}
+            onLimitChange={handleLimitChange}
           />
         )}
 

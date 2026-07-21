@@ -84,12 +84,18 @@ export default function Pagination({ pagination, onPageChange, onLimitChange }) 
           Previous
         </Button>
 
-        <Typography
-          variant="body2"
-          sx={{ minWidth: 110, textAlign: 'center', fontWeight: 600 }}
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 110,
+          }}
         >
-          Page {currentPage} of {totalPages}
-        </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            Page {currentPage} of {totalPages}
+          </Typography>
+        </Box>
 
         <Button
           variant="outlined"

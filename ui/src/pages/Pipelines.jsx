@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ReactFlow, Background, Controls, MiniMap,
   useNodesState, useEdgesState, MarkerType, Handle, Position
@@ -445,12 +446,20 @@ export function RunDetail({ projectName, runId, onBack }) {
 }
 
 export function RunList({ onNewRun, onOpenRun }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const allowedLimits = [10, 25, 50, 100];
+  const limit = allowedLimits.includes(Number(searchParams.get('limit')))
+    ? Number(searchParams.get('limit'))
+    : 25;
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const offset = (page - 1) * limit;
+
   const [runs, setRuns] = useState([]);
   const [allRuns, setAllRuns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [pagination, setPagination] = useState({ total: 0, limit: 25, offset: 0, next: null, prev: null });
+  const [pagination, setPagination] = useState({ total: 0, limit, offset, next: null, prev: null });
 
-  const loadRuns = useCallback(async (limit = 25, offset = 0) => {
+  const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listAllRuns();
@@ -466,12 +475,31 @@ export function RunList({ onNewRun, onOpenRun }) {
     } catch {
       setRuns([]);
       setAllRuns([]);
-      setPagination({ total: 0, limit: 25, offset: 0, next: null, prev: null });
+      setPagination({ total: 0, limit, offset, next: null, prev: null });
     }
     setLoading(false);
-  }, []);
+  }, [limit, offset]);
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
+
+  const handlePageChange = (newOffset) => {
+    const newPage = Math.floor(newOffset / limit) + 1;
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('page', String(newPage));
+      next.set('limit', String(limit));
+      return next;
+    });
+  };
+
+  const handleLimitChange = (newLimit) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('limit', String(newLimit));
+      next.set('page', '1');
+      return next;
+    });
+  };
 
   return (
     <Box>
@@ -529,8 +557,8 @@ export function RunList({ onNewRun, onOpenRun }) {
       {pagination && (
         <Pagination
           pagination={pagination}
-          onPageChange={(newOffset) => loadRuns(pagination.limit, newOffset)}
-          onLimitChange={(newLimit) => loadRuns(newLimit, 0)}
+          onPageChange={handlePageChange}
+          onLimitChange={handleLimitChange}
         />
       )}
     </Box>
