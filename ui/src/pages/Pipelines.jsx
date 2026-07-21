@@ -346,7 +346,6 @@ export function RunDetail({ projectName, runId, onBack }) {
           <CardContent sx={{ flex: 1, overflow: 'auto', py: 1, '&:last-child': { pb: 1 } }}>
             <Typography variant="subtitle2" gutterBottom>Jobs</Typography>
             {jobs.length > 0 ? (
-        <>
               <List dense disablePadding>
                 {jobs.map(job => {
                   const js = formatStatus(job.status);
@@ -374,12 +373,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                     </ListItem>
                   );
                 })}
-</List>
-
-        {pagination && (
-          <Pagination pagination={pagination} onPageChange={(newOffset) => loadRuns(pagination.limit, newOffset)} />
-        )}
-            </>
+              </List>
             ) : (
               <Typography variant="body2" color="text.secondary">
                 {loading ? 'Loading…' : 'No job data yet.'}
@@ -531,6 +525,14 @@ export function RunList({ onNewRun, onOpenRun }) {
           );
         })}
       </List>
+
+      {pagination && (
+        <Pagination
+          pagination={pagination}
+          onPageChange={(newOffset) => loadRuns(pagination.limit, newOffset)}
+          onLimitChange={(newLimit) => loadRuns(newLimit, 0)}
+        />
+      )}
     </Box>
   );
 }

@@ -394,7 +394,11 @@ const [pagination, setPagination] = useState(null);
       </List>
 
         {pagination && (
-          <Pagination pagination={pagination} onPageChange={(newOffset) => fetchProjects(pagination.limit, newOffset)} />
+          <Pagination
+            pagination={pagination}
+            onPageChange={(newOffset) => fetchProjects(pagination.limit, newOffset)}
+            onLimitChange={(newLimit) => fetchProjects(newLimit, 0)}
+          />
         )}
 
       <Dialog open={showCreate} onClose={() => setShowCreate(false)} maxWidth="sm" fullWidth>

@@ -1,14 +1,14 @@
 ## 1. Backend Updates
 
-- [ ] 1.1 Add `limit` and `offset` query parsing in project list and pipeline runs handlers
-- [ ] 1.2 Validate `limit` against allowed values (10, 25, 50, 100) and default to 25
-- [ ] 1.3 Update DB query functions to apply `LIMIT`/`OFFSET` correctly
-- [ ] 1.4 Add pagination metadata (`total`, `limit`, `offset`, `next`, `prev`) to API responses
+- [x] 1.1 Add `limit` and `offset` query parsing in project list and pipeline runs handlers
+- [x] 1.2 Validate `limit` against allowed values (10, 25, 50, 100) and default to 25
+- [x] 1.3 Update DB query functions to apply `LIMIT`/`OFFSET` correctly
+- [x] 1.4 Add pagination metadata (`total`, `limit`, `offset`, `next`, `prev`) to API responses
 
 ## 2. Frontend Updates
 
-- [ ] 2.1 Implement a React `Pagination` component for the Projects view
-- [ ] 2.2 Wire the component to request next/previous pages using the URLs from the API response
+- [x] 2.1 Implement a React `Pagination` component for the Projects view
+- [x] 2.2 Wire the component to request next/previous pages using the URLs from the API response
 - [ ] 2.3 Add unit tests for the Pagination component
 
 ## 3. Testing & Documentation
