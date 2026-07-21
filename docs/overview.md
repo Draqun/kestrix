@@ -9,5 +9,17 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 - **Dispatch client** triggers GitLab pipelines.
 - **Webhook receiver** handles push events and initiates the pipeline.
 
+## Project Components
+
+| Component | Description |
+|-----------|-------------|
+| [Frontend](fe.md) | React SPA with MUI, pipeline editor, DAG viewer |
+| [Backend](be.md) | Go HTTP server, parser, DAG engine, runner |
+| [CI Tools](ci-tools.md) | CI generator, dispatch client, runner modes |
+| [Terraform Provider](terraform-provider.md) | Infrastructure‑as‑code for project management |
+| [Business Pages](business.md) | Public‑facing documentation and onboarding |
+
 ## See Also
 - [DAG engine documentation](dag-engine.md)
+- [Usage guide](usage.md)
+- [Architecture overview](architecture.md)

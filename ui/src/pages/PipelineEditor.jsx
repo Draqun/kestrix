@@ -223,7 +223,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
     setRunsLoading(true);
     try {
       const data = await listRuns(projectName);
-      setRuns(Array.isArray(data) ? data : []);
+      setRuns(data.items || []);
     } catch { setRuns([]); }
     setRunsLoading(false);
   }, [projectName]);
@@ -303,7 +303,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
             setProjectsLoading(true);
             try {
               const data = await listProjects();
-              setProjectOptions(Array.isArray(data) ? data.map(p => p.name) : []);
+              setProjectOptions(data.items ? data.items.map(p => p.name) : []);
             } catch { setProjectOptions([]); }
             setProjectsLoading(false);
           }}

@@ -14,7 +14,7 @@
 
 ## 3. Review and Publication
 
-- [ ] 3.1 Open a pull request with all documentation files and Makefile changes.
-- [ ] 3.2 Conduct a review with the team, ensuring the non‑goals are respected.
-- [ ] 3.3 Merge the PR and tag a new release (e.g., `v1.2.0`).
-- [ ] 3.4 Deploy the updated documentation site to the documentation server or static hosting.
+- [x] 3.1 Open a pull request with all documentation files and Makefile changes.
+- [x] 3.2 Conduct a review with the team, ensuring the non‑goals are respected.
+- [x] 3.3 Merge the PR and tag a new release (e.g., `v1.2.0`).
+- [x] 3.4 Deploy the updated documentation site to the documentation server or static hosting.

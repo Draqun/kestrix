@@ -658,7 +658,7 @@ export function NewRun({ onSelect, onBack }) {
 
   useEffect(() => {
     listProjects()
-      .then(data => setProjects(Array.isArray(data) ? data : []))
+      .then(data => setProjects(data.items || []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

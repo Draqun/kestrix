@@ -375,13 +375,42 @@ paths:
     get:
       produces:
       - application/json
+      parameters:
+      - description: Items per page (10, 25, 50, 100; default 25)
+        in: query
+        name: limit
+        required: false
+        type: integer
+      - description: Offset for pagination (default 0)
+        in: query
+        name: offset
+        required: false
+        type: integer
       responses:
         "200":
-          description: OK
+          description: paginated project list
           schema:
-            items:
-              $ref: '#/definitions/store.ProjectConfig'
-            type: array
+            properties:
+              items:
+                items:
+                  $ref: '#/definitions/store.ProjectConfig'
+                type: array
+              pagination:
+                properties:
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  next:
+                    type: string
+                    x-nullable: true
+                  prev:
+                    type: string
+                    x-nullable: true
+                type: object
+            type: object
       summary: List configured projects
       tags:
       - projects
@@ -539,15 +568,43 @@ paths:
         name: name
         required: true
         type: string
+      - description: Items per page (10, 25, 50, 100; default 25)
+        in: query
+        name: limit
+        required: false
+        type: integer
+      - description: Offset for pagination (default 0)
+        in: query
+        name: offset
+        required: false
+        type: integer
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: paginated run list
           schema:
-            items:
-              $ref: '#/definitions/store.Run'
-            type: array
+            properties:
+              items:
+                items:
+                  $ref: '#/definitions/store.Run'
+                type: array
+              pagination:
+                properties:
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  next:
+                    type: string
+                    x-nullable: true
+                  prev:
+                    type: string
+                    x-nullable: true
+                type: object
+            type: object
       summary: List pipeline runs for a project
       tags:
       - runs

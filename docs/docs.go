@@ -159,13 +159,56 @@ const docTemplate = `{
                     "projects"
                 ],
                 "summary": "List configured projects",
+                "parameters": [
+                    {
+                        "description": "Items per page (10, 25, 50, 100; default 25)",
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer"
+                    },
+                    {
+                        "description": "Offset for pagination (default 0)",
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "paginated project list",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/store.ProjectConfig"
+                            "type": "object",
+                            "properties": {
+                                "items": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/store.ProjectConfig"
+                                    }
+                                },
+                                "pagination": {
+                                    "type": "object",
+                                    "properties": {
+                                        "total": {
+                                            "type": "integer"
+                                        },
+                                        "limit": {
+                                            "type": "integer"
+                                        },
+                                        "offset": {
+                                            "type": "integer"
+                                        },
+                                        "next": {
+                                            "type": "string",
+                                            "x-nullable": true
+                                        },
+                                        "prev": {
+                                            "type": "string",
+                                            "x-nullable": true
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -411,15 +454,56 @@ const docTemplate = `{
                         "name": "name",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "Items per page (10, 25, 50, 100; default 25)",
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer"
+                    },
+                    {
+                        "description": "Offset for pagination (default 0)",
+                        "name": "offset",
+                        "in": "query",
+                        "required": false,
+                        "type": "integer"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "paginated run list",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/store.Run"
+                            "type": "object",
+                            "properties": {
+                                "items": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/definitions/store.Run"
+                                    }
+                                },
+                                "pagination": {
+                                    "type": "object",
+                                    "properties": {
+                                        "total": {
+                                            "type": "integer"
+                                        },
+                                        "limit": {
+                                            "type": "integer"
+                                        },
+                                        "offset": {
+                                            "type": "integer"
+                                        },
+                                        "next": {
+                                            "type": "string",
+                                            "x-nullable": true
+                                        },
+                                        "prev": {
+                                            "type": "string",
+                                            "x-nullable": true
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

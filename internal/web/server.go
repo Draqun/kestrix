@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -274,40 +275,70 @@ func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
 
 // ─── Project Handlers (use FileStore) ─────────────────────────
 
+// parsePagination extracts and validates pagination parameters from query values.
+// Returns the parsed limit, offset, or an API error string and HTTP status code.
+func parsePagination(q url.Values) (limit int, offset int, errStr string, status int) {
+	allowed := map[int]bool{10: true, 25: true, 50: true, 100: true}
+	limit = 25
+	offset = 0
+	status = http.StatusOK
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, 0, `{"error":"invalid limit"}`, http.StatusBadRequest
+		}
+		limit = n
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, 0, `{"error":"invalid offset"}`, http.StatusBadRequest
+		}
+		offset = n
+	}
+	if !allowed[limit] {
+		return 0, 0, `{"error":"limit must be one of [10,25,50,100]"}`, http.StatusBadRequest
+	}
+	return
+}
+
+func buildPaginationLinks(offset, limit, total int, pathPrefix string) (next, prev *string) {
+	end := offset + limit
+	if end < total {
+		n := fmt.Sprintf("%s?limit=%d&offset=%d", pathPrefix, limit, end)
+		next = &n
+	}
+	if offset > 0 {
+		prevOffset := offset - limit
+		if prevOffset < 0 {
+			prevOffset = 0
+		}
+		p := fmt.Sprintf("%s?limit=%d&offset=%d", pathPrefix, limit, prevOffset)
+		prev = &p
+	}
+	return
+}
+
+type paginationMeta struct {
+	Total  int     `json:"total"`
+	Limit  int     `json:"limit"`
+	Offset int     `json:"offset"`
+	Next   *string `json:"next"`
+	Prev   *string `json:"prev"`
+}
+
 // handleListProjects godoc
 // @Summary List configured projects
 // @Tags projects
 // @Produce json
-// @Success 200 {array} store.ProjectConfig
+// @Param limit query int false "Items per page (10, 25, 50, 100; default 25)"
+// @Param offset query int false "Offset for pagination (default 0)"
+// @Success 200 {object} map[string]interface{} "paginated project list"
 // @Router /api/projects [get]
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	// Parse pagination parameters
-	q := r.URL.Query()
-	limitStr := q.Get("limit")
-	offsetStr := q.Get("offset")
-	// Default values
-	limit := 25
-	offset := 0
-	// Allowed limits
-	allowed := map[int]bool{10: true, 25: true, 50: true, 100: true}
-	if limitStr != "" {
-		if v, err := strconv.Atoi(limitStr); err == nil {
-			limit = v
-		} else {
-			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
-			return
-		}
-	}
-	if offsetStr != "" {
-		if v, err := strconv.Atoi(offsetStr); err == nil {
-			offset = v
-		} else {
-			http.Error(w, `{"error":"invalid offset"}`, http.StatusBadRequest)
-			return
-		}
-	}
-	if !allowed[limit] {
-		http.Error(w, `{"error":"limit must be one of [10,25,50,100]"}`, http.StatusBadRequest)
+	limit, offset, errStr, status := parsePagination(r.URL.Query())
+	if errStr != "" {
+		http.Error(w, errStr, status)
 		return
 	}
 	// Load all projects (could be optimized)
@@ -334,32 +365,10 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		end = total
 	}
 	paged := list[start:end]
-	// Build pagination metadata
-	var next *string
-	var prev *string
-	if end < total {
-		nxt := fmt.Sprintf("/api/projects?limit=%d&offset=%d", limit, end)
-		next = &nxt
-	}
-	if offset > 0 {
-		prevOffset := offset - limit
-		if prevOffset < 0 {
-			prevOffset = 0
-		}
-		prv := fmt.Sprintf("/api/projects?limit=%d&offset=%d", limit, prevOffset)
-		prev = &prv
-	}
-	// Construct response struct
-	type pagination struct {
-		Total  int     `json:"total"`
-		Limit  int     `json:"limit"`
-		Offset int     `json:"offset"`
-		Next   *string `json:"next"`
-		Prev   *string `json:"prev"`
-	}
+	next, prev := buildPaginationLinks(offset, limit, total, "/api/projects")
 	resp := map[string]interface{}{
 		"items":      paged,
-		"pagination": pagination{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
+		"pagination": paginationMeta{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -1032,7 +1041,9 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 // @Tags runs
 // @Produce json
 // @Param name path string true "Project name"
-// @Success 200 {array} store.Run
+// @Param limit query int false "Items per page (10, 25, 50, 100; default 25)"
+// @Param offset query int false "Offset for pagination (default 0)"
+// @Success 200 {object} map[string]interface{} "paginated run list"
 // @Router /api/projects/{name}/runs [get]
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
@@ -1041,79 +1052,29 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]interface{}{})
 		return
 	}
-	// Parse pagination parameters
-	q := r.URL.Query()
-	limitStr := q.Get("limit")
-	offsetStr := q.Get("offset")
-	limit := 25
-	offset := 0
-	allowed := map[int]bool{10: true, 25: true, 50: true, 100: true}
-	if limitStr != "" {
-		if v, err := strconv.Atoi(limitStr); err == nil {
-			limit = v
-		} else {
-			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
-			return
-		}
-	}
-	if offsetStr != "" {
-		if v, err := strconv.Atoi(offsetStr); err == nil {
-			offset = v
-		} else {
-			http.Error(w, `{"error":"invalid offset"}`, http.StatusBadRequest)
-			return
-		}
-	}
-	if !allowed[limit] {
-		http.Error(w, `{"error":"limit must be one of [10,25,50,100]"}`, http.StatusBadRequest)
+	limit, offset, errStr, status := parsePagination(r.URL.Query())
+	if errStr != "" {
+		http.Error(w, errStr, status)
 		return
 	}
-	// Retrieve enough runs to satisfy pagination (offset+limit)
-	runsAll, err := pgStore.ListRuns(name, offset+limit)
+	total, err := pgStore.CountRuns(name)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	if runsAll == nil {
-		runsAll = []store.Run{}
+	runs, err := pgStore.ListRuns(name, limit, offset)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
 	}
-	total := len(runsAll)
-	start := offset
-	if start > total {
-		start = total
+	if runs == nil {
+		runs = []store.Run{}
 	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	runs := runsAll[start:end]
-	// Build pagination metadata
-	var next *string
-	var prev *string
-	if end < total {
-		nxt := fmt.Sprintf("/api/projects/%s/runs?limit=%d&offset=%d", name, limit, end)
-		tnext := nxt
-		next = &tnext
-	}
-	if offset > 0 {
-		prevOffset := offset - limit
-		if prevOffset < 0 {
-			prevOffset = 0
-		}
-		prv := fmt.Sprintf("/api/projects/%s/runs?limit=%d&offset=%d", name, limit, prevOffset)
-		pprev := prv
-		prev = &pprev
-	}
-	type pagination struct {
-		Total  int     `json:"total"`
-		Limit  int     `json:"limit"`
-		Offset int     `json:"offset"`
-		Next   *string `json:"next"`
-		Prev   *string `json:"prev"`
-	}
+	pathPrefix := fmt.Sprintf("/api/projects/%s/runs", name)
+	next, prev := buildPaginationLinks(offset, limit, total, pathPrefix)
 	resp := map[string]interface{}{
 		"items":      runs,
-		"pagination": pagination{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
+		"pagination": paginationMeta{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

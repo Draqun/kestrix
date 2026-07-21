@@ -9,15 +9,15 @@
 
 - [x] 2.1 Implement a React `Pagination` component for the Projects view
 - [x] 2.2 Wire the component to request next/previous pages using the URLs from the API response
-- [ ] 2.3 Add unit tests for the Pagination component
+- [x] 2.3 Add unit tests for the Pagination component
 
 ## 3. Testing & Documentation
 
-- [ ] 3.1 Add integration tests for API pagination (valid limits, defaults, invalid limits)
-- [ ] 3.2 Update Swagger/OpenAPI documentation to include `limit` and `offset` parameters and pagination response schema
-- [ ] 3.3 Verify UI pagination works end‑to‑end (e.g., Cypress test)
+- [x] 3.1 Add integration tests for API pagination (valid limits, defaults, invalid limits)
+- [x] 3.2 Update Swagger/OpenAPI documentation to include `limit` and `offset` parameters and pagination response schema
+- [x] 3.3 Verify UI pagination works end‑to‑end (e.g., Cypress test)
 
 ## 4. Deployment
 
-- [ ] 4.1 Ensure CI pipeline runs all new tests and lint checks
-- [ ] 4.2 Deploy updated backend and UI to a staging environment for verification
+- [x] 4.1 Ensure CI pipeline runs all new tests and lint checks
+- [x] 4.2 Deploy updated backend and UI to a staging environment for verification

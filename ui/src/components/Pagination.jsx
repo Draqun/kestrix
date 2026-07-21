@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Box,
   Button,
@@ -10,6 +9,7 @@ import {
   Typography,
 } from '@mui/material';
 import { ChevronLeft, ChevronRight } from '@mui/icons-material';
+import { clampOffset, parseOffsetFromUrl, getPaginationInfo } from '../lib/paginationUtils.js';
 
 /**
  * Pagination controls for list views.
@@ -23,35 +23,18 @@ export default function Pagination({ pagination, onPageChange, onLimitChange }) 
   if (!pagination) return null;
 
   const { total, limit, offset, next, prev } = pagination;
-  const currentPage = Math.floor(offset / limit) + 1;
-  const totalPages = Math.ceil(total / limit) || 1;
-
-  const clampOffset = (value) => {
-    if (value < 0) return 0;
-    if (value > total) return total;
-    return value;
-  };
-
-  const parseOffsetFromUrl = (urlString) => {
-    if (!urlString) return null;
-    try {
-      const url = new URL(urlString, window.location.origin);
-      return Number(url.searchParams.get('offset'));
-    } catch {
-      return null;
-    }
-  };
+  const { currentPage, totalPages } = getPaginationInfo(pagination);
 
   const handlePrev = () => {
     const urlOffset = parseOffsetFromUrl(prev);
     const newOffset = urlOffset !== null ? urlOffset : offset - limit;
-    onPageChange(clampOffset(newOffset));
+    onPageChange(clampOffset(newOffset, total));
   };
 
   const handleNext = () => {
     const urlOffset = parseOffsetFromUrl(next);
     const newOffset = urlOffset !== null ? urlOffset : offset + limit;
-    onPageChange(clampOffset(newOffset));
+    onPageChange(clampOffset(newOffset, total));
   };
 
   const handleLimitChange = (event) => {

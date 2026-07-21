@@ -523,14 +523,27 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 	return &r, nil
 }
 
-// ListRuns returns runs for a project, most recent first.
-func (s *PGStore) ListRuns(projectName string, limit int) ([]Run, error) {
+// CountRuns returns the total number of runs for a project.
+func (s *PGStore) CountRuns(projectName string) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM runs WHERE project_name = $1`,
+		projectName,
+	).Scan(&count)
+	return count, err
+}
+
+// ListRuns returns runs for a project, most recent first, with pagination.
+func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2`,
-		projectName, limit,
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
+		projectName, limit, offset,
 	)
 	if err != nil {
 		return nil, err

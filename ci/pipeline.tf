@@ -46,10 +46,21 @@ project "metaci" {
 
   ci_task "build_fe" {
     trigger    = "repo.metaci.changed"
-    depends_on = ["lint_fe"]
+    depends_on = ["lint_fe", "test_fe"]
     execute {
       repo   = "metaci"
       script = "bash scripts/build-fe.sh"
+    }
+  }
+
+  # ─── Frontend Tests ──────────────────────────────────────────
+
+  ci_task "test_fe" {
+    trigger    = "repo.metaci.changed"
+    depends_on = ["lint_fe"]
+    execute {
+      repo   = "metaci"
+      script = "bash scripts/test-fe.sh"
     }
   }
 
