@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ReactFlow, Background, Controls, MiniMap,
-  useNodesState, useEdgesState, MarkerType, Handle, Position
+  useNodesState, useEdgesState
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
@@ -26,155 +25,15 @@ import {
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import dagre from 'dagre';
+import DAGViewer from '../components/DAGViewer';
+import CopyButton from '../components/CopyButton';
+import { layoutFromProject } from '../lib/dagLayout';
 import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 
-function layoutFromProject(project) {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', nodesep: 80, ranksep: 120 });
 
-  project.Repos?.forEach(repo => {
-    g.setNode(`repo:${repo.Name}`, { width: 170, height: 60 });
-  });
-  project.Tasks?.forEach(task => {
-    g.setNode(`task:${task.Name}`, { width: 190, height: 60 });
-  });
 
-  project.Tasks?.forEach(task => {
-    const trig = task.Trigger || '';
-    const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
-        g.setEdge(`repo:${rn}`, `task:${task.Name}`);
-      }
-    });
-    if (task.Execute?.Repo) {
-      g.setEdge(`task:${task.Name}`, `repo:${task.Execute.Repo}`);
-    }
-    task.DependsOn?.forEach(depName => {
-      g.setNode(`task:${depName}`, { width: 190, height: 60 });
-      g.setEdge(`task:${depName}`, `task:${task.Name}`);
-    });
-  });
-
-  dagre.layout(g);
-
-  const nodes = [];
-  const edges = [];
-
-  project.Repos?.forEach(repo => {
-    const pos = g.node(`repo:${repo.Name}`) || { x: 100, y: 100 };
-    nodes.push({
-      id: `repo:${repo.Name}`,
-      position: { x: pos.x - 85, y: pos.y - 30 },
-      data: { label: `📦 ${repo.Name}`, type: 'repo', path: repo.Path, kind: repo.Kind },
-      type: 'custom',
-      style: { background: '#1e4976', border: '2px solid #2196f3', borderRadius: 8 },
-    });
-  });
-
-  project.Tasks?.forEach(task => {
-    const pos = g.node(`task:${task.Name}`) || { x: 200, y: 100 };
-    nodes.push({
-      id: `task:${task.Name}`,
-      position: { x: pos.x - 95, y: pos.y - 30 },
-      data: { label: `⚙️ ${task.Name}`, type: 'task', manual: task.Manual, trigger: task.Trigger, script: task.Execute?.Script },
-      type: 'custom',
-      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#42a5f5' : '#4caf50'}`, borderRadius: 8 },
-    });
-  });
-
-  project.Tasks?.forEach(task => {
-    const trig = task.Trigger || '';
-    const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
-        edges.push({
-          id: `e-trig-${rn}-${task.Name}`,
-          source: `repo:${rn}`,
-          target: `task:${task.Name}`,
-          animated: true,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: '#ff9800', strokeWidth: 1.5 },
-        });
-      }
-    });
-    if (task.Execute?.Repo) {
-      edges.push({
-        id: `e-exec-${task.Name}-${task.Execute.Repo}`,
-        source: `task:${task.Name}`,
-        target: `repo:${task.Execute.Repo}`,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#2196f3', strokeWidth: 1.5 },
-      });
-    }
-    task.DependsOn?.forEach(depName => {
-      edges.push({
-        id: `e-dep-${depName}-${task.Name}`,
-        source: `task:${depName}`,
-        target: `task:${task.Name}`,
-        animated: false,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#9c27b0', strokeWidth: 2.5 },
-      });
-    });
-  });
-
-  return { nodes, edges };
-}
-
-function CustomNode({ data }) {
-  const statusColor = data.runStatus === 'passed' ? '#4caf50'
-    : data.runStatus === 'failed' ? '#f44336'
-    : data.runStatus === 'skipped' ? '#757575'
-    : data.runStatus === 'running' ? '#ff9800'
-    : data.runStatus === 'pending' ? '#616161'
-    : data.runStatus === 'canceled' ? '#ff9800'
-    : data.runStatus === 'manual' ? '#42a5f5'
-    : null;
-  const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#42a5f5' : '#4caf50');
-
-  return (
-    <Box sx={{
-      background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
-      border: `2px solid ${borderColor}`,
-      borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
-      position: 'relative',
-      opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' || data.runStatus === 'canceled' ? 0.5 : 1,
-    }}>
-      <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
-      <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
-      {data.path && <Typography variant="caption" color="text.secondary">{data.path}</Typography>}
-      {data.trigger && (
-        <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
-          {data.trigger}
-        </Typography>
-      )}
-      {data.manual && !data.runStatus && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5, color: '#42a5f5' }}>
-          MANUAL
-        </Typography>
-      )}
-      {data.runStatus && data.runStatus !== 'passed' && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: borderColor }}>
-          {data.runStatus.toUpperCase()}
-        </Typography>
-      )}
-      {data.runStatus === 'passed' && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, mt: 0.5, color: '#4caf50' }}>
-          PASSED
-        </Typography>
-      )}
-      <Handle type="source" position={Position.Right} style={{ background: '#fff', width: 8, height: 8 }} />
-    </Box>
-  );
-}
-
-const nodeTypes = { custom: CustomNode };
 
 function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
@@ -409,23 +268,20 @@ export function RunDetail({ projectName, runId, onBack }) {
                 {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
                   <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>
                 )}
-                <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                  {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
+                <Box sx={{ position: 'relative', flex: 1 }}>
+                  <CopyButton text={activeJob.output || ''} />
+                  <Box component="pre" sx={{ m: 0, p: 1.5, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                    {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
+                  </Box>
                 </Box>
             </>
             ) : (
               <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }}>
                 {dagNodes.length > 0 ? (
-                  <ReactFlow nodes={dagNodes} edges={dagEdges}
-                    onNodesChange={onDagNodesChange} onEdgesChange={onDagEdgesChange}
-                    nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}
+                  <DAGViewer nodes={dagNodes} edges={dagEdges}
                     onNodeClick={(_, node) => {
                       if (node.data?.type === 'task') setSelectedJob(node.id.replace('task:', ''));
-                    }}>
-                    <Background color="#1e3a5f" />
-                    <Controls />
-                    <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
-                  </ReactFlow>
+                    }} />
             ) : (
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
                     <Typography variant="body2" color="text.secondary">
@@ -436,8 +292,11 @@ export function RunDetail({ projectName, runId, onBack }) {
               </Box>
             )}
             {r?.output && !activeJob && (
-              <Box component="pre" sx={{ m: 0, mt: 1, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
-                {r.output}
+              <Box sx={{ position: 'relative', mt: 1 }}>
+                <CopyButton text={r.output} />
+                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                  {r.output}
+                </Box>
               </Box>
             )}
           </CardContent>
@@ -805,14 +664,7 @@ export function RunProject({ projectName, onBack, onStarted }) {
               label="Auto-run manual jobs"
             />
 
-            <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden' }}>
-              <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-                nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}>
-                <Background color="#1e3a5f" />
-                <Controls />
-                <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
-              </ReactFlow>
-            </Box>
+            <DAGViewer nodes={nodes} edges={edges} />
 
             {resolvedTasks.length > 0 && (
               <Box sx={{ mt: 1 }}>

@@ -1,41 +1,44 @@
 import { createTheme } from '@mui/material/styles';
-import { blueGrey, teal } from '@mui/material/colors';
+import { amber, blueGrey, teal, grey } from '@mui/material/colors';
 
-const theme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: {
-      main: teal[400],
-    },
-    secondary: {
-      main: blueGrey[300],
-    },
-    background: {
-      default: '#0a1929',
-      paper: '#132f4c',
-    },
-  },
+const common = {
   typography: {
     fontFamily: '"Roboto Mono", "Roboto", "Helvetica", "Arial", sans-serif',
-    h4: {
-      fontWeight: 600,
-    },
-    h6: {
-      fontWeight: 500,
-    },
+    h4: { fontWeight: 600 },
+    h6: { fontWeight: 500 },
   },
-  shape: {
-    borderRadius: 12,
-  },
+  shape: { borderRadius: 12 },
   components: {
     MuiCard: {
       styleOverrides: {
-        root: {
-          backgroundImage: 'none',
-        },
+        root: { backgroundImage: 'none' },
       },
+    },
+  },
+};
+
+export const lightTheme = createTheme({
+  ...common,
+  palette: {
+    mode: 'light',
+    primary: { main: teal[700] },
+    secondary: { main: blueGrey[500] },
+    background: {
+      default: '#f5f7fa',
+      paper: '#ffffff',
     },
   },
 });
 
-export default theme;
+export const darkTheme = createTheme({
+  ...common,
+  palette: {
+    mode: 'dark',
+    primary: { main: amber[400] },
+    secondary: { main: grey[400] },
+    background: {
+      default: '#121212',
+      paper: '#1e1e2e',
+    },
+  },
+});

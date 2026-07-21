@@ -1,14 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  ReactFlow, Background, Controls, MiniMap,
-  useNodesState, useEdgesState, MarkerType, Handle, Position
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import {
   Box, Card, CardContent, Typography, Button, TextField, Chip, Autocomplete,
-  Alert, LinearProgress, ToggleButton, ToggleButtonGroup, FormControlLabel, Switch,
+  Alert, LinearProgress, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Divider,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
+  Paper,
 } from '@mui/material';
 import {
   PlayArrow as ResolveIcon,
@@ -16,8 +11,6 @@ import {
   Save as SaveIcon,
   CheckCircle as TriggeredIcon,
   AccountTree as DagIcon,
-  Code as CodeIcon,
-  AccountTree as GraphIcon,
   ArrowBack as BackIcon,
   Close as CloseIcon,
   History as HistoryIcon,
@@ -25,7 +18,10 @@ import {
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import dagre from 'dagre';
+import { useNodesState, useEdgesState } from 'reactflow';
+import DAGViewer from '../components/DAGViewer';
+import CopyButton from '../components/CopyButton';
+import { layoutFromProject } from '../lib/dagLayout';
 import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listRuns } from '../api/client';
 
 const EMPTY_TEMPLATE = `project "new-project" {
@@ -45,130 +41,6 @@ const EMPTY_TEMPLATE = `project "new-project" {
   }
 }
 `;
-
-function layoutFromProject(project) {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', nodesep: 80, ranksep: 120 });
-
-  project.Repos?.forEach(repo => {
-    g.setNode(`repo:${repo.Name}`, { width: 170, height: 60 });
-  });
-  project.Tasks?.forEach(task => {
-    g.setNode(`task:${task.Name}`, { width: 190, height: 60 });
-  });
-
-  project.Tasks?.forEach(task => {
-    const trig = task.Trigger || '';
-    const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
-        g.setEdge(`repo:${rn}`, `task:${task.Name}`);
-      }
-    });
-    if (task.Execute?.Repo) {
-      g.setEdge(`task:${task.Name}`, `repo:${task.Execute.Repo}`);
-    }
-    task.DependsOn?.forEach(depName => {
-      g.setNode(`task:${depName}`, { width: 190, height: 60 });
-      g.setEdge(`task:${depName}`, `task:${task.Name}`);
-    });
-  });
-
-  dagre.layout(g);
-
-  const nodes = [];
-  const edges = [];
-
-  project.Repos?.forEach(repo => {
-    const pos = g.node(`repo:${repo.Name}`) || { x: 100, y: 100 };
-    nodes.push({
-      id: `repo:${repo.Name}`,
-      position: { x: pos.x - 85, y: pos.y - 30 },
-      data: { label: `📦 ${repo.Name}`, type: 'repo', path: repo.Path, kind: repo.Kind },
-      type: 'custom',
-      style: { background: '#1e4976', border: '2px solid #2196f3', borderRadius: 8 },
-    });
-  });
-
-  project.Tasks?.forEach(task => {
-    const pos = g.node(`task:${task.Name}`) || { x: 200, y: 100 };
-    nodes.push({
-      id: `task:${task.Name}`,
-      position: { x: pos.x - 95, y: pos.y - 30 },
-      data: { label: `⚙️ ${task.Name}`, type: 'task', manual: task.Manual, trigger: task.Trigger, script: task.Execute?.Script },
-      type: 'custom',
-      style: { background: '#1a3a2a', border: `2px solid ${task.Manual ? '#42a5f5' : '#4caf50'}`, borderRadius: 8 },
-    });
-  });
-
-  project.Tasks?.forEach(task => {
-    const trig = task.Trigger || '';
-    const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
-        edges.push({
-          id: `e-trig-${rn}-${task.Name}`,
-          source: `repo:${rn}`,
-          target: `task:${task.Name}`,
-          animated: true,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: '#ff9800', strokeWidth: 1.5 },
-        });
-      }
-    });
-    if (task.Execute?.Repo) {
-      edges.push({
-        id: `e-exec-${task.Name}-${task.Execute.Repo}`,
-        source: `task:${task.Name}`,
-        target: `repo:${task.Execute.Repo}`,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#2196f3', strokeWidth: 1.5 },
-      });
-    }
-    task.DependsOn?.forEach(depName => {
-      edges.push({
-        id: `e-dep-${depName}-${task.Name}`,
-        source: `task:${depName}`,
-        target: `task:${task.Name}`,
-        animated: false,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: '#9c27b0', strokeWidth: 2.5 },
-      });
-    });
-  });
-
-  return { nodes, edges };
-}
-
-function CustomNode({ data }) {
-  return (
-    <Box sx={{
-      background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
-      border: `2px solid ${data.type === 'repo' ? '#2196f3' : data.manual ? '#42a5f5' : '#4caf50'}`,
-      borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
-      position: 'relative',
-    }}>
-      <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
-      <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
-      {data.path && <Typography variant="caption" color="text.secondary">{data.path}</Typography>}
-      {data.trigger && (
-        <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
-          {data.trigger}
-        </Typography>
-      )}
-      {data.manual && (
-        <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 600, mt: 0.5, color: '#42a5f5' }}>
-          MANUAL
-        </Typography>
-      )}
-      <Handle type="source" position={Position.Right} style={{ background: '#fff', width: 8, height: 8 }} />
-    </Box>
-  );
-}
-
-const nodeTypes = { custom: CustomNode };
 
 function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
@@ -361,14 +233,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
             />
 
             {/* DAG */}
-            <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden' }}>
-              <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-                nodeTypes={nodeTypes} fitView proOptions={{ hideAttribution: true }}>
-                <Background color="#1e3a5f" />
-                <Controls />
-                <MiniMap nodeColor={(n) => n.data?.type === 'repo' ? '#2196f3' : '#4caf50'} maskColor="rgba(0,0,0,0.7)" />
-              </ReactFlow>
-            </Box>
+            <DAGViewer nodes={nodes} edges={edges} />
 
             {/* Resolved tasks */}
             {resolvedTasks.length > 0 && (
@@ -388,8 +253,11 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
                 <Alert severity={runResult.status === 'passed' ? 'success' : 'error'} sx={{ mb: 1 }}>
                   {runResult.status === 'passed' ? 'Pipeline passed.' : `Pipeline failed: ${runResult.error}`}
                 </Alert>
-                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                  {runResult.output || '(No output)'}
+                <Box sx={{ position: 'relative' }}>
+                  <CopyButton text={runResult.output || ''} />
+                  <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                    {runResult.output || '(No output)'}
+                  </Box>
                 </Box>
               </Box>
             )}
@@ -472,8 +340,11 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
                 </Typography>
               </Box>
               {selectedRun.error && <Alert severity="error" sx={{ mb: 1 }}>{selectedRun.error}</Alert>}
-              <Box component="pre" sx={{ p: 1.5, maxHeight: 400, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                {selectedRun.output || '(No output)'}
+              <Box sx={{ position: 'relative' }}>
+                <CopyButton text={selectedRun.output || ''} />
+                <Box component="pre" sx={{ p: 1.5, maxHeight: 400, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {selectedRun.output || '(No output)'}
+                </Box>
               </Box>
             </>
           )}

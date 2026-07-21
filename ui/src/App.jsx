@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
-import { ThemeProvider } from '@mui/material/styles';
-import theme from './theme/theme';
+import { ColorModeProvider } from './context/ColorModeContext';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import { RunList, NewRun, RunProject, RunDetail } from './pages/Pipelines';
@@ -72,10 +71,10 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <ThemeProvider theme={theme}>
+    <ColorModeProvider>
       <BrowserRouter>
         <AppRoutes />
       </BrowserRouter>
-    </ThemeProvider>
+    </ColorModeProvider>
   );
 }
