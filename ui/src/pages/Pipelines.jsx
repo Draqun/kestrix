@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ReactFlow, Background, Controls, MiniMap,
@@ -10,6 +10,7 @@ import {
   Alert, LinearProgress, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Divider,
   List, ListItem, ListItemText, ListItemIcon, ListItemButton,
+  Select, MenuItem, FormControl, InputLabel,
 } from '@mui/material';
 import {
   PlayArrow as ResolveIcon,
@@ -27,6 +28,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import dagre from 'dagre';
 import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
+import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 
 function layoutFromProject(project) {
@@ -454,33 +456,41 @@ export function RunList({ onNewRun, onOpenRun }) {
   const page = Math.max(1, Number(searchParams.get('page')) || 1);
   const offset = (page - 1) * limit;
 
-  const [runs, setRuns] = useState([]);
   const [allRuns, setAllRuns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [pagination, setPagination] = useState({ total: 0, limit, offset, next: null, prev: null });
+  const [statusFilter, setStatusFilter] = useState([]);
+  const [changeFilter, setChangeFilter] = useState('');
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listAllRuns();
-      const full = Array.isArray(data) ? data : [];
-      const total = full.length;
-      const start = offset;
-      const end = Math.min(offset + limit, total);
-      setAllRuns(full);
-      setRuns(full.slice(start, end));
-      const nextUrl = end < total ? `/api/runs?limit=${limit}&offset=${end}` : null;
-      const prevUrl = offset > 0 ? `/api/runs?limit=${limit}&offset=${Math.max(0, offset - limit)}` : null;
-      setPagination({ total, limit, offset, next: nextUrl, prev: prevUrl });
+      setAllRuns(Array.isArray(data) ? data : []);
     } catch {
-      setRuns([]);
       setAllRuns([]);
-      setPagination({ total: 0, limit, offset, next: null, prev: null });
     }
     setLoading(false);
-  }, [limit, offset]);
+  }, []);
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
+
+  const repos = useMemo(() => getUniqueRepos(allRuns), [allRuns]);
+
+  const filteredRuns = useMemo(
+    () => filterRuns(allRuns, { statusFilter, changeFilter }),
+    [allRuns, statusFilter, changeFilter]
+  );
+
+  const total = filteredRuns.length;
+  const start = offset;
+  const end = Math.min(offset + limit, total);
+  const runs = filteredRuns.slice(start, end);
+
+  const pagination = useMemo(() => {
+    const nextUrl = end < total ? `/api/runs?limit=${limit}&offset=${end}` : null;
+    const prevUrl = offset > 0 ? `/api/runs?limit=${limit}&offset=${Math.max(0, offset - limit)}` : null;
+    return { total, limit, offset, next: nextUrl, prev: prevUrl };
+  }, [total, limit, offset, end]);
 
   const handlePageChange = (newOffset) => {
     const newPage = Math.floor(newOffset / limit) + 1;
@@ -501,6 +511,27 @@ export function RunList({ onNewRun, onOpenRun }) {
     });
   };
 
+  useEffect(() => {
+    if (page !== 1) {
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.set('page', '1');
+        next.set('limit', String(limit));
+        return next;
+      });
+    }
+  }, [statusFilter, changeFilter, page, limit, setSearchParams]);
+
+  const clearFilters = () => {
+    setStatusFilter([]);
+    setChangeFilter('');
+  };
+
+  const handleStatusChange = (event) => {
+    const { value } = event.target;
+    setStatusFilter(typeof value === 'string' ? value.split(',') : value);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
@@ -513,10 +544,66 @@ export function RunList({ onNewRun, onOpenRun }) {
         </Button>
       </Box>
 
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2, alignItems: 'center' }}>
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel id="status-filter-label">Status</InputLabel>
+          <Select
+            labelId="status-filter-label"
+            label="Status"
+            multiple
+            value={statusFilter}
+            onChange={handleStatusChange}
+            renderValue={(selected) => (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {selected.map((value) => (
+                  <Chip key={value} label={value} size="small" />
+                ))}
+              </Box>
+            )}
+          >
+            {RUN_STATUSES.map((status) => (
+              <MenuItem key={status} value={status}>
+                {status}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel id="change-filter-label">Changed repo</InputLabel>
+          <Select
+            labelId="change-filter-label"
+            label="Changed repo"
+            value={changeFilter}
+            onChange={(e) => setChangeFilter(e.target.value)}
+          >
+            <MenuItem value="">All repos</MenuItem>
+            {repos.map((repo) => (
+              <MenuItem key={repo} value={repo}>
+                {repo}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={clearFilters}
+          disabled={statusFilter.length === 0 && changeFilter === ''}
+        >
+          Clear filters
+        </Button>
+      </Box>
+
       {loading && <LinearProgress sx={{ mb: 2 }} />}
 
       {runs.length === 0 && !loading && (
-        <Alert severity="info">No runs yet. Click "New run" to trigger a pipeline.</Alert>
+        <Alert severity="info">
+          {allRuns.length === 0
+            ? 'No runs yet. Click "New run" to trigger a pipeline.'
+            : 'No runs match the selected filters.'}
+        </Alert>
       )}
 
       <List>
@@ -543,7 +630,7 @@ export function RunList({ onNewRun, onOpenRun }) {
                         {run.finished_at && ` → ${new Date(run.finished_at).toLocaleString()}`}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Changed: {run.changed?.join(', ') || 'none'}
+                        {run.changed?.length ? `Changed: ${run.changed.join(', ')}` : 'no changes'}
                       </Typography>
                     </Box>
                   }
