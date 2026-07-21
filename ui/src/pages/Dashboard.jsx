@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Grid, Card, CardContent, Typography, Box, LinearProgress,
   Alert, IconButton, Tooltip, Table, TableBody, TableCell,
@@ -69,6 +70,7 @@ function statusChip(status) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -115,7 +117,7 @@ export default function Dashboard() {
       )}
 
       <Grid container spacing={3}>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Projects"
             value={data?.project_count ?? '—'}
@@ -123,7 +125,7 @@ export default function Dashboard() {
             loading={loading}
           />
         </Grid>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Total Runs"
             value={totalRuns}
@@ -131,7 +133,7 @@ export default function Dashboard() {
             loading={loading}
           />
         </Grid>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Passed"
             value={stats.passed ?? 0}
@@ -140,7 +142,7 @@ export default function Dashboard() {
             loading={loading}
           />
         </Grid>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Failed"
             value={stats.failed ?? 0}
@@ -149,7 +151,7 @@ export default function Dashboard() {
             loading={loading}
           />
         </Grid>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Running"
             value={stats.running ?? 0}
@@ -158,11 +160,29 @@ export default function Dashboard() {
             loading={loading}
           />
         </Grid>
-        <Grid item xs={6} sm={3} md={2}>
+        <Grid item xs={6} sm={3} md={3}>
+          <StatCard
+            title="Canceled"
+            value={stats.canceled ?? 0}
+            icon={<CanceledIcon color="disabled" />}
+            color="text.secondary"
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} sm={3} md={3}>
           <StatCard
             title="Pending"
             value={stats.pending ?? 0}
             icon={<PendingIcon color="disabled" />}
+            color="text.secondary"
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} sm={3} md={3}>
+          <StatCard
+            title="Skipped"
+            value={stats.skipped ?? 0}
+            icon={<SkippedIcon color="disabled" />}
             color="text.secondary"
             loading={loading}
           />
@@ -190,15 +210,24 @@ export default function Dashboard() {
                     <TableCell>Project</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Started</TableCell>
+                    <TableCell>Finished</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {recentRuns.map((run) => (
-                    <TableRow key={run.id} hover>
+                    <TableRow
+                      key={run.id}
+                      hover
+                      onClick={() => navigate(`/pipelines/runs/${encodeURIComponent(run.project_name)}/${run.id}`)}
+                      sx={{ cursor: 'pointer' }}
+                    >
                       <TableCell>{run.project_name}</TableCell>
                       <TableCell>{statusChip(run.status)}</TableCell>
                       <TableCell>
                         {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
+                      </TableCell>
+                      <TableCell>
+                        {run.finished_at ? new Date(run.finished_at).toLocaleString() : '—'}
                       </TableCell>
                     </TableRow>
                   ))}

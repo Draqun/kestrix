@@ -914,7 +914,6 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 			errMsg = err.Error()
 		}
 		// Also check task results — runner may not return error if it continues past failures.
-		hasManual := false
 		for _, tr := range taskResults {
 			if tr.Status == "failed" {
 				status = "failed"
@@ -923,12 +922,6 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			if tr.Status == "manual" {
-				hasManual = true
-			}
-		}
-		if status == "passed" && hasManual {
-			status = "manual"
 		}
 		if pgStore != nil && runID > 0 {
 			var trs []store.TaskResult

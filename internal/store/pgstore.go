@@ -476,14 +476,6 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 			}
 		}
 	}
-	if status == "passed" {
-		for _, st := range latest {
-			if st == "manual" {
-				status = "manual"
-				break
-			}
-		}
-	}
 	if status == "failed" && errMsg == "" {
 		errMsg = "task failed"
 	}
