@@ -4,7 +4,10 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 
 ## Core Concepts
 - **HCL pipelines** define projects, repositories, and tasks.
-- **DAG engine** resolves task order based on trigger expressions.
+- **[DAG engine](dag-engine.md)** resolves task order based on trigger expressions.
 - **CI generator** produces `gitlab-ci.yml` files.
 - **Dispatch client** triggers GitLab pipelines.
 - **Webhook receiver** handles push events and initiates the pipeline.
+
+## See Also
+- [DAG engine documentation](dag-engine.md)

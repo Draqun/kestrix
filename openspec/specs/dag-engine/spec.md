@@ -6,9 +6,7 @@ The DAG engine resolves task execution order based on trigger expressions and va
 ## Overview
 
 The DAG engine evaluates trigger expressions against a set of changed repositories and determines which tasks should run. It also validates the dependency graph for cycles and unknown references.
-
 ## Requirements
-
 ### Requirement: Boolean Expression Evaluation (implemented)
 
 The engine SHALL evaluate trigger expressions using the following operators:
@@ -93,9 +91,17 @@ AND its trigger expression is satisfied
 THEN the task SHALL appear in the resolved set with manual = true
 ```
 
-### REQ-1: Documentation inclusion (pending)
-The DAG engine documentation SHALL be included in the project‑docs site and shall be kept up‑to‑date with any behaviour changes.
+### Requirement: REQ-1: Documentation inclusion
+
+The DAG engine documentation SHALL be included in the project-docs site and SHALL be kept up-to-date with any behaviour changes.
 
 #### Scenario: Documentation included in UI build
-- **WHEN** the UI build runs,
-- **THEN** the DAG engine documentation shall be present in `ui/dist/docs`.
+
+- **WHEN** the documentation build runs,
+- **THEN** the DAG engine documentation SHALL be present in `ui/dist/docs`.
+
+#### Scenario: Documentation page is reachable from overview
+
+- **WHEN** a user opens the project-docs overview page,
+- **THEN** a link to the DAG engine documentation page SHALL be available.
+
