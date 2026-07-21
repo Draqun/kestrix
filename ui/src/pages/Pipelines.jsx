@@ -270,9 +270,9 @@ export function RunDetail({ projectName, runId, onBack }) {
                 {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
                   <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>
                 )}
-                <Box sx={{ position: 'relative', flex: 1 }}>
+                <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                   <CopyButton text={activeJob.output || ''} />
-                  <Box component="pre" sx={{ m: 0, p: 1.5, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: 'grey.900', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
                     {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
                   </Box>
                 </Box>
