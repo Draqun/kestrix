@@ -418,7 +418,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
                       </Typography>
                     </Box>
                     <Typography variant="caption" color="text.secondary">
-                      {run.changed?.join(', ') || '(no changes)'}
+                      {run.changed?.join(', ') || '(No changes)'}
                     </Typography>
                   </Paper>
                 );

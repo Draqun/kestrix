@@ -630,7 +630,7 @@ export function RunList({ onNewRun, onOpenRun }) {
                         {run.finished_at && ` → ${new Date(run.finished_at).toLocaleString()}`}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {run.changed?.length ? `Changed: ${run.changed.join(', ')}` : 'no changes'}
+                        {run.changed?.length ? `Changed: ${run.changed.join(', ')}` : 'No changes'}
                       </Typography>
                     </Box>
                   }

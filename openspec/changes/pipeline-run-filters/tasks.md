@@ -14,7 +14,7 @@
 ## 3. List Updates
 
 - [x] 3.1 Wire the paginated list to use `filteredRuns` instead of `allRuns`
-- [x] 3.2 Update the empty-change label from `Changed: none` to `no changes`
+- [x] 3.2 Update the empty-change label from `Changed: none` to `No changes`
 
 ## 4. Testing and Verification
 

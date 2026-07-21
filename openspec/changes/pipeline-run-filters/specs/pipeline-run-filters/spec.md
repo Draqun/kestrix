@@ -48,13 +48,13 @@ When the user changes any filter value, the current page SHALL reset to the firs
 
 ### Requirement: Display friendly empty-change label
 
-Each run list item SHALL display the text `no changes` when the run's `changed` array is empty. The previous text `Changed: none` SHALL no longer be used.
+Each run list item SHALL display the text `No changes` when the run's `changed` array is empty. The previous text `Changed: none` SHALL no longer be used.
 
 #### Scenario: Run with no changed repositories
 
 - **GIVEN** a run with an empty `changed` array
 - **WHEN** the run is rendered in the list
-- **THEN** the secondary text shows `no changes`
+- **THEN** the secondary text shows `No changes`
 
 #### Scenario: Run with changed repositories
 

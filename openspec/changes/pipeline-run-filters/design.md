@@ -9,7 +9,7 @@ The `/pipelines` route renders the `RunList` component. It loads all pipeline ru
 - Allow filtering by run **status** (multi-select).
 - Allow filtering by **changed repository** (single-select dropdown populated from loaded runs).
 - Keep filters client-side so no backend changes are required.
-- Update the empty-change label from `Changed: none` to `no changes`.
+- Update the empty-change label from `Changed: none` to `No changes`.
 - Preserve the existing pagination behaviour; filtering should reduce the set that pagination slices.
 
 **Non-Goals:**

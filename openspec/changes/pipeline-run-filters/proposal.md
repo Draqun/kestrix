@@ -8,7 +8,7 @@ The Pipelines view lists every pipeline run in a single scrollable table. As the
   - **Status filter** – multi-select of run statuses (`passed`, `failed`, `running`, `canceled`, `pending`, `manual`, `skipped`).
   - **Change filter** – dropdown of repositories that triggered a run, populated from the `changed` field of loaded runs.
 - Apply filters client-side on the already loaded run list.
-- Update the run list item label from `Changed: none` to `no changes` when the `changed` array is empty.
+- Update the run list item label from `Changed: none` to `No changes` when the `changed` array is empty.
 
 ## Capabilities
 
