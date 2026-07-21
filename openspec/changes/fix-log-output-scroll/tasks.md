@@ -6,4 +6,4 @@
 ## 2. Verify
 
 - [x] 2.1 Run `npm run build` to confirm no compilation errors
-- [ ] 2.2 Navigate to `/pipelines/runs/metaci/33` with a long-running job — confirm the output panel has a scrollbar and the logs are scrollable
+- [x] 2.2 Navigate to `/pipelines/runs/metaci/33` with a long-running job — confirm the output panel has a scrollbar and the logs are scrollable
