@@ -1,13 +1,13 @@
-// Package main is the metaci CLI entry point.
+// Package main is the Kestrix CLI entry point.
 //
-// MetaCI — Repo-agnostic CI/CD Control Plane
+// Kestrix — Repo-agnostic CI/CD Control Plane
 //
-// @title           MetaCI API
+// @title           Kestrix API
 // @version         0.2.0
 // @description     Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 // @description     Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
 //
-// @contact.name   MetaCI Team
+// @contact.name   Kestrix Team
 // @contact.email  damian.giebas@gmail.com
 //
 // @host           localhost:8080
@@ -60,14 +60,14 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `metaci — repo-agnostic CI/CD orchestrator
+	fmt.Fprintln(os.Stderr, `kestrix — repo-agnostic CI/CD orchestrator
 
 Usage:
-  metaci resolve    [--changed repo1,repo2] <file.tf>
-  metaci validate   <file.tf>
-	  metaci run       [--changed repo1,repo2] [--workdir .] [--include-manual] <file.tf>
-  metaci serve      [--addr :8080] [--database-url postgres://...] [--static ../ui/dist] [--secret TOKEN] [--dispatch PROJECT_ID]
-  metaci variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]`)
+  kestrix resolve    [--changed repo1,repo2] <file.tf>
+  kestrix validate   <file.tf>
+  kestrix run        [--changed repo1,repo2] [--workdir .] [--include-manual] <file.tf>
+  kestrix serve      [--addr :8080] [--database-url postgres://...] [--static ../ui/dist] [--secret TOKEN] [--dispatch PROJECT_ID]
+  kestrix variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]`)
 }
 
 func cmdRun(args []string) {

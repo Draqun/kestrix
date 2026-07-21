@@ -23,7 +23,7 @@ go test -run TestWebhook ./internal/web/ -count=1
 ## Layout that matters
 | Path | Role |
 |------|------|
-| `cmd/metaci/` | CLI: serve, run, resolve, validate |
+| `cmd/kestrix/` | CLI: serve, run, resolve, validate |
 | `internal/web/server.go` | All HTTP API + async run handler |
 | `internal/runner/` | Run / RunLocal / RunGitLabRunner |
 | `internal/dag/` | Trigger expr + task ordering |
@@ -66,7 +66,7 @@ Does **not** kill OS processes yet (status-only); stuck runs still need cancel t
 
 ## Verify before done
 ```bash
-go build -o bin/metaci ./cmd/metaci
+go build -o bin/kestrix ./cmd/kestrix
 go test ./... -count=1 -short
 # if UI changed:
 cd ui && npm run build

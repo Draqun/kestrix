@@ -11,8 +11,8 @@ mkdir -p "$BUILD_DIR"
 
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}"
 
-echo "Building metaci ${VERSION} (${COMMIT})..."
-CGO_ENABLED=0 go build -ldflags="${LDFLAGS}" -o "${BUILD_DIR}/metaci" ./cmd/metaci
+echo "Building Kestrix ${VERSION} (${COMMIT})..."
+CGO_ENABLED=0 go build -ldflags="${LDFLAGS}" -o "${BUILD_DIR}/kestrix" ./cmd/kestrix
 
-echo "Binary: ${BUILD_DIR}/metaci"
+echo "Binary: ${BUILD_DIR}/kestrix"
 echo "=== Build passed ==="

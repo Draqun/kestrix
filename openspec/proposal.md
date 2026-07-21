@@ -29,7 +29,7 @@ None — this is a greenfield project.
 
 ## Impact
 
-- **Code**: New Go project with `cmd/metaci`, `internal/{model,dag,parser,web}`
+- **Code**: New Go project with `cmd/kestrix`, `internal/{model,dag,parser,web}`
 - **Dependencies**: `hashicorp/hcl/v2` (HCL parsing), `go-chi/chi` (HTTP router), `go-cty` (HCL value types)
 - **Infrastructure**: Requires a GitLab Runner (user-supplied) and a GitLab webhook pointing to the Kestrix server
 - **Security**: Webhook payloads are untrusted; pipeline definitions are trusted (user-managed)

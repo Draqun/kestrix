@@ -1,10 +1,10 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.\nSupports OR/AND/NOT trigger logic for cross-repo conditional builds.",
-        "title": "MetaCI API",
+        "description": "GitLab webhook secret token for signature verification",
+        "title": "Kestrix API",
         "contact": {
-            "name": "MetaCI Team",
+            "name": "Kestrix Team",
             "email": "damian.giebas@gmail.com"
         },
         "version": "0.2.0"
@@ -174,7 +174,7 @@
                 "tags": [
                     "projects"
                 ],
-                "summary": "Create a project (point at a repo containing pipeline.tf)",
+                "summary": "Create a project (point at a repo and its pipeline definition directory)",
                 "parameters": [
                     {
                         "description": "Project config",
@@ -212,6 +212,44 @@
                         "name": "name",
                         "in": "path",
                         "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/store.ProjectConfig"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Update a project config",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Updated config",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/store.ProjectConfig"
+                        }
                     }
                 ],
                 "responses": {
@@ -288,7 +326,7 @@
                 "tags": [
                     "projects"
                 ],
-                "summary": "Save pipeline HCL for a project (writes pipeline.tf to repo path)",
+                "summary": "Save the editor pipeline file inside a project's pipeline directory",
                 "parameters": [
                     {
                         "type": "string",
@@ -350,6 +388,72 @@
                 }
             }
         },
+        "/api/projects/{name}/runs": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "runs"
+                ],
+                "summary": "List pipeline runs for a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/store.Run"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{name}/runs/{runID}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Get a pipeline run by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Run ID",
+                        "name": "runID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/store.Run"
+                        }
+                    }
+                }
+            }
+        },
         "/api/resolve": {
             "post": {
                 "consumes": [
@@ -379,6 +483,28 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/runs": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "runs"
+                ],
+                "summary": "List all pipeline runs across projects",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/store.Run"
+                            }
                         }
                     }
                 }
@@ -517,11 +643,7 @@
                 },
                 "execute": {
                     "description": "Execute defines what to run and in which repo context.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/model.ExecuteSpec"
-                        }
-                    ]
+                    "$ref": "#/definitions/model.ExecuteSpec"
                 },
                 "manual": {
                     "description": "Manual, when true, requires a human to click \"Run\" in the UI before the\ntask executes, even if its trigger condition is met.",
@@ -573,6 +695,53 @@
                 }
             }
         },
+        "store.ExtraRepo": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "description": "\"subpath\" or \"git\"",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.PipelineSnapshot": {
+            "type": "object",
+            "properties": {
+                "default_image": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "repos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.SnapshotRepo"
+                    }
+                },
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.SnapshotTask"
+                    }
+                },
+                "variables": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.SnapshotVar"
+                    }
+                }
+            }
+        },
         "store.ProjectConfig": {
             "type": "object",
             "properties": {
@@ -582,13 +751,25 @@
                 "default_branch": {
                     "type": "string"
                 },
+                "extra_repos": {
+                    "description": "ExtraRepos lists additional repositories beyond the primary one.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ExtraRepo"
+                    }
+                },
                 "gitlab_project_id": {
                     "type": "integer"
                 },
                 "name": {
                     "type": "string"
                 },
+                "pipeline_dir": {
+                    "description": "PipelineDir is relative to RepoPath and contains all .tf files that\ntogether define the pipeline.",
+                    "type": "string"
+                },
                 "pipeline_file": {
+                    "description": "PipelineFile is the optional file opened by the editor. It is not used to\nselect which definitions are executed; all .tf files in PipelineDir load.",
                     "type": "string"
                 },
                 "repo_path": {
@@ -601,11 +782,158 @@
                     "type": "string"
                 }
             }
+        },
+        "store.Run": {
+            "type": "object",
+            "properties": {
+                "changed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "include_manual": {
+                    "type": "boolean"
+                },
+                "output": {
+                    "type": "string"
+                },
+                "pipeline_def": {
+                    "$ref": "#/definitions/store.PipelineSnapshot"
+                },
+                "project_name": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "running, passed, failed",
+                    "type": "string"
+                },
+                "task_results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.TaskResult"
+                    }
+                }
+            }
+        },
+        "store.SnapshotExec": {
+            "type": "object",
+            "properties": {
+                "image": {
+                    "type": "string"
+                },
+                "repo": {
+                    "type": "string"
+                },
+                "script": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.SnapshotRepo": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.SnapshotTask": {
+            "type": "object",
+            "properties": {
+                "depends_on": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "execute": {
+                    "$ref": "#/definitions/store.SnapshotExec"
+                },
+                "manual": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "trigger": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.SnapshotVar": {
+            "type": "object",
+            "properties": {
+                "default": {
+                    "type": "string"
+                },
+                "env": {
+                    "type": "string"
+                },
+                "job": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "masked": {
+                    "type": "boolean"
+                },
+                "protected": {
+                    "type": "boolean"
+                },
+                "repo": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.TaskResult": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "output": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
         }
     },
     "securityDefinitions": {
         "WebhookToken": {
-            "description": "GitLab webhook secret token for signature verification",
             "type": "apiKey",
             "name": "X-Gitlab-Token",
             "in": "header"

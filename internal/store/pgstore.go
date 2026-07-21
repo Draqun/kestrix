@@ -213,7 +213,7 @@ type TaskResult struct {
 	Status   string        `json:"status"`
 	Output   string        `json:"output"`
 	Error    string        `json:"error,omitempty"`
-	Duration time.Duration `json:"duration"`
+	Duration time.Duration `json:"duration" swaggertype:"primitive,integer"`
 }
 
 // PipelineSnapshot captures the pipeline definition at the time of a run

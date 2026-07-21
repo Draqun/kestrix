@@ -8,14 +8,14 @@ parses trigger conditions via a DAG engine, and dispatches jobs to GitLab runner
 - **Language:** Go 1.25 (go.mod), CI uses golang:1.25-alpine
 - **HTTP:** Chi router (github.com/go-chi/chi/v5)
 - **HCL:** hashicorp/hcl/v2 (manual parsing via hclsyntax)
-- **Config:** gopkg.in/yaml.v3 (~/.metaci/config.yaml)
+- **Config:** gopkg.in/yaml.v3 (~/.kestrix/config.yaml)
 - **Frontend:** React + Vite + MUI + React Flow (ui/)
 - **Docs:** Swagger via swaggo/http-swagger at /docs/
 - **Testing:** go test with coverage, mock HTTP servers for external APIs
 
 ## Build Commands
 ```bash
-make build          # Build binary → bin/metaci
+make build          # Build binary → bin/kestrix
 make test           # Run all tests
 make quality        # Format check + vet + staticcheck + test + build
 make dev            # Run dev server with auto-reload
@@ -25,8 +25,8 @@ make vet            # Run go vet
 
 ## Project Structure
 ```
-cmd/metaci/         # CLI entry point (serve, resolve, validate, variables)
-internal/config/    # YAML config loading (~/.metaci/config.yaml)
+cmd/kestrix/        # CLI entry point (serve, resolve, validate, variables)
+internal/config/    # YAML config loading (~/.kestrix/config.yaml)
 internal/dag/       # DAG engine + trigger expression parser
 internal/dispatch/  # GitLab pipeline dispatch client
 internal/model/     # Data model (Project, Task, Repo, Variable)
@@ -73,7 +73,7 @@ project "name" {
 - **Build:** go build with ldflags
 
 ## Key Files
-- `cmd/metaci/main.go` — CLI entry, config loading
+- `cmd/kestrix/main.go` — CLI entry, config loading
 - `internal/web/server.go` — HTTP server, all API handlers
 - `internal/web/webhook.go` — Webhook parsing, file classification
 - `internal/web/generator.go` — gitlab-ci.yml generation
@@ -95,4 +95,4 @@ go test -run TestWebhook         # Specific test
 - Webhook: POST /webhook (HMAC-SHA256 or X-Gitlab-Token)
 - Dispatch: POST /api/v4/projects/:id/pipeline
 - Variables: POST /api/v4/projects/:id/pipelines/:pid/variables
-- Config: ~/.metaci/config.yaml or env vars (METACI_*)
+- Config: ~/.kestrix/config.yaml or env vars (METACI_*)

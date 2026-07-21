@@ -1,4 +1,4 @@
-# Air configuration for MetaCI development
+# Air configuration for Kestrix development
 # Docs: https://github.com/air-verse/air
 
 root = "."
@@ -6,9 +6,9 @@ tmp_dir = ".air"
 
 [build]
   # Binary to run
-  cmd = "go build -o .air/metaci ./cmd/metaci"
+  cmd = "go build -o .air/kestrix ./cmd/kestrix"
   # Binary path
-  bin = ".air/metaci"
+  bin = ".air/kestrix"
   # Watch these directories
   include_ext = ["go", "tf"]
   # Exclude these directories

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# MetaCI — Development Dockerfile (with hot reload via air)
+# Kestrix — Development Dockerfile (with hot reload via air)
 # ─────────────────────────────────────────────────────────────
 
 FROM golang:1.25-alpine

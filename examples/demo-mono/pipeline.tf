@@ -1,6 +1,6 @@
-# Example MetaCI project: monorepo with two services and integration tests.
+# Example Kestrix project: monorepo with two services and integration tests.
 #
-# This file demonstrates the core MetaCI concepts:
+# This file demonstrates the core Kestrix concepts:
 #   1. ci_repo definitions (path-based for monorepo)
 #   2. ci_task with AND/OR/NOT trigger logic
 #   3. Cross-repo execution (integration tests run in a separate repo)

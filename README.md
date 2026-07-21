@@ -41,30 +41,30 @@ make build
 
 ```bash
 # Serve with examples (default: :8080)
-./bin/metaci serve --dir ./examples/demo-mono
+./bin/kestrix serve --dir ./examples/demo-mono
 
 # With dispatch to GitLab
-./bin/metaci serve \
+./bin/kestrix serve \
   --dir ./examples/demo-mono \
   --dispatch 12345 \
   --gitlab-token glpat-xxx \
   --secret my-webhook-secret
 
-# From config file (~/.metaci/config.yaml)
-./bin/metaci serve --config ~/.metaci/config.yaml
+# From config file (~/.kestrix/config.yaml)
+./bin/kestrix serve --config ~/.kestrix/config.yaml
 ```
 
 ### 3. Use
 
 ```bash
 # CLI: resolve triggers
-./bin/metaci resolve examples/demo-mono/pipeline.tf --changed auth_service,billing_service
+./bin/kestrix resolve examples/demo-mono/pipeline.tf --changed auth_service,billing_service
 
 # CLI: validate pipeline
-./bin/metaci validate examples/demo-mono/pipeline.tf
+./bin/kestrix validate examples/demo-mono/pipeline.tf
 
 # CLI: run a pipeline locally in dependency order
-./bin/metaci run --changed metaci .metaci/pipeline.tf
+./bin/kestrix run --changed metaci .metaci/pipeline.tf
 
 # API: health check
 curl http://localhost:8080/api/health
@@ -84,7 +84,7 @@ curl -X POST http://localhost:8080/api/resolve \
 
 ## Configuration
 
-Kestrix loads config from `~/.metaci/config.yaml` (auto-discovered).
+Kestrix loads config from `~/.kestrix/config.yaml` (auto-discovered).
 
 ```yaml
 listen_addr: ":8080"
@@ -143,9 +143,9 @@ dispatch:
 
 ```
 metaci/
-├── cmd/metaci/          # CLI entry point
+├── cmd/kestrix/          # CLI entry point
 ├── internal/
-│   ├── config/          # YAML config loading (~/.metaci/config.yaml)
+│   ├── config/          # YAML config loading (~/.kestrix/config.yaml)
 │   ├── dag/             # DAG engine + trigger expression parser
 │   ├── dispatch/        # GitLab pipeline dispatch client
 │   ├── model/           # Data model (Project, Task, Repo, Variable)

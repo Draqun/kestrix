@@ -1,7 +1,7 @@
-# Makefile for MetaCI development tasks
+# Makefile for Kestrix development tasks
 # Provides convenient shortcuts for common development tasks
 
-BINARY    := bin/metaci
+BINARY    := bin/kestrix
 GO        := go
 GOFLAGS   :=
 
@@ -17,16 +17,16 @@ help:
 ## init: Bootstrap the project (install deps + build)
 init: $(BINARY)
 
-## build: Build the metaci binary
+## build: Build the kestrix binary
 build: $(BINARY)
 
 $(BINARY): $(shell find . -name '*.go' -type f 2>/dev/null) go.mod
 	$(GO) mod tidy
-	$(GO) build -o $(BINARY) ./cmd/metaci
+	$(GO) build -o $(BINARY) ./cmd/kestrix
 
 ## build-release: Build release binary (stripped)
 build-release:
-	$(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/metaci
+	$(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/kestrix
 
 ## test: Run all tests
 test:
@@ -87,7 +87,7 @@ validate: $(BINARY)
 resolve: $(BINARY)
 	$(BINARY) resolve $(if $(CHANGED),--changed $(CHANGED)) examples/demo-mono/pipeline.tf
 
-## pipeline: Run this repository's MetaCI pipeline locally
+## pipeline: Run this repository's Kestrix pipeline locally
 pipeline: $(BINARY)
 	$(BINARY) run --changed metaci ci/pipeline.tf
 

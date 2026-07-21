@@ -132,7 +132,7 @@ make serve
 make validate
 
 # Resolve triggers
-./bin/metaci resolve --changed auth_service examples/demo-mono/pipeline.tf
+./bin/kestrix resolve --changed auth_service examples/demo-mono/pipeline.tf
 
 # Docker full stack
 make docker-up`}

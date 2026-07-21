@@ -51,8 +51,8 @@ test:
 build:
   stage: build
   script:
-    - go build -ldflags="-s -w" -o metaci ./cmd/metaci
+    - go build -ldflags="-s -w" -o kestrix ./cmd/kestrix
   artifacts:
     paths:
-      - metaci
+      - kestrix
     expire_in: 30 days

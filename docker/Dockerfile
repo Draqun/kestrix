@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# MetaCI — Production Dockerfile (multi-stage)
+# Kestrix — Production Dockerfile (multi-stage)
 # ─────────────────────────────────────────────────────────────
 
 # Stage 1: Build backend
@@ -14,8 +14,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
-    -o /metaci \
-    ./cmd/metaci
+    -o /kestrix \
+    ./cmd/kestrix
 
 # Stage 2: Build frontend
 FROM node:22-alpine AS frontend
@@ -31,7 +31,7 @@ FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=backend /metaci /metaci
+COPY --from=backend /kestrix /kestrix
 COPY --from=frontend /app/dist /app/ui/dist
 COPY ci /app/ci
 COPY docs /app/docs
@@ -40,5 +40,5 @@ WORKDIR /app
 
 EXPOSE 8080
 
-ENTRYPOINT ["/metaci"]
+ENTRYPOINT ["/kestrix"]
 CMD ["serve", "--addr", ":8080", "--dir", "./ci", "--static", "./ui/dist"]

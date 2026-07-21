@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# MetaCI — Docker Makefile
+# Kestrix — Docker Makefile
 # Run from this directory: cd docker && make up
 # ─────────────────────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ up-d:
 	$(COMPOSE) up -d
 	@echo ""
 	@echo "Services started in background."
-	@echo "  MetaCI:    http://localhost:8080"
+	@echo "  Kestrix:   http://localhost:8080"
 	@echo "  Swagger:   http://localhost:8080/docs/"
 	@echo "  Postgres:  localhost:5432"
 	@echo "  Redis:     localhost:6379"
@@ -42,8 +42,8 @@ restart: down up
 logs:
 	$(COMPOSE) logs -f
 
-## logs-metaci: Follow only MetaCI logs
-logs-metaci:
+## logs-kestrix: Follow only Kestrix logs
+logs-kestrix:
 	$(COMPOSE) logs -f metaci
 
 ## rebuild: Rebuild images and restart
@@ -60,7 +60,7 @@ clean:
 ps:
 	$(COMPOSE) ps
 
-## shell: Open a shell in the MetaCI container
+## shell: Open a shell in the Kestrix container
 shell:
 	$(COMPOSE) exec metaci sh
 
@@ -88,8 +88,8 @@ test-webhook:
 
 ## health: Check service health
 health:
-	@echo "MetaCI health:"
-	@curl -s http://localhost:8080/health 2>/dev/null || echo "  MetaCI: not running"
+	@echo "Kestrix health:"
+	@curl -s http://localhost:8080/health 2>/dev/null || echo "  Kestrix: not running"
 	@echo ""
 	@echo "Postgres:"
 	@$(COMPOSE) exec -T postgres pg_isready -U metaci 2>/dev/null || echo "  Postgres: not running"

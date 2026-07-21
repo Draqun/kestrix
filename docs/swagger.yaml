@@ -75,8 +75,7 @@ definitions:
           type: string
         type: array
       execute:
-        allOf:
-        - $ref: '#/definitions/model.ExecuteSpec'
+        $ref: '#/definitions/model.ExecuteSpec'
         description: Execute defines what to run and in which repo context.
       manual:
         description: |-
@@ -119,17 +118,61 @@ definitions:
       value:
         type: string
     type: object
+  store.ExtraRepo:
+    properties:
+      kind:
+        description: '"subpath" or "git"'
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      url:
+        type: string
+    type: object
+  store.PipelineSnapshot:
+    properties:
+      default_image:
+        type: string
+      name:
+        type: string
+      repos:
+        items:
+          $ref: '#/definitions/store.SnapshotRepo'
+        type: array
+      tasks:
+        items:
+          $ref: '#/definitions/store.SnapshotTask'
+        type: array
+      variables:
+        items:
+          $ref: '#/definitions/store.SnapshotVar'
+        type: array
+    type: object
   store.ProjectConfig:
     properties:
       created_at:
         type: string
       default_branch:
         type: string
+      extra_repos:
+        description: ExtraRepos lists additional repositories beyond the primary one.
+        items:
+          $ref: '#/definitions/store.ExtraRepo'
+        type: array
       gitlab_project_id:
         type: integer
       name:
         type: string
+      pipeline_dir:
+        description: |-
+          PipelineDir is relative to RepoPath and contains all .tf files that
+          together define the pipeline.
+        type: string
       pipeline_file:
+        description: |-
+          PipelineFile is the optional file opened by the editor. It is not used to
+          select which definitions are executed; all .tf files in PipelineDir load.
         type: string
       repo_path:
         type: string
@@ -138,15 +181,110 @@ definitions:
       webhook_secret:
         type: string
     type: object
+  store.Run:
+    properties:
+      changed:
+        items:
+          type: string
+        type: array
+      error:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: integer
+      include_manual:
+        type: boolean
+      output:
+        type: string
+      pipeline_def:
+        $ref: '#/definitions/store.PipelineSnapshot'
+      project_name:
+        type: string
+      started_at:
+        type: string
+      status:
+        description: running, passed, failed
+        type: string
+      task_results:
+        items:
+          $ref: '#/definitions/store.TaskResult'
+        type: array
+    type: object
+  store.SnapshotExec:
+    properties:
+      image:
+        type: string
+      repo:
+        type: string
+      script:
+        type: string
+    type: object
+  store.SnapshotRepo:
+    properties:
+      kind:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+    type: object
+  store.SnapshotTask:
+    properties:
+      depends_on:
+        items:
+          type: string
+        type: array
+      execute:
+        $ref: '#/definitions/store.SnapshotExec'
+      manual:
+        type: boolean
+      name:
+        type: string
+      trigger:
+        type: string
+    type: object
+  store.SnapshotVar:
+    properties:
+      default:
+        type: string
+      env:
+        type: string
+      job:
+        type: string
+      key:
+        type: string
+      masked:
+        type: boolean
+      protected:
+        type: boolean
+      repo:
+        type: string
+      scope:
+        type: string
+      value:
+        type: string
+    type: object
+  store.TaskResult:
+    properties:
+      duration:
+        type: integer
+      error:
+        type: string
+      name:
+        type: string
+      output:
+        type: string
+      status:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact:
     email: damian.giebas@gmail.com
-    name: MetaCI Team
-  description: |-
-    Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
-    Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
-  title: MetaCI API
+    name: Kestrix Team
+  description: GitLab webhook secret token for signature verification
+  title: Kestrix API
   version: 0.2.0
 paths:
   /api/generate:
@@ -264,7 +402,7 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/store.ProjectConfig'
-      summary: Create a project (point at a repo containing pipeline.tf)
+      summary: Create a project (point at a repo and its pipeline definition directory)
       tags:
       - projects
   /api/projects/{name}:
@@ -303,6 +441,31 @@ paths:
       summary: Get a project config
       tags:
       - projects
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Updated config
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/store.ProjectConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/store.ProjectConfig'
+      summary: Update a project config
+      tags:
+      - projects
   /api/projects/{name}/pipeline:
     get:
       parameters:
@@ -338,7 +501,7 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: Save pipeline HCL for a project (writes pipeline.tf to repo path)
+      summary: Save the editor pipeline file inside a project's pipeline directory
       tags:
       - projects
   /api/projects/{name}/resolve:
@@ -368,6 +531,49 @@ paths:
       summary: Resolve a project's triggers against changed repos
       tags:
       - projects
+  /api/projects/{name}/runs:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/store.Run'
+            type: array
+      summary: List pipeline runs for a project
+      tags:
+      - runs
+  /api/projects/{name}/runs/{runID}:
+    get:
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: runID
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/store.Run'
+      summary: Get a pipeline run by ID
+      tags:
+      - runs
   /api/resolve:
     post:
       consumes:
@@ -390,6 +596,20 @@ paths:
       summary: Resolve trigger expressions against changed repos
       tags:
       - pipeline
+  /api/runs:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/store.Run'
+            type: array
+      summary: List all pipeline runs across projects
+      tags:
+      - runs
   /api/validate:
     get:
       parameters:
@@ -425,7 +645,6 @@ paths:
       - webhooks
 securityDefinitions:
   WebhookToken:
-    description: GitLab webhook secret token for signature verification
     in: header
     name: X-Gitlab-Token
     type: apiKey

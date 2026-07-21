@@ -202,7 +202,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "ok",
-		"service":   "metaci",
+		"service":   "kestrix",
 		"pipelines": len(s.webhookLog),
 		"webhooks":  len(s.webhookLog),
 		"repos":     0,
@@ -672,11 +672,11 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 	var triggered []map[string]interface{}
 	for _, n := range nodes {
 		if n.Triggered {
-		triggered = append(triggered, map[string]interface{}{
-			"name":   n.Task.Name,
-			"reason": n.TriggeredReason,
-			"manual": n.Task.Manual,
-		})
+			triggered = append(triggered, map[string]interface{}{
+				"name":   n.Task.Name,
+				"reason": n.TriggeredReason,
+				"manual": n.Task.Manual,
+			})
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
