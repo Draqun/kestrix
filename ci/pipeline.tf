@@ -66,12 +66,21 @@ project "metaci" {
 
   # ─── Coverage ────────────────────────────────────────────────
 
-  ci_task "coverage" {
+  ci_task "coverage_be" {
     trigger    = "repo.metaci.changed"
-    depends_on = ["test", "test_fe"]
+    depends_on = ["test"]
     execute {
       repo   = "metaci"
-      script = "bash scripts/coverage.sh"
+      script = "bash scripts/coverage-be.sh"
+    }
+  }
+
+  ci_task "coverage_fe" {
+    trigger    = "repo.metaci.changed"
+    depends_on = ["test_fe"]
+    execute {
+      repo   = "metaci"
+      script = "bash scripts/coverage-fe.sh"
     }
   }
 
