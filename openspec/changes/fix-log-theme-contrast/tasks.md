@@ -6,4 +6,4 @@
 ## 2. Verify
 
 - [x] 2.1 Run `npm run build` to confirm no compilation errors
-- [ ] 2.2 Toggle light/dark mode on `/pipelines/runs/metaci/33` — confirm log background adapts correctly in both themes
+- [x] 2.2 Toggle light/dark mode on `/pipelines/runs/metaci/33` — confirm log background adapts correctly in both themes
