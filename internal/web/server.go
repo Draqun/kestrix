@@ -672,10 +672,11 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 	var triggered []map[string]interface{}
 	for _, n := range nodes {
 		if n.Triggered {
-			triggered = append(triggered, map[string]interface{}{
-				"name":   n.Task.Name,
-				"reason": n.TriggeredReason,
-			})
+		triggered = append(triggered, map[string]interface{}{
+			"name":   n.Task.Name,
+			"reason": n.TriggeredReason,
+			"manual": n.Task.Manual,
+		})
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

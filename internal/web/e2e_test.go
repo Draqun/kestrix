@@ -315,3 +315,81 @@ func TestRunProject(t *testing.T) {
 		t.Fatalf("task output = %q, err = %v", got, err)
 	}
 }
+
+func TestResolveProjectManual(t *testing.T) {
+	repoDir := t.TempDir()
+	pipelineDir := filepath.Join(repoDir, "ci")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pipeline := `project "manual-demo" {
+  ci_repo "app" {
+    path = "."
+    kind = "subpath"
+  }
+  ci_task "build" {
+    trigger = "repo.app.changed"
+    execute {
+      repo = "app"
+      script = "echo build"
+    }
+  }
+  ci_task "deploy" {
+    trigger = "repo.app.changed"
+    manual = true
+    depends_on = ["build"]
+    execute {
+      repo = "app"
+      script = "echo deploy"
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(pipeline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(Config{
+		ListenAddr: ":0",
+		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
+	})
+	if err := srv.store.Upsert(&store.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/projects/manual-demo/resolve", bytes.NewBufferString(`{"changed":["app"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Triggered []struct {
+			Name   string `json:"name"`
+			Manual bool   `json:"manual"`
+		} `json:"triggered"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Triggered) != 2 {
+		t.Fatalf("expected 2 triggered tasks, got %+v", resp.Triggered)
+	}
+
+	manualFound := false
+	for _, task := range resp.Triggered {
+		if task.Name == "deploy" {
+			manualFound = true
+			if !task.Manual {
+				t.Errorf("deploy task should be manual")
+			}
+		}
+		if task.Name == "build" && task.Manual {
+			t.Errorf("build task should not be manual")
+		}
+	}
+	if !manualFound {
+		t.Errorf("deploy task not found in triggered list")
+	}
+}
