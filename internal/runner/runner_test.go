@@ -393,7 +393,7 @@ func TestRunLocal_IncludeManual(t *testing.T) {
 		},
 		map[string]bool{"repo": true},
 		Options{WorkDir: dir, Stdout: &out, Stderr: &out, IncludeManual: true,
-			OnTaskStart:   func(string) {},
+			OnTaskStart:    func(string) {},
 			OnTaskComplete: func(r TaskResult) { completionFired = true },
 		},
 	)
