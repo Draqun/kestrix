@@ -13,7 +13,7 @@ GOCACHE     ?= $(CURDIR)/.gocache
 GOMODCACHE  ?= $(CURDIR)/.gomodcache
 GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
-GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) GOSUMDB=off
+GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) GOSUMDB=off PATH=$(GOBIN):$(PATH)
 
 .PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
@@ -42,6 +42,11 @@ build-release:
 test:
 	$(GOENV) $(GO) test ./... -v
 
+## test-one: Run all tests in a single package (use as `make test-one PKG=./internal/parser/`)
+test-one:
+	@test -n "$(PKG)" || (echo "Usage: make test-one PKG=./path/to/pkg"; exit 1)
+	$(GOENV) $(GO) test -v $(PKG)
+
 ## test-coverage: Run tests with coverage report
 test-coverage:
 	@mkdir -p coverage
@@ -56,7 +61,8 @@ fmt:
 ## fmt-check: Check formatting
 fmt-check:
 	@echo "Checking formatting..."
-	@test -z "$$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
+	@out=$$(gofmt -l . 2>/dev/null); \
+	if [ -n "$$out" ]; then echo "Files need formatting:"; echo "$$out"; exit 1; fi
 	@echo "✓ Formatting OK"
 
 ## vet: Run go vet

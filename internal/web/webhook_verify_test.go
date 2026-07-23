@@ -193,10 +193,9 @@ func computeHMAC(payload []byte, secret string) string {
 // errReader returns a synthetic error on every Read. Used to verify that
 // VerifyHMACSignature handles a body read failure (e.g. a broken pipe from
 // the agent) rather than panicking on the io.ReadAll path.
-type errReader struct {
-	read bool
-}
+type errReader struct{}
 
 func (errReader) Read(p []byte) (int, error) {
+	_ = p
 	return 0, errors.New("synthetic body read failure")
 }
