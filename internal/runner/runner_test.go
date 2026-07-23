@@ -25,6 +25,14 @@ func dockerAvailable() bool {
 	return cmd.Run() == nil
 }
 
+// bashAvailable mirrors dockerAvailable but checks for bash. RunLocal
+// shells out via bash -c so it needs a real bash (not busybox sh).
+// On alpine CI images bash isn't installed; those tests skip.
+func bashAvailable() bool {
+	_, err := exec.LookPath("bash")
+	return err == nil
+}
+
 // skipOnWindows gates tests that call sh / bash.
 func skipOnWindows(t *testing.T) {
 	t.Helper()
@@ -290,6 +298,7 @@ func TestRepoDir_Success(t *testing.T) {
 
 func TestRunLocal_PassAndScript(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte(""), 0o644); err != nil {
 		t.Fatal(err)
@@ -315,6 +324,7 @@ func TestRunLocal_PassAndScript(t *testing.T) {
 
 func TestRunLocal_Fail(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	var out bytes.Buffer
 	results, err := RunLocal(
@@ -337,6 +347,7 @@ func TestRunLocal_Fail(t *testing.T) {
 
 func TestRunLocal_ManualAndDepBlocked(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	project := model.Project{
 		Name:  "p1",
@@ -375,6 +386,7 @@ func TestRunLocal_ManualAndDepBlocked(t *testing.T) {
 
 func TestRunLocal_IncludeManual(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	var completionFired bool
 	var out bytes.Buffer
@@ -413,6 +425,7 @@ func TestRunLocal_IncludeManual(t *testing.T) {
 
 func TestRunLocal_IgnoreOnTaskCallbacks(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	// OnTaskStart and OnTaskComplete nil → branches where they're not
 	// called must still be safe.
 	dir := t.TempDir()
@@ -429,6 +442,7 @@ func TestRunLocal_IgnoreOnTaskCallbacks(t *testing.T) {
 
 func TestRunLocal_WorkdirDefault(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	// options.WorkDir == "" → defaults to "." which is the cwd of the test
 	// process. As long as the task produces no output and the call returns
 	// cleanly, the default branch was exercised.
@@ -445,6 +459,7 @@ func TestRunLocal_WorkdirDefault(t *testing.T) {
 
 func TestRunLocal_InvalidWorkdir(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	// nonexistent workdir → error path
 	_, err := RunLocal(context.Background(),
 		simpleProject("p", "repo.repo.changed", `:`),
@@ -458,6 +473,7 @@ func TestRunLocal_InvalidWorkdir(t *testing.T) {
 
 func TestRunLocal_ResolveFails(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	// Trigger referencing an undeclared repo fails Validate() before
 	// Resolve() is reached, but the runner still surfaces a wrapped
 	// pipeline error. We only care that RunLocal surfaces whatever
@@ -482,6 +498,7 @@ func TestRunLocal_ResolveFails(t *testing.T) {
 
 func TestRunOne_HappyPath(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	var completionFired bool
 	var out bytes.Buffer
@@ -511,6 +528,7 @@ func TestRunOne_HappyPath(t *testing.T) {
 
 func TestRunOne_TaskNotFound(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	project := simpleProject("p", "repo.repo.changed", `:`)
 	_, err := RunOne(context.Background(), project, "ghost",
 		Options{WorkDir: t.TempDir()},
@@ -522,6 +540,7 @@ func TestRunOne_TaskNotFound(t *testing.T) {
 
 func TestRunLocal_VariablesInjected(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	// Project's repo name is "repo"; buildVars must bind variables to
 	// that same repo, otherwise Get() returns nothing.
@@ -550,6 +569,7 @@ func TestRunLocal_VariablesInjected(t *testing.T) {
 
 func TestRunLocal_WorkdirIsFile(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "afile"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -568,6 +588,7 @@ func TestRunLocal_WorkdirIsFile(t *testing.T) {
 
 func TestRunLocal_FailPropagatesCompletionCallback(t *testing.T) {
 	skipOnWindows(t)
+	if !bashAvailable() { t.Skip("bash not available") }
 	dir := t.TempDir()
 	var completionFired bool
 	var out bytes.Buffer
