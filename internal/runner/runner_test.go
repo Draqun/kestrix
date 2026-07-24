@@ -774,6 +774,182 @@ func TestRunLocal_FailPropagatesCompletionCallback(t *testing.T) {
 	}
 }
 
+// TestRunLocal_ManualSkipFiresCallback covers the [MANUAL] skip path
+// (line 243-245 in runner.go): when a task is manual and IncludeManual
+// is false, RunLocal emits TaskResult{Status:"manual"} and fires
+// OnTaskComplete on that result. Existing TestRunLocal_ManualAndDepBlocked
+// passes nil OnTaskComplete and so never exercises the callback branch.
+func TestRunLocal_ManualSkipFiresCallback(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	var fired TaskResult
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "manual", Trigger: "repo.repo.changed", Manual: true,
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo manual`}},
+		},
+	}
+	results, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir,
+			OnTaskComplete: func(r TaskResult) { fired = r }},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != "manual" {
+		t.Fatalf("results = %+v, want one manual", results)
+	}
+	if fired.Status != "manual" || fired.Name != "manual" {
+		t.Errorf("OnTaskComplete fired with %+v, want {manual manual}", fired)
+	}
+}
+
+// TestRunLocal_DependencySkipFiresCallback covers the [SKIP] branch
+// when a dep failed (line 260-262 in runner.go): the dependent task's
+// OnTaskComplete is fired with Status="skipped".
+func TestRunLocal_DependencySkipFiresCallback(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	var fired []TaskResult
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"build"},
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
+		},
+	}
+	_, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir,
+			OnTaskComplete: func(r TaskResult) { fired = append(fired, r) }},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	byName := map[string]TaskResult{}
+	for _, r := range fired {
+		byName[r.Name] = r
+	}
+	if byName["dependent"].Status != "skipped" {
+		t.Errorf("dependent callback = %+v, want skipped", byName["dependent"])
+	}
+	if !strings.Contains(byName["dependent"].Error, "dependency failed") {
+		t.Errorf("dependent error = %q, want 'dependency failed'", byName["dependent"].Error)
+	}
+}
+
+// TestRunLocal_OrderFailureAfterResolve covers the order() error branch
+// in RunLocal (line 227-229). To reach it we need Validate and Resolve
+// both to pass but `order(nodes)` to fail — which happens when a task
+// is triggered with a DependsOn pointing at a task that Resolve dropped
+// (non-triggered). DAG's detectCycles sees the dep target exists by
+// name in project.Tasks and so does not flag it as unknown, but Resolve
+// removes the non-triggered task from the `nodes` slice and order's
+// inner lookup `byName[name]` misses.
+func TestRunLocal_OrderFailureAfterResolve(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			// Non-triggered (negated expr is false because repo IS changed) —
+			// Resolve omits it from nodes, but detectCycles sees it exists.
+			{Name: "nontrigger", Trigger: "!repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+			{Name: "downstream", Trigger: "repo.repo.changed",
+				DependsOn: []string{"nontrigger"},
+				Execute:   model.ExecuteSpec{Repo: "repo", Script: `:`}},
+		},
+	}
+	_, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir},
+	)
+	if err == nil {
+		t.Fatal("expected order error from untriggered dependency")
+	}
+	if !strings.Contains(err.Error(), "not triggered") {
+		t.Errorf("expected 'not triggered' error, got %v", err)
+	}
+}
+
+// TestRunLocal_RepoDirFailsInLoop covers the in-loop repoDir error path
+// (line 267-269 in runner.go): when the resolved task points at a git
+// repo, repoDir returns "cannot be run locally" mid-iteration. Validate
+// passes (repo exists in project.Repos), Resolve passes (trigger syntax
+// is fine), order passes (no depends issues), and the error fires only
+// at repoDir inside the task loop.
+func TestRunLocal_RepoDirFailsInLoop(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	project := model.Project{
+		Name: "p1",
+		Repos: []model.Repo{
+			{Name: "remote", Path: ".", Kind: "git"},
+		},
+		Tasks: []model.Task{
+			{Name: "failme", Trigger: "repo.remote.changed",
+				Execute: model.ExecuteSpec{Repo: "remote", Script: `:`}},
+		},
+	}
+	results, err := RunLocal(context.Background(), project,
+		map[string]bool{"remote": true},
+		Options{WorkDir: dir},
+	)
+	if err == nil {
+		t.Fatal("expected repoDir error inside RunLocal loop")
+	}
+	if !strings.Contains(err.Error(), "cannot be run locally") {
+		t.Errorf("expected git-repo error, got %v", err)
+	}
+	// No tasks should be reported when repoDir fails on the only task.
+	if len(results) != 0 {
+		t.Errorf("expected 0 partial results, got %d", len(results))
+	}
+}
+
+// Unreachable-branches documentation for RunLocal (lines 212-213, 223-224,
+// and 272-273 in runner.go):
+//   - filepath.Abs error branch (line 212-213): filepath.Abs only fails
+//     when os.Getwd() fails, which requires the current working directory
+//     to have been removed or the underlying filesystem unmounted — both
+//     are outside the reach of portable unit tests. Left uncovered.
+//   - Resolve error branch (line 223-224): Validate (RunLocal line 205)
+//     runs the same EvaluateTrigger + detectCycles passes against the
+//     same Engine. Any input that makes Resolve's EvaluateTrigger/Cycle
+//     fail would have been caught by Validate moments earlier; the only
+//     remaining difference is the `changed` set passed to EvaluateTrigger
+//     (empty vs caller-provided), but EvaluateTrigger's knownRepos is
+//     always derived from project.Repos, not from `changed`, so the error
+//     outcome is identical. Reachable only by an Engine whose definition
+//     mutates between the two calls — not a supported state of this
+//     package. Defensive guard, left uncovered.
+//   - relDir == "" fallback (line 272-273): filepath.Rel between two
+//     equal paths always returns "." (never "" — stdlib guarantee),
+//     so `if relDir == ""` is unreachable on supported platforms.
+//
+// These match the documented pattern in the go-coverage-to-100 skill
+// (§4 unreachable-branch annotation): we annotate rather than fake.
+
 // internalCfgForVars / buildVars are small helpers below.
 func internalCfgForVars() map[string]string { return map[string]string{"MY_VAR": "value-good"} }
 func buildVars(cfg map[string]string, repo string) *variables.Store {
