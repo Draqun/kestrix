@@ -223,7 +223,6 @@ func TestLoadNonExistentError(t *testing.T) {
 // Coverage notes (in-tree): these four branches are listed in the
 // coverage report and explicitly tagged "unreachable in normal use".
 
-
 // Save should still work even when the path lies in an existing
 // directory (MkdirAll is a no-op).
 func TestSaveIntoExistingDir(t *testing.T) {
