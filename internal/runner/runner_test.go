@@ -558,6 +558,138 @@ func TestRunOne_TaskNotFound(t *testing.T) {
 	}
 }
 
+// When the task's script exits non-zero, RunOne must surface the error
+// (with the task name in the message), mark result.Status="failed",
+// and still fire OnTaskComplete.
+func TestRunOne_FailedScript(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	var completion TaskResult
+	var out bytes.Buffer
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "boom", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 7`}},
+		},
+	}
+	res, err := RunOne(context.Background(), project, "boom",
+		Options{WorkDir: dir, Stdout: &out, Stderr: &out,
+			OnTaskStart:    func(string) {},
+			OnTaskComplete: func(r TaskResult) { completion = r }},
+	)
+	if err == nil {
+		t.Fatal("expected error from non-zero exit")
+	}
+	if !strings.Contains(err.Error(), `"boom"`) {
+		t.Errorf("error should include task name, got %v", err)
+	}
+	if res.Status != "failed" {
+		t.Errorf("status = %q, want failed", res.Status)
+	}
+	if completion.Status != "failed" {
+		t.Errorf("OnTaskComplete status = %q, want failed", completion.Status)
+	}
+}
+
+// RunOne resolves the task's Execute.Repo against project.Repos. Missing
+// repo entries fall through to a zero-value model.Repo, which forces
+// repoDir's "not a directory" branch via Path="." pointing at a file.
+func TestRunOne_MissingRepo(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	root := t.TempDir()
+	// Put a regular file in the root so . is "not a directory" — repoDir
+	// joins the (default) Path="." onto WorkDir and expects a directory.
+	if err := os.WriteFile(filepath.Join(root, "block"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "other", Path: ".", Kind: "subpath"}}, // declares "other", not "repo"
+		Tasks: []model.Task{
+			{Name: "ghost", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+		},
+	}
+	_, err := RunOne(context.Background(), project, "ghost",
+		Options{WorkDir: filepath.Join(root, "block")},
+	)
+	if err == nil {
+		t.Fatal("expected error for undeclared repo")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("expected 'not a directory' in error, got %v", err)
+	}
+}
+
+// A git-typed repo cannot be run locally; RunOne must surface that
+// guard from repoDir instead of shelling out.
+func TestRunOne_GitRepoRejected(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "remote", Path: ".", Kind: "git"}},
+		Tasks: []model.Task{
+			{Name: "remote_task", Trigger: "remote.head.changed",
+				Execute: model.ExecuteSpec{Repo: "remote", Script: `:`}},
+		},
+	}
+	_, err := RunOne(context.Background(), project, "remote_task",
+		Options{WorkDir: t.TempDir()},
+	)
+	if err == nil {
+		t.Fatal("expected git-repo error")
+	}
+	if !strings.Contains(err.Error(), "cannot be run locally") {
+		t.Errorf("expected local-only error, got %v", err)
+	}
+}
+
+// TestRunOne_Defaults covers the small defensive default branches:
+// nil Stderr gets substituted with io.Discard, nil Stdout ditto. The
+// `if relDir == ""` guard at line 481 looks like it could be reached by
+// feeding WorkDir equal to the repo's resolved taskDir, but in practice
+// `filepath.Rel"between two equal paths always returns "." — never ""` —
+// Go's stdlib guarantees that, so the branch is unreachable on supported
+// platforms. Left uncovered intentionally: documented, not faked.
+func TestRunOne_Defaults(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "t", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+		},
+	}
+	res, err := RunOne(context.Background(), project, "t",
+		Options{WorkDir: cwd}, // Stderr and Stdout intentionally nil
+	)
+	if err != nil {
+		t.Fatalf("RunOne: %v", err)
+	}
+	if res.Status != "passed" {
+		t.Errorf("status = %q, want passed", res.Status)
+	}
+}
+
 func TestRunLocal_VariablesInjected(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {
