@@ -265,3 +265,92 @@ func TestHandleGetProjectDefinition_Happy(t *testing.T) {
 		t.Errorf("response missing 'Tasks' field: %v", body)
 	}
 }
+
+func TestHandleGetProject_Happy(t *testing.T) {
+	srv, _ := savePipelineServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/projects/demo", nil)
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("content-type = %q, want application/json", ct)
+	}
+	if !strings.Contains(w.Body.String(), `"name":"demo"`) {
+		t.Errorf("body = %q, want the project JSON", w.Body.String())
+	}
+}
+
+func TestHandleGetProject_NotFound(t *testing.T) {
+	srv := systemHandlerServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/projects/nope", nil)
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleUpdateProject_Happy(t *testing.T) {
+	srv, _ := savePipelineServer(t)
+	// Update with empty optional fields -> they should be inherited
+	// from the existing record.
+	body := `{}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/api/projects/demo",
+		strings.NewReader(body))
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpdateProject_NotFound(t *testing.T) {
+	srv := systemHandlerServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/api/projects/nope",
+		strings.NewReader(`{}`))
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleUpdateProject_InvalidJSON(t *testing.T) {
+	srv, _ := savePipelineServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/api/projects/demo",
+		strings.NewReader("not json"))
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleDeleteProject_Happy(t *testing.T) {
+	srv, _ := savePipelineServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/api/projects/demo", nil)
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestHandleDeleteProject_NotFound(t *testing.T) {
+	srv := systemHandlerServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/api/projects/nope", nil)
+	srv.router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
