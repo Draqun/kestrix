@@ -9,8 +9,16 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
+
+// TaskResult is an alias for domain.TaskResult, the single type used
+// across runner, store, and service layers.
+type TaskResult = domain.TaskResult
+
+// Run is an alias for domain.Run.
+type Run = domain.Run
 
 // PGStore provides PostgreSQL-backed project configuration storage.
 type PGStore struct {
@@ -208,106 +216,8 @@ func (s *PGStore) List() ([]string, error) {
 	return names, rows.Err()
 }
 
-// Run represents a single pipeline execution.
-type Run struct {
-	ID            int               `json:"id"`
-	ProjectName   string            `json:"project_name"`
-	Status        string            `json:"status"` // running, passed, failed
-	Changed       []string          `json:"changed"`
-	IncludeManual bool              `json:"include_manual"`
-	PipelineDef   *PipelineSnapshot `json:"pipeline_def,omitempty"`
-	Output        string            `json:"output"`
-	Error         string            `json:"error,omitempty"`
-	TaskResults   []TaskResult      `json:"task_results,omitempty"`
-	StartedAt     time.Time         `json:"started_at"`
-	FinishedAt    *time.Time        `json:"finished_at,omitempty"`
-}
-
-// TaskResult is a per-task execution record stored in the runs table.
-type TaskResult struct {
-	Name     string        `json:"name"`
-	Status   string        `json:"status"`
-	Output   string        `json:"output"`
-	Error    string        `json:"error,omitempty"`
-	Duration time.Duration `json:"duration" swaggertype:"primitive,integer"`
-}
-
-// PipelineSnapshot captures the pipeline definition at the time of a run
-// so it can be reconstructed historically in the UI.
-type PipelineSnapshot struct {
-	Name         string         `json:"name"`
-	Repos        []SnapshotRepo `json:"repos"`
-	Tasks        []SnapshotTask `json:"tasks"`
-	DefaultImage string         `json:"default_image"`
-	Variables    []SnapshotVar  `json:"variables,omitempty"`
-}
-
-type SnapshotRepo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Kind string `json:"kind"`
-}
-
-type SnapshotTask struct {
-	Name      string       `json:"name"`
-	Trigger   string       `json:"trigger"`
-	DependsOn []string     `json:"depends_on,omitempty"`
-	Manual    bool         `json:"manual"`
-	Execute   SnapshotExec `json:"execute"`
-}
-
-type SnapshotExec struct {
-	Repo   string `json:"repo"`
-	Script string `json:"script"`
-	Image  string `json:"image"`
-}
-
-type SnapshotVar struct {
-	Key       string `json:"key"`
-	Value     string `json:"value,omitempty"`
-	Default   string `json:"default,omitempty"`
-	Scope     string `json:"scope,omitempty"`
-	Repo      string `json:"repo,omitempty"`
-	Job       string `json:"job,omitempty"`
-	Protected bool   `json:"protected,omitempty"`
-	Masked    bool   `json:"masked,omitempty"`
-	Env       string `json:"env,omitempty"`
-}
-
-// SnapshotFromProject converts a model.Project into a PipelineSnapshot.
-func SnapshotFromProject(proj *model.Project) *PipelineSnapshot {
-	snap := &PipelineSnapshot{
-		Name:         proj.Name,
-		DefaultImage: proj.DefaultImage,
-	}
-	for _, r := range proj.Repos {
-		snap.Repos = append(snap.Repos, SnapshotRepo{Name: r.Name, Path: r.Path, Kind: r.Kind})
-	}
-	for _, t := range proj.Tasks {
-		st := SnapshotTask{
-			Name:      t.Name,
-			Trigger:   t.Trigger,
-			DependsOn: t.DependsOn,
-			Manual:    t.Manual,
-			Execute: SnapshotExec{
-				Repo:   t.Execute.Repo,
-				Script: t.Execute.Script,
-				Image:  t.Execute.Image,
-			},
-		}
-		snap.Tasks = append(snap.Tasks, st)
-	}
-	for _, v := range proj.Variables {
-		snap.Variables = append(snap.Variables, SnapshotVar{
-			Key: v.Key, Value: v.Value, Default: v.Default, Scope: v.Scope,
-			Repo: v.Repo, Job: v.Job, Protected: v.Protected, Masked: v.Masked, Env: v.Env,
-		})
-	}
-	return snap
-}
-
 // CreateRun inserts a new run and returns its ID.
-func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *PipelineSnapshot) (int, error) {
+func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project) (int, error) {
 	changedJSON := "[]"
 	if len(changed) > 0 {
 		b, _ := json.Marshal(changed)
@@ -401,7 +311,7 @@ func (s *PGStore) CancelRun(id int) error {
 	var snapJSON sql.NullString
 	_ = s.db.QueryRow(`SELECT pipeline_def FROM runs WHERE id = $1`, id).Scan(&snapJSON)
 	if snapJSON.Valid {
-		var snap PipelineSnapshot
+		var snap model.Project
 		if json.Unmarshal([]byte(snapJSON.String), &snap) == nil {
 			for _, t := range snap.Tasks {
 				depMap[t.Name] = t.DependsOn
@@ -520,7 +430,7 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 	json.Unmarshal([]byte(changedJSON), &r.Changed)
 	json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 	if pipelineDefJSON.Valid {
-		var snap PipelineSnapshot
+		var snap model.Project
 		if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 			r.PipelineDef = &snap
 		}
@@ -570,7 +480,7 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		if pipelineDefJSON.Valid {
-			var snap PipelineSnapshot
+			var snap model.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 				r.PipelineDef = &snap
 			}
@@ -609,7 +519,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		if pipelineDefJSON.Valid {
-			var snap PipelineSnapshot
+			var snap model.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 				r.PipelineDef = &snap
 			}

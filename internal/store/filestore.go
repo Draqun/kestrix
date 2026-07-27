@@ -10,9 +10,19 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 )
 
+// ProjectConfig is an alias for domain.ProjectConfig so existing call sites
+// in the web layer keep compiling while Store migrates to domain.ProjectStore.
+type ProjectConfig = domain.ProjectConfig
+
+// ExtraRepo is an alias for domain.ExtraRepo.
+type ExtraRepo = domain.ExtraRepo
+
 // Store is the interface for project configuration storage.
+// Kept for backwards compatibility; prefer domain.ProjectStore.
 type Store interface {
 	Load() (map[string]*ProjectConfig, error)
 	Save(projects map[string]*ProjectConfig) error
@@ -22,34 +32,6 @@ type Store interface {
 	Delete(name string) error
 	List() ([]string, error)
 	ListAllRuns(limit int) ([]Run, error)
-}
-
-// ProjectConfig describes a registered project: where its repo lives,
-// which pipeline file to use, and its GitLab integration settings.
-type ProjectConfig struct {
-	Name     string `json:"name"`
-	RepoPath string `json:"repo_path"`
-	RepoURL  string `json:"repo_url,omitempty"`
-	// PipelineDir is relative to RepoPath and contains all .tf files that
-	// together define the pipeline.
-	PipelineDir string `json:"pipeline_dir,omitempty"`
-	// PipelineFile is the optional file opened by the editor. It is not used to
-	// select which definitions are executed; all .tf files in PipelineDir load.
-	PipelineFile    string `json:"pipeline_file"`
-	GitLabProjectID int    `json:"gitlab_project_id,omitempty"`
-	DefaultBranch   string `json:"default_branch,omitempty"`
-	WebhookSecret   string `json:"webhook_secret,omitempty"`
-	CreatedAt       string `json:"created_at"`
-	// ExtraRepos lists additional repositories beyond the primary one.
-	ExtraRepos []ExtraRepo `json:"extra_repos,omitempty"`
-}
-
-// ExtraRepo is an additional repository that participates in the project's pipeline.
-type ExtraRepo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	URL  string `json:"url,omitempty"`
-	Kind string `json:"kind,omitempty"` // "subpath" or "git"
 }
 
 // FileStore provides atomic, file-backed project configuration storage.

@@ -258,11 +258,11 @@ func TestHandleGetProjectDefinition_Happy(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := body["Name"]; !ok {
-		t.Errorf("response missing 'Name' field: %v", body)
+	if _, ok := body["name"]; !ok {
+		t.Errorf("response missing 'name' field: %v", body)
 	}
-	if _, ok := body["Tasks"]; !ok {
-		t.Errorf("response missing 'Tasks' field: %v", body)
+	if _, ok := body["tasks"]; !ok {
+		t.Errorf("response missing 'tasks' field: %v", body)
 	}
 }
 

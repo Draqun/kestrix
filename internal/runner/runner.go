@@ -13,18 +13,14 @@ import (
 	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/variables"
 )
 
-// TaskResult captures the outcome of a single task execution.
-type TaskResult struct {
-	Name     string        `json:"name"`
-	Status   string        `json:"status"` // passed, failed, skipped
-	Output   string        `json:"output"`
-	Error    string        `json:"error,omitempty"`
-	Duration time.Duration `json:"duration"`
-}
+// TaskResult is an alias for domain.TaskResult, the single type used
+// across runner, store, and service layers.
+type TaskResult = domain.TaskResult
 
 // Options controls a local pipeline run.
 type Options struct {
