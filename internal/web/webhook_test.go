@@ -3,6 +3,8 @@ package web
 import (
 	"encoding/json"
 	"testing"
+
+	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 func TestParseGitLabPushEvent(t *testing.T) {
@@ -101,6 +103,18 @@ func TestFileClassifierCodeChange(t *testing.T) {
 	if fc.IsCode("LICENSE") {
 		t.Error("expected LICENSE to NOT be code")
 	}
+	// A file extension that matches no CodePatterns and is not on the
+	// exclude list must fall through and return false. This branch on the
+	// end of IsCode was previously uncovered.
+	if fc.IsCode("phony.unknown") {
+		t.Error("expected unknown extension to NOT be code (fall-through branch)")
+	}
+	// HasPrefix on ExcludePatterns: paths beginning with a slash-prefix like
+	// "docs/" should be excluded even when the rest doesn't carry an
+	// excluded suffix.
+	if fc.IsCode("docs/internal/notes.txt") {
+		t.Error("expected docs/ prefix to exclude via HasPrefix")
+	}
 }
 
 func TestFileClassifierHasCodeChanges(t *testing.T) {
@@ -133,6 +147,72 @@ func TestFileClassifierChangedRepos(t *testing.T) {
 	}
 	if result["service_b"] {
 		t.Error("expected service_b to NOT have code changes (docs only)")
+	}
+}
+
+// TestFileClassifierMatchRepos exercises MatchRepos across both supported
+// repo kinds (subpath via path, and git repos with no path). Each branch of
+// the if/else on repo.Kind/Path needs at least one assertion so the function
+// reaches full line coverage.
+func TestFileClassifierMatchRepos(t *testing.T) {
+	fc := DefaultClassifier()
+
+	tests := []struct {
+		name     string
+		files    map[string]bool
+		repos    []model.Repo
+		expected []string
+	}{
+		{
+			name:  "git repo with code change matches",
+			files: map[string]bool{"handler.go": true},
+			// Git repo: Kind != "subpath", Path == "". Whole repo matches
+			// whenever HasCodeChanges returns true.
+			repos:    []model.Repo{{Name: "app", Kind: "git"}},
+			expected: []string{"app"},
+		},
+		{
+			name:  "git repo with no code changes does not match",
+			files: map[string]bool{"docs/README.md": true},
+			repos: []model.Repo{{Name: "app", Kind: "git"}},
+		},
+		{
+			name:  "subpath repo with code file under prefix matches",
+			files: map[string]bool{"services/auth/main.go": true},
+			repos: []model.Repo{
+				{Name: "auth", Kind: "subpath", Path: "services/auth"},
+			},
+			expected: []string{"auth"},
+		},
+		{
+			name:  "subpath repo with only docs under prefix does not match",
+			files: map[string]bool{"services/auth/README.md": true},
+			repos: []model.Repo{
+				{Name: "auth", Kind: "subpath", Path: "services/auth"},
+			},
+		},
+		{
+			name:  "file matching the repo path exactly still wins",
+			files: map[string]bool{"packages/foo": true, "packages/foo/main.go": true},
+			repos: []model.Repo{
+				{Name: "foo", Kind: "subpath", Path: "packages/foo"},
+			},
+			expected: []string{"foo"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fc.MatchRepos(tt.files, tt.repos)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("matched = %v, want %v", got, tt.expected)
+			}
+			for i, name := range got {
+				if name != tt.expected[i] {
+					t.Errorf("matched[%d] = %q, want %q", i, name, tt.expected[i])
+				}
+			}
+		})
 	}
 }
 

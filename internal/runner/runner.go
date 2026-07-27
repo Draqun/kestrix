@@ -209,6 +209,11 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		opts.WorkDir = "."
 	}
 	workDir, err := filepath.Abs(opts.WorkDir)
+	// filepath.Abs on a non-empty relative path that resolves cleanly
+	// never errs on POSIX; t.TempDir()-supplied absolute paths also
+	// can't fail this. Defensive guard; branch is unreachable in the
+	// current test harness. See runner_test.go header for the
+	// "annotate, don't fake" convention applied project-wide.
 	if err != nil {
 		return nil, fmt.Errorf("resolve workdir: %w", err)
 	}
@@ -220,6 +225,10 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 	}
 
 	nodes, err := dag.New(project).Resolve(changed)
+	// Validate() above already exercised trigger syntax and cycle
+	// detection; Resolve only fails when a task not in the changed-set
+	// depends on a node that is — but Validate rejects such degenerate
+	// graphs. Branch is unreachable given current DAG invariants.
 	if err != nil {
 		return nil, fmt.Errorf("resolve pipeline: %w", err)
 	}
@@ -452,6 +461,8 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		opts.WorkDir = "."
 	}
 	workDir, err := filepath.Abs(opts.WorkDir)
+	// See RunLocal: filepath.Abs on a clean POSIX path doesn't fail in
+	// practice. Defensive guard; the error branch is unreachable.
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("resolve workdir: %w", err)
 	}
@@ -477,6 +488,9 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		return TaskResult{}, fmt.Errorf("task %q: %w", task.Name, err)
 	}
 	relDir, _ := filepath.Rel(workDir, taskDir)
+	// filepath.Rel(base, base) == "." on every supported platform; the
+	// empty-string fallback only kicks in for mixed weird inputs that
+	// Resolve/Validate already rejected. Defensive guard only.
 	if relDir == "" {
 		relDir = "."
 	}

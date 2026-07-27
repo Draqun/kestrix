@@ -24,6 +24,11 @@ coverage/
 .env
 .air/
 
+# Local Go toolchain caches (portable, see Makefile)
+.gocache/
+.gomodcache/
+.gopath/
+
 # Binaries
 *.exe
 *.exe~

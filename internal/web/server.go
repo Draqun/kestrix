@@ -423,7 +423,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		"pagination": paginationMeta{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleCreateProject godoc
