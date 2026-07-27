@@ -124,7 +124,7 @@ func TestLoadInvalidJSON(t *testing.T) {
 
 	// Reach Load() through Get() so the read path is the same as in
 	// production.
-	_, err := readFileStore(path).Get("anything")
+	_, err := pointFileStore(path).Get("anything")
 	if err == nil {
 		t.Fatal("expected error from Load on invalid JSON")
 	}
@@ -168,17 +168,6 @@ func TestLoadReadError(t *testing.T) {
 	}
 }
 
-// TestNewMkdirError covers the MkdirAll err path, by pointing at a
-// path whose parent is a read-only directory.
-func TestNewMkdirError(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root; permission-denied tests would dodge root")
-	}
-	if _, err := New("/proc/no_new_dir/x.json"); err == nil {
-		t.Skip("dodged filesystem quirk; branch deemed unreachable in this sandbox")
-	}
-}
-
 // TestUpsertPipelineDirMigration covers the PipelineDir defaulting
 // branch that splits PipelineFile into dir + base when both unset.
 func TestUpsertPipelineDirMigration(t *testing.T) {
@@ -203,27 +192,6 @@ func TestUpsertPipelineDirMigration(t *testing.T) {
 	}
 }
 
-// TestDeleteExists covers the delete-and-confirm path; pre-existing
-// tests already exercise this, but the additional FileStore.Delete
-// dependency on saveLocked is covered here explicitly.
-func TestDeleteExists(t *testing.T) {
-	dir := t.TempDir()
-	st, _ := New(filepath.Join(dir, "p.json"))
-	if err := st.Upsert(&ProjectConfig{Name: "p", RepoPath: "/x"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Delete("p"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	got, err := st.Get("p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != nil {
-		t.Errorf("expected deleted, got %+v", got)
-	}
-}
-
 // TestListSorted is a small sanity test that List returns the names.
 func TestListSorted(t *testing.T) {
 	dir := t.TempDir()
@@ -243,9 +211,4 @@ func TestListSorted(t *testing.T) {
 	}
 }
 
-// readFileStore is a tiny helper to construct a FileStore pointing at
-// an arbitrary path; tests need this when verifying Load error paths
-// for paths set up outside the FileStore's own New() flow.
-func readFileStore(path string) *FileStore {
-	return &FileStore{path: path}
-}
+
