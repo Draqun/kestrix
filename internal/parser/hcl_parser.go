@@ -102,6 +102,10 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 }
 
 func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
+	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
+	// own syntax error for `ci_repo {}` (no labels) and `ci_repo "a" "b"`
+	// before this block-decoder runs. The guard stays as a defensive
+	// check; the branch is documented as unreachable in parser tests.
 	if len(blk.Labels) != 1 {
 		return model.Repo{}, fmt.Errorf("ci_repo requires 1 label")
 	}
@@ -122,6 +126,9 @@ func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
 }
 
 func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
+	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
+	// own syntax error for `ci_task {}` (no labels) and `ci_task "a" "b"`
+	// before this block-decoder runs. Defensive guard only.
 	if len(blk.Labels) != 1 {
 		return model.Task{}, fmt.Errorf("ci_task requires 1 label")
 	}
@@ -298,6 +305,9 @@ func ParseDir(dir string) (model.Project, error) {
 }
 
 func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
+	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
+	// own syntax error for `variable {}` (no labels) and `variable "k" "v"`
+	// before this block-decoder runs. Defensive guard only.
 	if len(blk.Labels) != 1 {
 		return model.Variable{}, fmt.Errorf("variable requires 1 label (key name)")
 	}

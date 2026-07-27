@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -210,5 +211,35 @@ func TestParseDirIgnoresNonTF(t *testing.T) {
 	}
 	if len(proj.Repos) != 1 {
 		t.Errorf("repos = %d, want 1 (should ignore .md files)", len(proj.Repos))
+	}
+}
+
+// Exercise decodeProjectBlock's label-count guard: a project block
+// with two labels must be rejected explicitly (the HCL parser itself
+// would reject most other block shapes via syntax errors that get
+// caught earlier in the pipeline).
+func TestProjectBlockRejectsExtraLabels(t *testing.T) {
+	src := `project "alpha" "beta" {
+  ci_repo "r" { path = "r" }
+}`
+	_, err := ParseSource([]byte(src), "labels.tf")
+	if err == nil {
+		t.Fatal("expected ParseSource to reject project with two labels")
+	}
+}
+
+// Exercise toString's "unsupported cty type" branch (L242): an
+// attribute whose literal evaluates to a cty.Number (not string,
+// not bool) hits the default error return inside toString.
+func TestUnsupportedLiteralCtyType(t *testing.T) {
+	src := `project "p" {
+  ci_repo "r" { path = 42 }
+}`
+	_, err := ParseSource([]byte(src), "num.tf")
+	if err == nil {
+		t.Fatal("expected ParseSource to reject numeric path attribute")
+	}
+	if !strings.Contains(err.Error(), "unsupported cty type") {
+		t.Errorf("err = %v, want it to mention unsupported cty type", err)
 	}
 }

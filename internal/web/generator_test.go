@@ -108,6 +108,15 @@ func TestDeriveStages(t *testing.T) {
 			},
 			expected: []string{"build", "test", "deploy"},
 		},
+		{
+			// Operationally a degenerate case: no tasks means there is no
+			// pipeline, but generateGitLabCI still has to declare at least one
+			// stage so the YAML is well-formed. deriveStages encapsulates that
+			// fallback by injecting a single "build" stage.
+			name:     "empty nodes falls back to build",
+			nodes:    nil,
+			expected: []string{"build"},
+		},
 	}
 
 	for _, tt := range tests {

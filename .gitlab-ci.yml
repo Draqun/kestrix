@@ -33,6 +33,11 @@ staticcheck:
 
 test:
   stage: test
+  # bash is needed for internal/runner tests that shell out via `bash -c`.
+  # golang:1.25-alpine ships busybox sh only — install explicit bash
+  # because the runner tests skip when bash is unavailable.
+  before_script:
+    - apk add --no-cache bash
   script:
     - go test ./... -v -coverprofile=coverage.out -covermode=atomic
     - go tool cover -func=coverage.out

@@ -6,13 +6,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/store"
 )
+
+// dockerAvailable mirrors the helper in internal/runner/runner_test.go and lets
+// us skip end-to-end tests that depend on a working Docker daemon. Running the
+// pipeline via the dispatcher requires Docker, so without it the test would
+// block until the polling deadline instead of meaningfully exercising the
+// endpoint.
+func dockerAvailable() bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		return false
+	}
+	return exec.Command("docker", "info").Run() == nil
+}
 
 func TestFullWebhookFlow(t *testing.T) {
 	// 1. Create a temp pipeline directory with a real .tf file.
@@ -252,6 +269,9 @@ project "tf-demo" {
 }
 
 func TestRunProject(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
 	repoDir := t.TempDir()
 	pipelineDir := filepath.Join(repoDir, ".ci")
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {

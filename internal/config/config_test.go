@@ -127,3 +127,121 @@ func TestApplyFlagsEmpty(t *testing.T) {
 		t.Errorf("empty ApplyFlags changed Branch to %q", cfg.Branch)
 	}
 }
+
+// DefaultDir hits os.UserHomeDir + MkdirAll. We can't easliy fake
+// os.UserHomeDir without injecting a HOME override, so we exercise
+// the happy path and trust that mkdir/fail surfaces through fmt.Errorf.
+func TestDefaultDirHappyPath(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	dir, err := DefaultDir()
+	if err != nil {
+		t.Fatalf("DefaultDir: %v", err)
+	}
+	want := filepath.Join(tmpHome, ".kestrix")
+	if dir != want {
+		t.Errorf("DefaultDir = %q, want %q", dir, want)
+	}
+	// The directory should actually exist as a side-effect.
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Errorf("DefaultDir didn't actually create the directory: %v", err)
+	}
+}
+
+// Unsetting HOME causes UserHomeDir to return an error — that
+// triggers DefaultDir's first err branch.
+func TestDefaultDirUnsetHome(t *testing.T) {
+	// Setting HOME="" matches what os.UserHomeDir codes to fail on.
+	// On Linux, UserHomeDir returns an error only when HOME is not set.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	// Then unset it AFTER t.Setenv's deferred restore has been copied.
+	os.Unsetenv("HOME")
+	defer os.Setenv("HOME", tmpHome)
+
+	if _, err := DefaultDir(); err == nil {
+		t.Fatal("expected DefaultDir to fail when HOME is unset")
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	want := filepath.Join(tmpHome, ".kestrix", "config.yaml")
+	if got := DefaultPath(); got != want {
+		t.Errorf("DefaultPath = %q, want %q", got, want)
+	}
+}
+
+// DefaultPath's empty-home fallback: when os.UserHomeDir fails, the
+// function substitutes "." and continues. That branch isn't hit on
+// Linux unless HOME is unset manually (HOME="" still maps to the
+// current user via /etc/passwd).
+func TestDefaultPathEmptyHomeFallback(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	os.Unsetenv("HOME")
+	defer os.Setenv("HOME", tmpHome)
+
+	got := DefaultPath()
+	if got == "" {
+		t.Fatalf("DefaultPath returned empty string")
+	}
+	// Should contain the .kestrix/config.yaml fallback.
+	if filepath.Base(got) != "config.yaml" {
+		t.Errorf("DefaultPath = %q, expected basename config.yaml", got)
+	}
+}
+
+// Load on a path that exists but is a directory triggers a non-IsNotExist
+// error from os.ReadFile, exercising the second branch in Load.
+func TestLoadNonExistentError(t *testing.T) {
+	_, err := Load("/proc")
+	if err == nil {
+		t.Fatal("expected error for non-existent config in non-IsNotExist branch")
+	}
+}
+
+// --- Unreachable branches in DefaultDir / Save / DefaultPath -----------
+//
+// The following branches cannot be exercised without artificially
+// failing OS calls (permission denial on MkdirAll, yaml.Marshal
+// error, env-based UserHomeDir error other than HOME=empty). Production
+// code keeps them as defensive guards; we document them here rather
+// than fake it (per the "annotate, don't fake" rule from
+// go-coverage-to-100):
+//
+//   - DefaultDir MkdirAll err (L87): cannot reproduce without a read-only
+//     parent directory; running as root in CI defeats it.
+//   - Save MkdirAll err (L124): same reasoning as above.
+//   - Save yaml.Marshal err (L129): impossible for *Config because none
+//     of its fields are func / chan / unsupported interface.
+//   - DefaultPath when UserHomeDir returns error but Go still keeps the
+//     empty string (L96): HOME= covers most platforms, but Linux
+//     falls through to /etc/passwd when HOME is missing entirely,
+//
+// Coverage notes (in-tree): these four branches are listed in the
+// coverage report and explicitly tagged "unreachable in normal use".
+
+// Save should still work even when the path lies in an existing
+// directory (MkdirAll is a no-op).
+func TestSaveIntoExistingDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "config.yaml") // nested doesn't exist yet
+	if err := Save(path, DefaultConfig()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file not written: %v", err)
+	}
+}
+
+func TestApplyFlagsDispatchProjectIDZero(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Dispatch.ProjectID = 42
+	cfg.ApplyFlags("", "", "", "", false, 0)
+	if cfg.Dispatch.ProjectID != 42 {
+		t.Errorf("ApplyFlags with projectID=0 must leave existing value: %d",
+			cfg.Dispatch.ProjectID)
+	}
+}
