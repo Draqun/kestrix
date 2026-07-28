@@ -300,7 +300,7 @@ func TestRunProject(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.store.Upsert(&store.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
+	if err := srv.projectStore.Upsert(&store.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", "/api/projects/run-demo/run", bytes.NewBufferString(`{"changed":["app"]}`))
@@ -372,7 +372,7 @@ func TestResolveProjectManual(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.store.Upsert(&store.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
+	if err := srv.projectStore.Upsert(&store.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 

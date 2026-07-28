@@ -175,8 +175,8 @@ func TestHandleValidate_BadDir(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "valid") {
-		t.Errorf("body = %q, want valid:false", w.Body.String())
+	if !strings.Contains(w.Body.String(), "error") {
+		t.Errorf("body = %q, want error field", w.Body.String())
 	}
 }
 

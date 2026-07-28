@@ -1,42 +1,43 @@
-package domain
+package mocks
 
 import (
 	"context"
 	"sync"
 
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 // MockProjectStore records calls and returns configurable values.
 type MockProjectStore struct {
 	mu          sync.Mutex
-	UpsertCalls []*ProjectConfig
+	UpsertCalls []*domain.ProjectConfig
 	UpsertErr   error
 	GetCalls    []string
-	GetResult   *ProjectConfig
+	GetResult   *domain.ProjectConfig
 	GetErr      error
 	DeleteCalls []string
 	DeleteErr   error
 	ListResult  []string
 	ListErr     error
-	LoadResult  map[string]*ProjectConfig
+	LoadResult  map[string]*domain.ProjectConfig
 	LoadErr     error
 }
 
-func (m *MockProjectStore) Load() (map[string]*ProjectConfig, error) {
+func (m *MockProjectStore) Load() (map[string]*domain.ProjectConfig, error) {
 	return m.LoadResult, m.LoadErr
 }
-func (m *MockProjectStore) Save(map[string]*ProjectConfig) error { return nil }
-func (m *MockProjectStore) Get(name string) (*ProjectConfig, error) {
+func (m *MockProjectStore) Save(map[string]*domain.ProjectConfig) error { return nil }
+func (m *MockProjectStore) Get(name string) (*domain.ProjectConfig, error) {
 	m.mu.Lock()
 	m.GetCalls = append(m.GetCalls, name)
 	m.mu.Unlock()
 	return m.GetResult, m.GetErr
 }
-func (m *MockProjectStore) FindByGitLabID(int) (*ProjectConfig, error) {
+func (m *MockProjectStore) FindByGitLabID(int) (*domain.ProjectConfig, error) {
 	return nil, nil
 }
-func (m *MockProjectStore) Upsert(cfg *ProjectConfig) error {
+func (m *MockProjectStore) Upsert(cfg *domain.ProjectConfig) error {
 	m.mu.Lock()
 	m.UpsertCalls = append(m.UpsertCalls, cfg)
 	m.mu.Unlock()
@@ -60,19 +61,23 @@ type MockRunStore struct {
 	CreateRunErr     error
 	FinishRunCalls   []finishRunCall
 	FinishRunErr     error
-	AppendTaskCalls  []TaskResult
+	FinishRunCh      chan struct{}  // closed once after the first FinishRun call
+	finishOnce       sync.Once      // protects FinishRunCh from double-close
+	AppendTaskCalls  []domain.TaskResult
 	AppendTaskErr    error
 	FlushRunCalls    []string
 	CancelRunCalls   []int
 	ApplyTaskCalls   []applyTaskCall
+	ApplyTaskCh      chan struct{}  // closed once after the first ApplyTaskResult call
+	applyOnce        sync.Once      // protects ApplyTaskCh from double-close
 	ApplyTaskErr     error
-	GetRunResult     *Run
+	GetRunResult     *domain.Run
 	GetRunErr        error
 	CountRunsResult  int
 	CountRunsErr     error
-	ListRunsResult   []Run
+	ListRunsResult   []domain.Run
 	ListRunsErr      error
-	ListAllRunsResult []Run
+	ListAllRunsResult []domain.Run
 	ListAllRunsErr   error
 	CountByStatusResult map[string]int
 	CountByStatusErr    error
@@ -90,12 +95,12 @@ type finishRunCall struct {
 	Status      string
 	Output      string
 	ErrMsg      string
-	TaskResults []TaskResult
+	TaskResults []domain.TaskResult
 }
 
 type applyTaskCall struct {
 	ID          int
-	TaskResult  TaskResult
+	TaskResult  domain.TaskResult
 	OutputExtra string
 }
 
@@ -105,13 +110,16 @@ func (m *MockRunStore) CreateRun(p string, c []string, im bool, snap *model.Proj
 	m.mu.Unlock()
 	return m.CreateRunID, m.CreateRunErr
 }
-func (m *MockRunStore) FinishRun(id int, status, output, errMsg string, trs []TaskResult) error {
+func (m *MockRunStore) FinishRun(id int, status, output, errMsg string, trs []domain.TaskResult) error {
 	m.mu.Lock()
 	m.FinishRunCalls = append(m.FinishRunCalls, finishRunCall{id, status, output, errMsg, trs})
 	m.mu.Unlock()
+	if m.FinishRunCh != nil {
+		m.finishOnce.Do(func() { close(m.FinishRunCh) })
+	}
 	return m.FinishRunErr
 }
-func (m *MockRunStore) AppendTaskResult(runID int, tr TaskResult) error {
+func (m *MockRunStore) AppendTaskResult(runID int, tr domain.TaskResult) error {
 	m.mu.Lock()
 	m.AppendTaskCalls = append(m.AppendTaskCalls, tr)
 	m.mu.Unlock()
@@ -129,18 +137,77 @@ func (m *MockRunStore) CancelRun(id int) error {
 	m.mu.Unlock()
 	return nil
 }
-func (m *MockRunStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) error {
+func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra string) error {
 	m.mu.Lock()
 	m.ApplyTaskCalls = append(m.ApplyTaskCalls, applyTaskCall{id, tr, outputExtra})
 	m.mu.Unlock()
+	if m.ApplyTaskCh != nil {
+		m.applyOnce.Do(func() { close(m.ApplyTaskCh) })
+	}
 	return m.ApplyTaskErr
 }
-func (m *MockRunStore) GetRun(id int) (*Run, error)   { return m.GetRunResult, m.GetRunErr }
-func (m *MockRunStore) CountRuns(string) (int, error) { return m.CountRunsResult, m.CountRunsErr }
-func (m *MockRunStore) ListRuns(string, int, int) ([]Run, error) {
+func (m *MockRunStore) GetRun(id int) (*domain.Run, error) {
+	return m.GetRunResult, m.GetRunErr
+}
+
+// WaitFinish blocks until FinishRun has been called at least once.
+// After it returns, the caller may safely read FinishRunCalls and
+// AppendTaskCalls without racing the background goroutine.
+func (m *MockRunStore) WaitFinish() {
+	ch := m.FinishRunCh
+	if ch != nil {
+		<-ch
+	}
+	// Acquire and release the mutex to establish a happens-before
+	// edge with the goroutine that wrote to the slices.
+	m.mu.Lock()
+	m.mu.Unlock()
+}
+
+// AppendTaskCallCount returns the number of recorded AppendTaskResult calls.
+func (m *MockRunStore) AppendTaskCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.AppendTaskCalls)
+}
+
+// WaitApply blocks until ApplyTaskResult has been called at least once.
+func (m *MockRunStore) WaitApply() {
+	ch := m.ApplyTaskCh
+	if ch != nil {
+		<-ch
+	}
+	m.mu.Lock()
+	m.mu.Unlock()
+}
+
+// ApplyTaskCallCount returns the number of recorded ApplyTaskResult calls.
+// Call after WaitApply or WaitFinish to avoid racing the background goroutine.
+func (m *MockRunStore) ApplyTaskCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.ApplyTaskCalls)
+}
+
+// FirstApplyTaskResult returns the TaskResult from the first ApplyTaskResult call.
+// Returns zero value if no calls were recorded.
+func (m *MockRunStore) FirstApplyTaskResult() domain.TaskResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.ApplyTaskCalls) == 0 {
+		return domain.TaskResult{}
+	}
+	return m.ApplyTaskCalls[0].TaskResult
+}
+func (m *MockRunStore) CountRuns(string) (int, error) {
+	return m.CountRunsResult, m.CountRunsErr
+}
+func (m *MockRunStore) ListRuns(string, int, int) ([]domain.Run, error) {
 	return m.ListRunsResult, m.ListRunsErr
 }
-func (m *MockRunStore) ListAllRuns(int) ([]Run, error) { return m.ListAllRunsResult, m.ListAllRunsErr }
+func (m *MockRunStore) ListAllRuns(int) ([]domain.Run, error) {
+	return m.ListAllRunsResult, m.ListAllRunsErr
+}
 func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 	return m.CountByStatusResult, m.CountByStatusErr
 }
@@ -149,7 +216,7 @@ func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 type MockPipelineRunner struct {
 	mu             sync.Mutex
 	RunCalls       []runCall
-	TaskResultList []TaskResult
+	TaskResultList []domain.TaskResult
 	RunErr         error
 	PanicMsg       interface{}
 }
@@ -159,7 +226,7 @@ type runCall struct {
 	Changed map[string]bool
 }
 
-func (m *MockPipelineRunner) Run(ctx context.Context, project model.Project, changed map[string]bool, opts RunnerOptions) ([]TaskResult, error) {
+func (m *MockPipelineRunner) Run(ctx context.Context, project model.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	m.mu.Lock()
 	m.RunCalls = append(m.RunCalls, runCall{project, changed})
 	m.mu.Unlock()
@@ -171,8 +238,8 @@ func (m *MockPipelineRunner) Run(ctx context.Context, project model.Project, cha
 
 // MockWebhookLogSink records appended entries.
 type MockWebhookLogSink struct {
-	mu       sync.Mutex
-	Entries  []map[string]interface{}
+	mu      sync.Mutex
+	Entries []map[string]interface{}
 }
 
 func (m *MockWebhookLogSink) Append(entry map[string]interface{}) {

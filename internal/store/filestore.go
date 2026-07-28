@@ -10,16 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
 )
-
-// ProjectConfig is an alias for domain.ProjectConfig so existing call sites
-// in the web layer keep compiling while Store migrates to domain.ProjectStore.
-type ProjectConfig = domain.ProjectConfig
-
-// ExtraRepo is an alias for domain.ExtraRepo.
-type ExtraRepo = domain.ExtraRepo
 
 // Store is the interface for project configuration storage.
 // Kept for backwards compatibility; prefer domain.ProjectStore.
@@ -31,7 +22,6 @@ type Store interface {
 	Upsert(cfg *ProjectConfig) error
 	Delete(name string) error
 	List() ([]string, error)
-	ListAllRuns(limit int) ([]Run, error)
 }
 
 // FileStore provides atomic, file-backed project configuration storage.
@@ -189,11 +179,6 @@ func (s *FileStore) List() ([]string, error) {
 		names = append(names, name)
 	}
 	return names, nil
-}
-
-// ListAllRuns is not supported on FileStore; returns empty.
-func (s *FileStore) ListAllRuns(limit int) ([]Run, error) {
-	return []Run{}, nil
 }
 
 // loadLocked reads from disk without acquiring the mutex (caller holds it).
