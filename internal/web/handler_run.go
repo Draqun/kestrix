@@ -456,10 +456,7 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 			Stdout:    &output,
 			Stderr:    &output,
 		})
-		st := domain.TaskResult{
-			Name: tr.Name, Status: tr.Status, Output: tr.Output,
-			Error: tr.Error, Duration: tr.Duration,
-		}
+		st := tr
 		if runErr != nil && st.Status == "" {
 			st.Status = "failed"
 			st.Error = runErr.Error()

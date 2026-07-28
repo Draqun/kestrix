@@ -11,7 +11,7 @@ func TestWebhookService_Process_Happy(t *testing.T) {
 	svc := NewWebhookService(sink)
 
 	event := map[string]interface{}{
-		"object_kind":          "push",
+		"object_kind":         "push",
 		"project":             map[string]interface{}{"id": float64(123)},
 		"ref":                 "refs/heads/main",
 		"commits":             []interface{}{},

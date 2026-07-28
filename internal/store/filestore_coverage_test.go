@@ -197,5 +197,3 @@ func TestListSorted(t *testing.T) {
 		t.Errorf("List = %v, want a1,b1,c1", names)
 	}
 }
-
-

@@ -40,12 +40,12 @@ build-release:
 
 ## test: Run all tests
 test:
-	$(GOENV) $(GO) test ./... -v
+	unset DATABASE_URL; $(GOENV) $(GO) test ./... -v
 
 ## test-one: Run all tests in a single package (use as `make test-one PKG=./internal/parser/`)
 test-one:
 	@test -n "$(PKG)" || (echo "Usage: make test-one PKG=./path/to/pkg"; exit 1)
-	$(GOENV) $(GO) test -v $(PKG)
+	unset DATABASE_URL; $(GOENV) $(GO) test -v $(PKG)
 
 ## test-coverage: Run tests with coverage report
 test-coverage:
@@ -61,18 +61,18 @@ fmt:
 ## fmt-check: Check formatting
 fmt-check:
 	@echo "Checking formatting..."
-	@out=$$(gofmt -l . 2>/dev/null); \
+	@out=$$(gofmt -l $(shell find . -name '*.go' -not -path './.gomodcache/*' -not -path './.gocache/*' -not -path './.gopath/*' -not -path './node_modules/*' -not -path './ui/dist/*') 2>/dev/null); \
 	if [ -n "$$out" ]; then echo "Files need formatting:"; echo "$$out"; exit 1; fi
 	@echo "✓ Formatting OK"
 
 ## vet: Run go vet
 vet:
-	$(GOENV) $(GO) vet ./...
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GO) vet ./...
 
 ## staticcheck: Run staticcheck
 staticcheck:
-	@command -v staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: make install-tools"; exit 0; }
-	$(GOENV) staticcheck ./...
+	@command -v $(GOBIN)/staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: make install-tools"; exit 0; }
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GOBIN)/staticcheck ./...
 
 ## lint: Run all linters
 lint: fmt-check vet staticcheck

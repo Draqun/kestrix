@@ -55,30 +55,30 @@ func (m *MockProjectStore) List() ([]string, error) {
 
 // MockRunStore records calls for RunService tests.
 type MockRunStore struct {
-	mu               sync.Mutex
-	CreateRunCalls   []createRunCall
-	CreateRunID      int
-	CreateRunErr     error
-	FinishRunCalls   []finishRunCall
-	FinishRunErr     error
-	FinishRunCh      chan struct{}  // closed once after the first FinishRun call
-	finishOnce       sync.Once      // protects FinishRunCh from double-close
-	AppendTaskCalls  []domain.TaskResult
-	AppendTaskErr    error
-	FlushRunCalls    []string
-	CancelRunCalls   []int
-	ApplyTaskCalls   []applyTaskCall
-	ApplyTaskCh      chan struct{}  // closed once after the first ApplyTaskResult call
-	applyOnce        sync.Once      // protects ApplyTaskCh from double-close
-	ApplyTaskErr     error
-	GetRunResult     *domain.Run
-	GetRunErr        error
-	CountRunsResult  int
-	CountRunsErr     error
-	ListRunsResult   []domain.Run
-	ListRunsErr      error
-	ListAllRunsResult []domain.Run
-	ListAllRunsErr   error
+	mu                  sync.Mutex
+	CreateRunCalls      []createRunCall
+	CreateRunID         int
+	CreateRunErr        error
+	FinishRunCalls      []finishRunCall
+	FinishRunErr        error
+	FinishRunCh         chan struct{} // closed once after the first FinishRun call
+	finishOnce          sync.Once     // protects FinishRunCh from double-close
+	AppendTaskCalls     []domain.TaskResult
+	AppendTaskErr       error
+	FlushRunCalls       []string
+	CancelRunCalls      []int
+	ApplyTaskCalls      []applyTaskCall
+	ApplyTaskCh         chan struct{} // closed once after the first ApplyTaskResult call
+	applyOnce           sync.Once     // protects ApplyTaskCh from double-close
+	ApplyTaskErr        error
+	GetRunResult        *domain.Run
+	GetRunErr           error
+	CountRunsResult     int
+	CountRunsErr        error
+	ListRunsResult      []domain.Run
+	ListRunsErr         error
+	ListAllRunsResult   []domain.Run
+	ListAllRunsErr      error
 	CountByStatusResult map[string]int
 	CountByStatusErr    error
 }
@@ -161,6 +161,7 @@ func (m *MockRunStore) WaitFinish() {
 	// Acquire and release the mutex to establish a happens-before
 	// edge with the goroutine that wrote to the slices.
 	m.mu.Lock()
+	_ = m // keep mutex reference to satisfy staticcheck SA2001
 	m.mu.Unlock()
 }
 
@@ -178,6 +179,7 @@ func (m *MockRunStore) WaitApply() {
 		<-ch
 	}
 	m.mu.Lock()
+	_ = m // keep mutex reference to satisfy staticcheck SA2001
 	m.mu.Unlock()
 }
 

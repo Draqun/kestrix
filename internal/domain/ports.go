@@ -65,16 +65,16 @@ type WebhookLogSink interface {
 // It lives in domain so both ProjectStore and ProjectService can use it
 // without importing store.
 type ProjectConfig struct {
-	Name            string         `json:"name"`
-	RepoPath        string         `json:"repo_path"`
-	RepoURL         string         `json:"repo_url,omitempty"`
-	PipelineDir     string         `json:"pipeline_dir,omitempty"`
-	PipelineFile    string         `json:"pipeline_file"`
-	GitLabProjectID int            `json:"gitlab_project_id,omitempty"`
-	DefaultBranch   string         `json:"default_branch,omitempty"`
-	WebhookSecret   string         `json:"webhook_secret,omitempty"`
-	CreatedAt       string         `json:"created_at"`
-	ExtraRepos      []ExtraRepo    `json:"extra_repos,omitempty"`
+	Name            string      `json:"name"`
+	RepoPath        string      `json:"repo_path"`
+	RepoURL         string      `json:"repo_url,omitempty"`
+	PipelineDir     string      `json:"pipeline_dir,omitempty"`
+	PipelineFile    string      `json:"pipeline_file"`
+	GitLabProjectID int         `json:"gitlab_project_id,omitempty"`
+	DefaultBranch   string      `json:"default_branch,omitempty"`
+	WebhookSecret   string      `json:"webhook_secret,omitempty"`
+	CreatedAt       string      `json:"created_at"`
+	ExtraRepos      []ExtraRepo `json:"extra_repos,omitempty"`
 }
 
 // ExtraRepo is an additional repository participating in a project.
@@ -87,15 +87,15 @@ type ExtraRepo struct {
 
 // Run is a stored run record.
 type Run struct {
-	ID            int             `json:"id"`
-	ProjectName   string          `json:"project_name"`
-	Status        string          `json:"status"`
-	Changed       []string        `json:"changed"`
-	IncludeManual bool            `json:"include_manual"`
-	PipelineDef   *model.Project  `json:"pipeline_def,omitempty"`
-	Output        string          `json:"output"`
-	Error         string          `json:"error,omitempty"`
-	TaskResults   []TaskResult    `json:"task_results,omitempty"`
-	StartedAt     time.Time       `json:"started_at"`
-	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	ID            int            `json:"id"`
+	ProjectName   string         `json:"project_name"`
+	Status        string         `json:"status"`
+	Changed       []string       `json:"changed"`
+	IncludeManual bool           `json:"include_manual"`
+	PipelineDef   *model.Project `json:"pipeline_def,omitempty"`
+	Output        string         `json:"output"`
+	Error         string         `json:"error,omitempty"`
+	TaskResults   []TaskResult   `json:"task_results,omitempty"`
+	StartedAt     time.Time      `json:"started_at"`
+	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
 }

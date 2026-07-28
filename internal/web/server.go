@@ -67,7 +67,6 @@ type Server struct {
 	projectStore   domain.ProjectStore
 	runStore       domain.RunStore // nil when using FileStore (no run persistence)
 	projectService *service.ProjectService
-	runService     *service.RunService
 }
 
 // NewServer creates a new HTTP server.

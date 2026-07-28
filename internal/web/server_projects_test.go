@@ -654,7 +654,7 @@ func TestProjectPipelinePath_EscapingFile(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:    "/tmp/test-repo",
+		RepoPath:     "/tmp/test-repo",
 		PipelineDir:  ".",
 		PipelineFile: "../../etc/passwd",
 	}
@@ -671,7 +671,7 @@ func TestProjectPipelinePath_DirError(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:    "/tmp/test-repo",
+		RepoPath:     "/tmp/test-repo",
 		PipelineDir:  "../../etc",
 		PipelineFile: "pipeline.tf",
 	}

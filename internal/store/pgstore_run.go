@@ -343,4 +343,3 @@ func (s *PGStore) CountRunsByStatus() (map[string]int, error) {
 	}
 	return result, rows.Err()
 }
-

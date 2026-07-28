@@ -1,10 +1,16 @@
 // PGStore integration tests. These run against a real PostgreSQL instance.
 // They auto-skip when the database is unreachable so `go test ./...` works
 // in CI environments without PostgreSQL.
+//
+// Tests connect via METACI_TEST_DATABASE_URL (NOT DATABASE_URL) to prevent
+// accidental data loss on the development database. The test helper refuses
+// to connect to any database whose name does not end with "_test".
 package store
 
 import (
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
@@ -13,10 +19,22 @@ import (
 
 func testPG(t *testing.T) *PGStore {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
+	dbURL := os.Getenv("METACI_TEST_DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://metaci:metaci@localhost:5432/metaci?sslmode=disable&connect_timeout=2"
+		dbURL = "postgres://metaci:metaci@localhost:5432/metaci_test?sslmode=disable&connect_timeout=2"
 	}
+
+	// Safety guard: refuse to connect to a database that doesn't end with _test.
+	// This prevents accidental data loss if someone points METACI_TEST_DATABASE_URL
+	// at the dev/production database.
+	parsed, err := url.Parse(dbURL)
+	if err == nil {
+		dbName := strings.TrimPrefix(parsed.Path, "/")
+		if !strings.HasSuffix(dbName, "_test") {
+			t.Fatalf("tests must use a database ending with _test (got %q); set METACI_TEST_DATABASE_URL", dbName)
+		}
+	}
+
 	pg, err := NewPG(dbURL)
 	if err != nil {
 		t.Skipf("PostgreSQL not available: %v", err)

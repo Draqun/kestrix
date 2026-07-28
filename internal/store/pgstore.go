@@ -78,4 +78,3 @@ func migrate(db *sql.DB) error {
 	_, _ = db.Exec(`ALTER TABLE runs ADD COLUMN IF NOT EXISTS pipeline_def JSONB`)
 	return nil
 }
-

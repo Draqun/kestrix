@@ -97,8 +97,8 @@ type Variable struct {
 	Value     string `hcl:"value,optional" json:"value,omitempty"`
 	Default   string `hcl:"default,optional" json:"default,omitempty"`
 	Scope     string `hcl:"scope,optional" json:"scope,omitempty"` // project, repo, job
-	Repo      string `hcl:"repo,optional" json:"repo,omitempty"`    // required if scope=repo
-	Job       string `hcl:"job,optional" json:"job,omitempty"`      // required if scope=job
+	Repo      string `hcl:"repo,optional" json:"repo,omitempty"`   // required if scope=repo
+	Job       string `hcl:"job,optional" json:"job,omitempty"`     // required if scope=job
 	Protected bool   `hcl:"protected,optional" json:"protected"`
 	Masked    bool   `hcl:"masked,optional" json:"masked"`
 	Env       string `hcl:"env,optional" json:"env,omitempty"` // environment filter

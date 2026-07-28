@@ -29,6 +29,19 @@ go test ./internal/web/ -v -count=1
 go test -run TestWebhook ./internal/web/ -count=1
 ```
 
+## Version Control (VCS)
+- **Prefer `jj` (jujutsu) if available** — use `jj` for all VCS operations: log, diff, bookmark, describe, new, commit.
+- **Fallback: `git`** — use when `jj` is not installed or for operations `jj` doesn't support.
+- Detection: `command -v jj >/dev/null 2>&1`
+- Common `jj` equivalents:
+  - `jj log` ↔ `git log`
+  - `jj diff` ↔ `git diff`
+  - `jj bookmark list` ↔ `git branch -a`
+  - `jj bookmark set <name>` ↔ `git checkout -b <name>`
+  - `jj describe` ↔ `git commit --amend`
+  - `jj new` ↔ create a new working-copy commit
+- **Never** mix `jj` and `git` commands in a single logical operation — pick one tool per task.
+
 ## Project Structure
 | Path | Role |
 |------|------|
@@ -50,6 +63,7 @@ go test -run TestWebhook ./internal/web/ -count=1
 ## Runtime facts agents miss
 - **Default runner mode is `local`** (host bash), not Docker. Config: `Runner.Mode` / env.
 - **DB is PostgreSQL** via `DATABASE_URL` / `--database-url`. Runs/history need PG; file store has no runs.
+- **Tests use `METACI_TEST_DATABASE_URL`** (default: `metaci_test` DB), NOT `DATABASE_URL`. The test helper refuses to connect to any database not ending in `_test`. `make docker-up` auto-creates `metaci_test` on first init.
 - **`handleRunProject` is async**: returns `{run_id, status:"running"}` immediately; work in goroutine. FE polls `GET .../runs/{id}` ~1.5s.
 - **Task results are append-only during run** (`pending` → `running` → `passed|failed|skipped`). FE takes **last status per task name**.
 - **On failure, runner continues**: dependents → `skipped`; independent tasks still run. Overall status fails if any task failed.
@@ -130,6 +144,13 @@ Does **not** kill OS processes yet (status-only); stuck runs still need cancel t
 - Vite dev :3000 proxies API to :8080
 - Layout drawer is persistent; main content must **not** double-apply `ml: 260` if flex already accounts for drawer — check `Layout.jsx` before changing margins
 - DAG node colors: passed green, failed red, running orange, pending/skipped/canceled gray+dimmed
+
+## API Field Naming Convention
+- **Backend (Go)**: JSON responses use lowercase field names (Go convention: `json:"repos"`, `json:"tasks"`, `json:"default_image"`)
+- **Frontend (JS)**: React Flow layout (`dagLayout.js`) expects capitalized property names (`Repos`, `Tasks`, `Name`, `Path`, `Kind`, `DefaultImage`)
+- **Normalization**: Happens in `ui/src/api/client.js` via `normalizeProject()` helper
+  - Applied in: `getProjectDefinition()`, `getProject()`, `listProjects()`
+  - Maps lowercase → capitalized for top-level and nested fields (e.g., `execute.script` → `Execute.Script`)
 
 ## Running Tests
 ```bash
