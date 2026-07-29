@@ -33,6 +33,10 @@ func TestCompileTime_PipelineRunner(t *testing.T) {
 	var _ domain.PipelineRunner = (*runner.PipelineExecutor)(nil)
 }
 
+func TestCompileTime_TaskRunner(t *testing.T) {
+	var _ domain.TaskRunner = (*runner.PipelineExecutor)(nil)
+}
+
 func TestCompileTime_ProjectStore_PGStore(t *testing.T) {
 	var _ domain.ProjectStore = (*store.PGStore)(nil)
 }

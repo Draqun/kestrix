@@ -218,17 +218,23 @@ func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 type MockPipelineRunner struct {
 	mu             sync.Mutex
 	RunCalls       []runCall
+	TaskRunCalls   []taskRunCall
 	TaskResultList []domain.TaskResult
 	RunErr         error
 	PanicMsg       interface{}
 }
 
 type runCall struct {
-	Project model.Project
+	Project domain.Project
 	Changed map[string]bool
 }
 
-func (m *MockPipelineRunner) Run(ctx context.Context, project model.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
+type taskRunCall struct {
+	Project  domain.Project
+	TaskName string
+}
+
+func (m *MockPipelineRunner) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	m.mu.Lock()
 	m.RunCalls = append(m.RunCalls, runCall{project, changed})
 	m.mu.Unlock()
@@ -236,6 +242,19 @@ func (m *MockPipelineRunner) Run(ctx context.Context, project model.Project, cha
 		panic(m.PanicMsg)
 	}
 	return m.TaskResultList, m.RunErr
+}
+
+func (m *MockPipelineRunner) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	m.mu.Lock()
+	m.TaskRunCalls = append(m.TaskRunCalls, taskRunCall{Project: project, TaskName: taskName})
+	m.mu.Unlock()
+	if m.PanicMsg != nil {
+		panic(m.PanicMsg)
+	}
+	if len(m.TaskResultList) > 0 {
+		return m.TaskResultList[0], m.RunErr
+	}
+	return domain.TaskResult{Name: taskName, Status: "passed"}, m.RunErr
 }
 
 // MockWebhookLogSink records appended entries.

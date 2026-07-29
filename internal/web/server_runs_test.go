@@ -24,11 +24,15 @@ import (
 // setupRunServer returns a Server backed by the given stores for run handler tests.
 func setupRunServer(t *testing.T, projectStore domain.ProjectStore, runStore domain.RunStore) *Server {
 	t.Helper()
+	pipeline := &mocks.MockPipelineRunner{}
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
 		projectStore:   projectStore,
 		runStore:       runStore,
+		pipelineRunner: pipeline,
+		taskRunner:     pipeline,
 		projectService: service.NewProjectService(projectStore),
+		runService:     service.NewRunService(runStore, pipeline, pipeline),
 	}
 	return srv
 }
@@ -269,6 +273,7 @@ func TestHandleListAllRuns_Happy(t *testing.T) {
 // function removes the temp dir.
 func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore domain.RunStore) *Server {
 	t.Helper()
+	pipeline := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "test", Status: "passed"}}}
 	srv := &Server{
 		cfg: Config{
 			ListenAddr: ":0",
@@ -276,7 +281,10 @@ func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore d
 		},
 		projectStore:   &mocks.MockProjectStore{GetResult: projectConfig},
 		runStore:       runStore,
+		pipelineRunner: pipeline,
+		taskRunner:     pipeline,
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
+		runService:     service.NewRunService(runStore, pipeline, pipeline),
 	}
 	return srv
 }

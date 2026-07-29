@@ -24,12 +24,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gitlab.com/lunaris-bot/metaci/internal/config"
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 	"gitlab.com/lunaris-bot/metaci/internal/runner"
+	"gitlab.com/lunaris-bot/metaci/internal/service"
+	"gitlab.com/lunaris-bot/metaci/internal/store"
 	"gitlab.com/lunaris-bot/metaci/internal/variables"
 	"gitlab.com/lunaris-bot/metaci/internal/web"
 )
@@ -249,11 +253,44 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "config: no config file found, using defaults + CLI flags\n")
 	}
 
-	server := web.NewServer(webCfg)
+	server := buildServer(webCfg)
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func buildServer(cfg web.Config) *web.Server {
+	var projectStore domain.ProjectStore
+	var runStore domain.RunStore
+	if cfg.DatabaseURL != "" {
+		pg, err := store.NewPG(cfg.DatabaseURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not connect to database: %v, falling back to file store\n", err)
+		} else {
+			projectStore = pg
+			runStore = pg
+		}
+	}
+	if projectStore == nil {
+		storePath := cfg.StorePath
+		if storePath == "" {
+			storePath = store.DefaultPath()
+		}
+		fs, err := store.New(storePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not init project store at %s: %v\n", storePath, err)
+			fallback := filepath.Join(os.TempDir(), "metaci-fallback-projects.json")
+			fs, _ = store.New(fallback)
+		}
+		projectStore = fs
+	}
+	projectService := service.NewProjectService(projectStore)
+	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: web.GenerateGitLabCI}
+	taskRunner := pipelineRunner
+	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
+	webhookService := service.NewWebhookService(nil)
+	return web.NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
 }
 
 func cmdResolve(args []string) {

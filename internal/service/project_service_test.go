@@ -167,3 +167,23 @@ func TestProjectService_FindByGitLabID(t *testing.T) {
 	p, _ := svc.FindByGitLabID(42)
 	_ = p
 }
+
+func TestProjectService_Create_DefaultsMissingFields(t *testing.T) {
+	mock := &mocks.MockProjectStore{}
+	svc := NewProjectService(mock)
+
+	cfg := &domain.ProjectConfig{Name: "defaults", RepoPath: "/repo"}
+	if err := svc.Create(cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.UpsertCalls) != 1 {
+		t.Fatalf("expected 1 Upsert call, got %d", len(mock.UpsertCalls))
+	}
+	got := mock.UpsertCalls[0]
+	if got.DefaultBranch != "main" {
+		t.Fatalf("DefaultBranch = %q, want main", got.DefaultBranch)
+	}
+	if got.PipelineFile != "pipeline.tf" {
+		t.Fatalf("PipelineFile = %q, want pipeline.tf", got.PipelineFile)
+	}
+}

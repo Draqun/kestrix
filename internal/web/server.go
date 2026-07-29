@@ -67,48 +67,46 @@ type Server struct {
 	webhookMu      sync.RWMutex
 	projectStore   domain.ProjectStore
 	runStore       domain.RunStore // nil when using FileStore (no run persistence)
+	pipelineRunner domain.PipelineRunner
+	taskRunner     domain.TaskRunner
 	projectService *service.ProjectService
 	runService     *service.RunService
 	webhookService *service.WebhookService
 }
 
-// NewServer creates a new HTTP server.
+// NewServer creates a new HTTP server with the standard wiring.
 func NewServer(cfg Config) *Server {
-	s := &Server{cfg: cfg}
+	projectStore, runStore := initStores(cfg)
+	projectService := service.NewProjectService(projectStore)
+	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI}
+	taskRunner := pipelineRunner
+	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
+	webhookService := service.NewWebhookService(nil)
+	return NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
+}
 
-	// Initialize project store — PostgreSQL if DATABASE_URL is set, else file.
-	if cfg.DatabaseURL != "" {
-		pg, err := store.NewPG(cfg.DatabaseURL)
-		if err != nil {
-			log.Printf("warning: could not connect to database: %v, falling back to file store", err)
-		} else {
-			log.Printf("connected to PostgreSQL")
-			s.projectStore = pg
-			s.runStore = pg
-		}
+// NewServerWithDeps creates a server from prebuilt dependencies.
+func NewServerWithDeps(
+	cfg Config,
+	projectStore domain.ProjectStore,
+	runStore domain.RunStore,
+	projectService *service.ProjectService,
+	pipelineRunner domain.PipelineRunner,
+	taskRunner domain.TaskRunner,
+	runService *service.RunService,
+	webhookService *service.WebhookService,
+) *Server {
+	s := &Server{
+		cfg:            cfg,
+		projectStore:   projectStore,
+		runStore:       runStore,
+		pipelineRunner: pipelineRunner,
+		taskRunner:     taskRunner,
+		projectService: projectService,
+		runService:     runService,
+		webhookService: webhookService,
 	}
-	if s.projectStore == nil {
-		storePath := cfg.StorePath
-		if storePath == "" {
-			storePath = store.DefaultPath()
-		}
-		fs, err := store.New(storePath)
-		if err != nil {
-			log.Printf("warning: could not init project store at %s: %v", storePath, err)
-			fallback := filepath.Join(os.TempDir(), "metaci-fallback-projects.json")
-			fs, _ = store.New(fallback)
-		}
-		s.projectStore = fs
-	}
-
-	s.projectService = service.NewProjectService(s.projectStore)
-	s.runService = service.NewRunService(s.runStore, &runner.PipelineExecutor{
-		Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI,
-	})
-	s.webhookService = service.NewWebhookService(s)
-
-	// Auto-create project from --dir on startup.
-	if cfg.PipelineDir != "" {
+	if cfg.PipelineDir != "" && s.projectStore != nil {
 		if proj, err := parser.ParseDir(cfg.PipelineDir); err == nil && proj.Name != "" {
 			_ = s.projectStore.Upsert(&domain.ProjectConfig{
 				Name:            proj.Name,
@@ -120,9 +118,37 @@ func NewServer(cfg Config) *Server {
 			})
 		}
 	}
-
 	s.router = s.buildRouter()
 	return s
+}
+
+func initStores(cfg Config) (domain.ProjectStore, domain.RunStore) {
+	var projectStore domain.ProjectStore
+	var runStore domain.RunStore
+	if cfg.DatabaseURL != "" {
+		pg, err := store.NewPG(cfg.DatabaseURL)
+		if err != nil {
+			log.Printf("warning: could not connect to database: %v, falling back to file store", err)
+		} else {
+			log.Printf("connected to PostgreSQL")
+			projectStore = pg
+			runStore = pg
+		}
+	}
+	if projectStore != nil {
+		return projectStore, runStore
+	}
+	storePath := cfg.StorePath
+	if storePath == "" {
+		storePath = store.DefaultPath()
+	}
+	fs, err := store.New(storePath)
+	if err != nil {
+		log.Printf("warning: could not init project store at %s: %v", storePath, err)
+		fallback := filepath.Join(os.TempDir(), "metaci-fallback-projects.json")
+		fs, _ = store.New(fallback)
+	}
+	return fs, runStore
 }
 
 // Append implements domain.WebhookLogSink.
@@ -137,7 +163,13 @@ func (s *Server) List() []map[string]interface{} {
 	s.webhookMu.RLock()
 	defer s.webhookMu.RUnlock()
 	entries := make([]map[string]interface{}, len(s.webhookLog))
-	copy(entries, s.webhookLog)
+	for i, entry := range s.webhookLog {
+		clone := make(map[string]interface{}, len(entry))
+		for k, v := range entry {
+			clone[k] = v
+		}
+		entries[i] = clone
+	}
 	return entries
 }
 
