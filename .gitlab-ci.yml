@@ -45,7 +45,7 @@ test:
   # golang:1.25-alpine ships busybox sh only — install explicit bash
   # because the runner tests skip when bash is unavailable.
   before_script:
-    - apk add --no-cache bash
+    - apk add --no-cache bash make
   script:
     - make test
     - go tool cover -func=coverage.out
@@ -61,7 +61,7 @@ test_fe:
   before_script:
     - cd ui && npm ci --silent
   script:
-    - cd ui && node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
+    - node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
   coverage: '/coverage:\s+(\d+\.\d+)%/'
 
 # ─── Build ──────────────────────────────────────────────────
