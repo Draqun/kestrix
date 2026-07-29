@@ -460,11 +460,19 @@ func TestHandleSaveProjectPipeline_MkdirError(t *testing.T) {
 
 func TestHandleSaveProjectPipeline_WriteError(t *testing.T) {
 	tmp := t.TempDir()
-	// Create pipeline dir as read-only so WriteFile fails.
+	// Make the target path a directory so WriteFile fails deterministically,
+	// even when tests run as root in CI.
 	pipelineDir := filepath.Join(tmp, "rodir")
-	if err := os.MkdirAll(pipelineDir, 0o555); err != nil {
+	if err := os.MkdirAll(filepath.Join(pipelineDir, "pipeline.tf"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(pipelineDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Chmod(filepath.Join(pipelineDir, "pipeline.tf"), 0o755)
+		_ = os.Chmod(pipelineDir, 0o755)
+	}()
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:         "demo",
