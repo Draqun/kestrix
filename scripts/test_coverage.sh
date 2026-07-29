@@ -17,6 +17,10 @@ fi
 
 export LC_ALL=C
 
+docker_available() {
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
 # Compute coverage percentage for a given package path prefix from the
 # coverage profile. Returns "0" if no data found.
 #
@@ -95,6 +99,10 @@ check_pkg() {
   if [ "$total_stmts" = "0" ] || [ -z "$total_stmts" ]; then
     if [ "$pkg" = "internal/domain" ]; then
       echo "  ${pkg}: no executable statements"
+      return
+    fi
+    if [ "$pkg" = "internal/runner" ] && ! docker_available; then
+      echo "  ${pkg}: skipped (Docker unavailable)"
       return
     fi
     echo "  FAIL: ${pkg}: no coverage data"

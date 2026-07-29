@@ -59,7 +59,7 @@ test_fe:
   stage: test
   image: node:26-alpine
   before_script:
-    - cd ui && npm install --silent
+    - cd ui && npm ci --silent
   script:
     - cd ui && node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
   coverage: '/coverage:\s+(\d+\.\d+)%/'
