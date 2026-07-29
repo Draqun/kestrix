@@ -10,6 +10,7 @@ import (
 
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/runner"
 	"gitlab.com/lunaris-bot/metaci/internal/service"
 	"gitlab.com/lunaris-bot/metaci/internal/store"
 
@@ -67,6 +68,8 @@ type Server struct {
 	projectStore   domain.ProjectStore
 	runStore       domain.RunStore // nil when using FileStore (no run persistence)
 	projectService *service.ProjectService
+	runService     *service.RunService
+	webhookService *service.WebhookService
 }
 
 // NewServer creates a new HTTP server.
@@ -99,6 +102,10 @@ func NewServer(cfg Config) *Server {
 	}
 
 	s.projectService = service.NewProjectService(s.projectStore)
+	s.runService = service.NewRunService(s.runStore, &runner.PipelineExecutor{
+		Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI,
+	})
+	s.webhookService = service.NewWebhookService(s)
 
 	// Auto-create project from --dir on startup.
 	if cfg.PipelineDir != "" {
@@ -116,6 +123,22 @@ func NewServer(cfg Config) *Server {
 
 	s.router = s.buildRouter()
 	return s
+}
+
+// Append implements domain.WebhookLogSink.
+func (s *Server) Append(entry map[string]interface{}) {
+	s.webhookMu.Lock()
+	defer s.webhookMu.Unlock()
+	s.webhookLog = append(s.webhookLog, entry)
+}
+
+// List implements domain.WebhookLogSink.
+func (s *Server) List() []map[string]interface{} {
+	s.webhookMu.RLock()
+	defer s.webhookMu.RUnlock()
+	entries := make([]map[string]interface{}, len(s.webhookLog))
+	copy(entries, s.webhookLog)
+	return entries
 }
 
 func (s *Server) buildRouter() chi.Router {

@@ -13,7 +13,15 @@ import (
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/service"
 )
+
+func (s *Server) logWebhook(entry map[string]interface{}) {
+	if s.webhookService == nil {
+		s.webhookService = service.NewWebhookService(s)
+	}
+	_ = s.webhookService.Process(entry)
+}
 
 // handleWebhook godoc
 // @Summary Receive GitLab webhook
@@ -66,9 +74,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("webhook: store lookup error: %v", err)
 			logEntry["status"] = "error"
 			logEntry["error"] = err.Error()
-			s.webhookMu.Lock()
-			s.webhookLog = append(s.webhookLog, logEntry)
-			s.webhookMu.Unlock()
+			s.logWebhook(logEntry)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(logEntry)
 			return
@@ -77,9 +83,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("webhook: unknown project gitlab_id=%d", event.GitLabProjectID)
 			logEntry["status"] = "ignored"
 			logEntry["error"] = "unknown project"
-			s.webhookMu.Lock()
-			s.webhookLog = append(s.webhookLog, logEntry)
-			s.webhookMu.Unlock()
+			s.logWebhook(logEntry)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "ignored", "reason": "unknown project",
@@ -96,9 +100,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		log.Printf("webhook: parse error: %v", err)
 		logEntry["status"] = "error"
 		logEntry["error"] = err.Error()
-		s.webhookMu.Lock()
-		s.webhookLog = append(s.webhookLog, logEntry)
-		s.webhookMu.Unlock()
+		s.logWebhook(logEntry)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(logEntry)
 		return
@@ -180,9 +182,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.webhookMu.Lock()
-	s.webhookLog = append(s.webhookLog, logEntry)
-	s.webhookMu.Unlock()
+	s.logWebhook(logEntry)
 
 	response := map[string]interface{}{
 		"status":  "ok",

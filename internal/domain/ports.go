@@ -4,8 +4,6 @@ import (
 	"context"
 	"io"
 	"time"
-
-	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 // ProjectStore is the port for project configuration persistence.
@@ -23,7 +21,7 @@ type ProjectStore interface {
 // RunStore is the port for run lifecycle persistence.
 // Only PostgreSQL implements this.
 type RunStore interface {
-	CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project) (int, error)
+	CreateRun(projectName string, changed []string, includeManual bool, snap *Project) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
@@ -37,9 +35,14 @@ type RunStore interface {
 }
 
 // PipelineRunner is the port for pipeline execution.
-// Implemented by LocalExecutor, DockerExecutor, GitLabRunnerExecutor.
+// Implemented by runner.PipelineExecutor.
 type PipelineRunner interface {
-	Run(ctx context.Context, project model.Project, changed map[string]bool, opts RunnerOptions) ([]TaskResult, error)
+	Run(ctx context.Context, project Project, changed map[string]bool, opts RunnerOptions) ([]TaskResult, error)
+}
+
+// VariableResolver supplies the variables visible to a task.
+type VariableResolver interface {
+	Get(repo, job, env string) map[string]string
 }
 
 // RunnerOptions is the domain-level configuration for a pipeline run.
@@ -48,7 +51,7 @@ type PipelineRunner interface {
 type RunnerOptions struct {
 	WorkDir        string
 	IncludeManual  bool
-	Variables      map[string]string
+	Variables      VariableResolver
 	Stdout         io.Writer
 	Stderr         io.Writer
 	OnTaskStart    func(name string)
@@ -87,15 +90,15 @@ type ExtraRepo struct {
 
 // Run is a stored run record.
 type Run struct {
-	ID            int            `json:"id"`
-	ProjectName   string         `json:"project_name"`
-	Status        string         `json:"status"`
-	Changed       []string       `json:"changed"`
-	IncludeManual bool           `json:"include_manual"`
-	PipelineDef   *model.Project `json:"pipeline_def,omitempty"`
-	Output        string         `json:"output"`
-	Error         string         `json:"error,omitempty"`
-	TaskResults   []TaskResult   `json:"task_results,omitempty"`
-	StartedAt     time.Time      `json:"started_at"`
-	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
+	ID            int          `json:"id"`
+	ProjectName   string       `json:"project_name"`
+	Status        string       `json:"status"`
+	Changed       []string     `json:"changed"`
+	IncludeManual bool         `json:"include_manual"`
+	PipelineDef   *Project     `json:"pipeline_def,omitempty"`
+	Output        string       `json:"output"`
+	Error         string       `json:"error,omitempty"`
+	TaskResults   []TaskResult `json:"task_results,omitempty"`
+	StartedAt     time.Time    `json:"started_at"`
+	FinishedAt    *time.Time   `json:"finished_at,omitempty"`
 }

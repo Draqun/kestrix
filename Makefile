@@ -13,7 +13,7 @@ GOCACHE     ?= $(CURDIR)/.gocache
 GOMODCACHE  ?= $(CURDIR)/.gomodcache
 GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
-GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) GOSUMDB=off PATH=$(GOBIN):$(PATH)
+GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH)
 
 .PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
@@ -40,7 +40,7 @@ build-release:
 
 ## test: Run all tests
 test:
-	unset DATABASE_URL; $(GOENV) $(GO) test ./... -v
+	unset DATABASE_URL; $(GOENV) bash scripts/test.sh
 
 ## test-one: Run all tests in a single package (use as `make test-one PKG=./internal/parser/`)
 test-one:
@@ -86,7 +86,7 @@ clean-all: clean
 	$(GO) clean -cache -testcache
 
 ## quality: Full quality gate (format + vet + test + coverage)
-quality: fmt-check vet test test-coverage
+quality: fmt-check vet test
 	@echo ""
 	@echo "=========================================="
 	@echo "✓ All quality checks passed"

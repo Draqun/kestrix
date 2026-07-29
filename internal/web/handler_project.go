@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"gitlab.com/lunaris-bot/metaci/internal/service"
 	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
 
 	"github.com/go-chi/chi/v5"
@@ -126,34 +128,20 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects/{name} [put]
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	existing, err := s.projectService.Get(name)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if existing == nil {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
 	var update domain.ProjectConfig
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	update.Name = name
-	if update.RepoPath == "" {
-		update.RepoPath = existing.RepoPath
-	}
-	if update.PipelineDir == "" {
-		update.PipelineDir = existing.PipelineDir
-	}
-	if update.PipelineFile == "" {
-		update.PipelineFile = existing.PipelineFile
-	}
-	if update.CreatedAt == "" {
-		update.CreatedAt = existing.CreatedAt
-	}
 	if err := s.projectService.Update(name, &update); err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
 func TestTaskResult_JSONRoundTrip(t *testing.T) {
@@ -54,16 +52,16 @@ func TestTaskResult_ErrorOmitEmpty(t *testing.T) {
 }
 
 func TestProject_JSONRoundTrip(t *testing.T) {
-	proj := model.Project{
+	proj := Project{
 		Name:         "demo",
 		DefaultImage: "alpine:latest",
-		Repos: []model.Repo{
+		Repos: []Repo{
 			{Name: "svc", Path: "src", Kind: "subpath"},
 		},
-		Tasks: []model.Task{
+		Tasks: []Task{
 			{Name: "build", Trigger: "repo.svc.changed", Manual: true, DependsOn: []string{"a"}},
 		},
-		Variables: []model.Variable{
+		Variables: []Variable{
 			{Key: "FOO", Value: "bar", Protected: true},
 		},
 	}
@@ -82,7 +80,7 @@ func TestProject_JSONRoundTrip(t *testing.T) {
 		}
 	}
 
-	var decoded model.Project
+	var decoded Project
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("round-trip unmarshal: %v", err)
 	}
@@ -104,7 +102,7 @@ func TestProject_JSONFieldNamesMatchSnapshot(t *testing.T) {
 	// Verify that model.Project JSON field names match the old
 	// PipelineSnapshot field names, so the new serialized form is
 	// compatible with existing pipeline_def JSONB in the DB.
-	proj := model.Project{
+	proj := Project{
 		Name:         "demo",
 		DefaultImage: "alpine",
 	}
@@ -127,7 +125,7 @@ func TestProject_JSONFieldNamesMatchSnapshot(t *testing.T) {
 }
 
 func TestRepo_JSONFieldNames(t *testing.T) {
-	r := model.Repo{Name: "svc", Path: "src", Kind: "subpath"}
+	r := Repo{Name: "svc", Path: "src", Kind: "subpath"}
 	data, _ := json.Marshal(r)
 	var m map[string]json.RawMessage
 	json.Unmarshal(data, &m)
@@ -139,7 +137,7 @@ func TestRepo_JSONFieldNames(t *testing.T) {
 }
 
 func TestTask_JSONFieldNames(t *testing.T) {
-	tk := model.Task{
+	tk := Task{
 		Name:      "build",
 		Trigger:   "repo.svc.changed",
 		DependsOn: []string{"a"},
@@ -156,7 +154,7 @@ func TestTask_JSONFieldNames(t *testing.T) {
 }
 
 func TestVariable_JSONFieldNames(t *testing.T) {
-	v := model.Variable{Key: "FOO", Value: "bar", Protected: true}
+	v := Variable{Key: "FOO", Value: "bar", Protected: true}
 	data, _ := json.Marshal(v)
 	var m map[string]json.RawMessage
 	json.Unmarshal(data, &m)

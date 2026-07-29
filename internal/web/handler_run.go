@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 	"gitlab.com/lunaris-bot/metaci/internal/runner"
+	"gitlab.com/lunaris-bot/metaci/internal/service"
 
 	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
 
@@ -43,40 +43,26 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	changedSet := make(map[string]bool, len(proj.Repos))
+	executionChanged := req.Changed
 	if len(req.Changed) == 0 {
+		executionChanged = make([]string, 0, len(proj.Repos))
 		for _, repo := range proj.Repos {
-			changedSet[repo.Name] = true
-		}
-	} else {
-		for _, repo := range proj.Repos {
-			changedSet[repo.Name] = false
-		}
-		for _, changed := range req.Changed {
-			changedSet[changed] = true
+			executionChanged = append(executionChanged, repo.Name)
 		}
 	}
 
 	varStore := s.buildVarStore(&proj)
-
-	// Persist run start if PG store is available.
-	var runID int
-	if s.runStore != nil {
-		snap := &proj
-		var runErr error
-		runID, runErr = s.runStore.CreateRun(name, req.Changed, req.IncludeManual, snap)
-		if runErr != nil {
-			log.Printf("warning: could not create run record: %v", runErr)
-		}
-		// Pre-populate all tasks as pending so the DAG shows them gray from the start.
-		if runErr == nil {
-			for _, t := range proj.Tasks {
-				s.runStore.AppendTaskResult(runID, domain.TaskResult{
-					Name:   t.Name,
-					Status: "pending",
-				})
-			}
-		}
+	if s.runService == nil {
+		s.runService = service.NewRunService(s.runStore, &runner.PipelineExecutor{
+			Mode: s.cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI,
+		})
+	}
+	runID, err := s.runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
+		WorkDir: p.RepoPath, IncludeManual: req.IncludeManual, Variables: varStore,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	// Return immediately so the frontend doesn't timeout.
@@ -88,83 +74,6 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		"changed": req.Changed,
 	})
 
-	// Execute pipeline in background.
-	go func() {
-		var bgOutput bytes.Buffer
-		var taskResults []domain.TaskResult
-		var err error
-
-		// Append each task result to PG as it completes so the FE can poll progress.
-		onStart := func(name string) {
-			if s.runStore != nil && runID > 0 {
-				s.runStore.AppendTaskResult(runID, domain.TaskResult{
-					Name:   name,
-					Status: "running",
-				})
-			}
-		}
-		onComplete := func(tr domain.TaskResult) {
-			if s.runStore != nil && runID > 0 {
-				s.runStore.AppendTaskResult(runID, domain.TaskResult{
-					Name: tr.Name, Status: tr.Status, Output: tr.Output,
-					Error: tr.Error, Duration: tr.Duration,
-				})
-				// Flush aggregate output so the FE can show logs during execution.
-				s.runStore.FlushRunOutput(runID, bgOutput.String())
-			}
-		}
-
-		opts := runner.Options{
-			WorkDir:        p.RepoPath,
-			IncludeManual:  req.IncludeManual,
-			Variables:      varStore,
-			Stdout:         &bgOutput,
-			Stderr:         &bgOutput,
-			OnTaskStart:    onStart,
-			OnTaskComplete: onComplete,
-		}
-
-		if s.cfg.Runner.Mode == "gitlab-runner" {
-			nodes, resErr := dag.New(proj).Resolve(changedSet)
-			if resErr != nil {
-				err = resErr
-			} else {
-				taskResults, err = runner.RunGitLabRunner(context.Background(), proj, nodes, opts, GenerateGitLabCI)
-			}
-		} else if s.cfg.Runner.Mode == "local" {
-			taskResults, err = runner.RunLocal(context.Background(), proj, changedSet, opts)
-		} else {
-			taskResults, err = runner.Run(context.Background(), proj, changedSet, opts)
-		}
-
-		status := "passed"
-		errMsg := ""
-		if err != nil {
-			status = "failed"
-			errMsg = err.Error()
-		}
-		// Also check task results — runner may not return error if it continues past failures.
-		for _, tr := range taskResults {
-			if tr.Status == "failed" {
-				status = "failed"
-				if errMsg == "" {
-					errMsg = tr.Error
-				}
-				break
-			}
-		}
-		if s.runStore != nil && runID > 0 {
-			var trs []domain.TaskResult
-			for _, tr := range taskResults {
-				trs = append(trs, domain.TaskResult{
-					Name: tr.Name, Status: tr.Status, Output: tr.Output,
-					Error: tr.Error, Duration: tr.Duration,
-				})
-			}
-			s.runStore.FinishRun(runID, status, bgOutput.String(), errMsg, trs)
-			log.Printf("run #%d finished: %s", runID, status)
-		}
-	}()
 }
 
 // handleRunTask executes a single task by name.

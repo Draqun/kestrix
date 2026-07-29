@@ -93,7 +93,12 @@ check_pkg() {
   local total_stmts
   total_stmts=$(echo "$result" | awk '{print $2}')
   if [ "$total_stmts" = "0" ] || [ -z "$total_stmts" ]; then
-    echo "  ${pkg}: (no coverage data, skipping)"
+    if [ "$pkg" = "internal/domain" ]; then
+      echo "  ${pkg}: no executable statements"
+      return
+    fi
+    echo "  FAIL: ${pkg}: no coverage data"
+    PASS=false
     return
   fi
 
@@ -106,11 +111,11 @@ check_pkg() {
   fi
 }
 
-check_pkg "internal/domain" 0
+check_pkg "internal/domain" 90
 check_pkg "internal/service" 90
 check_pkg "internal/web" 85
 check_pkg "internal/store" 80
-check_pkg "internal/runner" 75
+check_pkg "internal/runner" 80
 
 if [ "$PASS" = false ]; then
   echo ""

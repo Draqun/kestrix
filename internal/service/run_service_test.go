@@ -24,7 +24,7 @@ func TestRunService_Start_Happy(t *testing.T) {
 	runID, err := svc.Start(context.Background(), "myproject", &model.Project{
 		Name:  "myproject",
 		Tasks: []model.Task{{Name: "build"}},
-	}, []string{"main.go"}, false)
+	}, []string{"main.go"}, domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestRunService_Start_TaskFailed(t *testing.T) {
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{{Name: "test"}},
-	}, nil, false)
+	}, nil, domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{},
-	}, nil, false)
+	}, nil, domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRunService_Start_CreateRunFails(t *testing.T) {
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{},
-	}, nil, false)
+	}, nil, domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error when CreateRun fails")
 	}
@@ -129,7 +129,7 @@ func TestRunService_Start_RunnerError(t *testing.T) {
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{{Name: "build"}},
-	}, []string{"main.go"}, true)
+	}, []string{"main.go"}, domain.RunnerOptions{IncludeManual: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

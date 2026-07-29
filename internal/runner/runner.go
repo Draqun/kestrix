@@ -11,12 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
 )
 
 // TaskResult is an alias for domain.TaskResult, the single type used
@@ -30,7 +30,7 @@ type Options struct {
 	// IncludeManual runs tasks marked as manual. They are skipped by default.
 	IncludeManual bool
 	// Variables provides resolved variables injected as environment variables.
-	Variables *variables.Store
+	Variables domain.VariableResolver
 	// Stdout and Stderr receive aggregate command output. Nil values discard output.
 	Stdout io.Writer
 	Stderr io.Writer
@@ -38,6 +38,40 @@ type Options struct {
 	OnTaskStart func(name string)
 	// OnTaskComplete is called after each task finishes (pass or fail).
 	OnTaskComplete func(TaskResult)
+}
+
+type synchronizedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *synchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+func synchronizeOutput(opts *Options) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	lock := &sync.Mutex{}
+	opts.Stdout = &lockedWriter{mu: lock, w: opts.Stdout}
+	opts.Stderr = &lockedWriter{mu: lock, w: opts.Stderr}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
 }
 
 // Executor runs a single task in the pipeline.
@@ -249,6 +283,7 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 // Run resolves and executes the tasks selected by changed. Each task runs
 // in its own Docker container. Tasks run in dependency order.
 func Run(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -301,6 +336,7 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 // RunLocal resolves and executes tasks directly on the host without Docker.
 // Each task runs via `bash -c` in the repo directory.
 func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -355,6 +391,7 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 
 // RunGitLabRunner executes tasks via `gitlab-runner exec`.
 func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -401,6 +438,7 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 
 // RunOne executes a single named task (used for manual job approval).
 func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}

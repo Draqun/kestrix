@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
@@ -74,6 +75,35 @@ func TestProjectService_Update_NotFound(t *testing.T) {
 	err := svc.Update("nope", &domain.ProjectConfig{Name: "nope"})
 	if err == nil {
 		t.Fatal("expected error for missing project")
+	}
+}
+
+func TestProjectService_Update_MergesAllOmittedFields(t *testing.T) {
+	existing := &domain.ProjectConfig{
+		Name: "demo", RepoPath: "/repo", RepoURL: "https://example.test/repo.git",
+		PipelineDir: "ci", PipelineFile: "pipeline.tf", GitLabProjectID: 42,
+		DefaultBranch: "develop", WebhookSecret: "secret", CreatedAt: "yesterday",
+		ExtraRepos: []domain.ExtraRepo{{Name: "docs", Path: "docs"}},
+	}
+	mock := &mocks.MockProjectStore{GetResult: existing}
+	svc := NewProjectService(mock)
+	update := &domain.ProjectConfig{}
+
+	if err := svc.Update("demo", update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if update.RepoURL != existing.RepoURL || update.DefaultBranch != existing.DefaultBranch ||
+		update.WebhookSecret != existing.WebhookSecret || update.GitLabProjectID != existing.GitLabProjectID ||
+		len(update.ExtraRepos) != 1 {
+		t.Fatalf("omitted fields were not preserved: %+v", update)
+	}
+}
+
+func TestProjectService_Update_ValidatesMergedConfig(t *testing.T) {
+	mock := &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{Name: "demo"}}
+	err := NewProjectService(mock).Update("demo", &domain.ProjectConfig{})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want ErrValidation", err)
 	}
 }
 
