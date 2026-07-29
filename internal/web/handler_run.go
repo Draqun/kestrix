@@ -1,18 +1,14 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"strings"
 
 	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/runner"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
 
 	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
 
@@ -52,12 +48,12 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	varStore := s.buildVarStore(&proj)
-	if s.runService == nil {
-		s.runService = service.NewRunService(s.runStore, &runner.PipelineExecutor{
-			Mode: s.cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI,
-		})
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
 	}
-	runID, err := s.runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
+	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
 		WorkDir: p.RepoPath, IncludeManual: req.IncludeManual, Variables: varStore,
 	})
 	if err != nil {
@@ -92,78 +88,57 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find the task.
-	var targetTask *model.Task
+	found := false
 	for i := range proj.Tasks {
 		if proj.Tasks[i].Name == taskName {
-			targetTask = &proj.Tasks[i]
+			found = true
 			break
 		}
 	}
-	if targetTask == nil {
+	if !found {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("task %q not found", taskName))
 		return
 	}
 
-	// Build changed set — mark the task's trigger repos as changed.
-	changedSet := make(map[string]bool)
-	for _, repo := range proj.Repos {
-		changedSet[repo.Name] = false
-	}
-	trig := targetTask.Trigger
-	for _, repo := range proj.Repos {
-		if strings.Contains(trig, repo.Name) {
-			changedSet[repo.Name] = true
-		}
-	}
-
 	varStore := s.buildVarStore(&proj)
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
 
-	// Persist run.
 	var runID int
 	if s.runStore != nil {
 		snap := &proj
-		var runErr error
-		runID, runErr = s.runStore.CreateRun(name, []string{taskName}, false, snap)
-		if runErr != nil {
-			log.Printf("warning: could not create run record: %v", runErr)
+		runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
 	}
 
-	var output bytes.Buffer
-	var taskResults []domain.TaskResult
-	if s.cfg.Runner.Mode == "local" {
-		taskResults, err = runner.RunLocal(r.Context(), proj, changedSet, runner.Options{
-			WorkDir:       p.RepoPath,
-			IncludeManual: true,
-			Variables:     varStore,
-			Stdout:        &output,
-			Stderr:        &output,
-		})
-	} else {
-		taskResults, err = runner.Run(r.Context(), proj, changedSet, runner.Options{
-			WorkDir:       p.RepoPath,
-			IncludeManual: true,
-			Variables:     varStore,
-			Stdout:        &output,
-			Stderr:        &output,
-		})
-	}
-
+	tr, err := runService.RunTask(r.Context(), runID, name, &proj, taskName, domain.RunnerOptions{
+		WorkDir:   p.RepoPath,
+		Variables: varStore,
+		Stdout:    io.Discard,
+		Stderr:    io.Discard,
+	})
 	status := "passed"
 	errMsg := ""
 	if err != nil {
 		status = "failed"
 		errMsg = err.Error()
 	}
-	if s.runStore != nil && runID > 0 {
-		var trs []domain.TaskResult
-		for _, tr := range taskResults {
-			trs = append(trs, domain.TaskResult{
-				Name: tr.Name, Status: tr.Status, Output: tr.Output,
-				Error: tr.Error, Duration: tr.Duration,
-			})
+	if tr.Status == "failed" {
+		status = "failed"
+		if errMsg == "" {
+			errMsg = tr.Error
 		}
-		s.runStore.FinishRun(runID, status, output.String(), errMsg, trs)
+	}
+	if s.runStore != nil && runID > 0 {
+		if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
+			log.Printf("warning: could not finish run record: %v", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -171,9 +146,9 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		"project": proj.Name,
 		"task":    taskName,
 		"status":  status,
-		"output":  output.String(),
+		"output":  tr.Output,
 	}
-	if err != nil {
+	if errMsg != "" {
 		response["error"] = errMsg
 	}
 	json.NewEncoder(w).Encode(response)
@@ -272,8 +247,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-
-	// Latest status per task.
 	latest := make(map[string]domain.TaskResult)
 	for _, tr := range run.TaskResults {
 		latest[tr.Name] = tr
@@ -283,7 +256,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "task not in run")
 		return
 	}
-	// Allow approve for "manual", or legacy "skipped" manual jobs (no dependency error).
 	isWaiting := cur.Status == "manual" ||
 		(cur.Status == "skipped" && cur.Error != "dependency failed" && cur.Error != "dependency canceled")
 	if !isWaiting {
@@ -291,18 +263,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Confirm task is manual in snapshot or live pipeline.
-	manualOK := false
-	var dependsOn []string
-	if run.PipelineDef != nil {
-		for _, t := range run.PipelineDef.Tasks {
-			if t.Name == taskName {
-				manualOK = t.Manual
-				dependsOn = t.DependsOn
-				break
-			}
-		}
-	}
 	p, err := s.projectStore.Get(name)
 	if err != nil || p == nil {
 		writeError(w, http.StatusNotFound, "project not found")
@@ -313,41 +273,18 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var target *model.Task
-	for i := range proj.Tasks {
-		if proj.Tasks[i].Name == taskName {
-			target = &proj.Tasks[i]
-			if target.Manual {
-				manualOK = true
-			}
-			if len(dependsOn) == 0 {
-				dependsOn = target.DependsOn
-			}
-			break
-		}
-	}
-	if target == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("task %q not found in pipeline", taskName))
+
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
-	if !manualOK {
-		writeError(w, http.StatusBadRequest, "task is not manual")
+
+	if _, err := runService.ApproveManualTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{WorkDir: p.RepoPath, Variables: s.buildVarStore(&proj)}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	for _, dep := range dependsOn {
-		d, exists := latest[dep]
-		if !exists || d.Status != "passed" {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("dependency %q has not passed", dep))
-			return
-		}
-	}
 
-	// Build variables (same as full run).
-	varStore := s.buildVarStore(&proj)
-
-	_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running"}, "")
-
-	// Return immediately; execute in background (deploy can take minutes).
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"run_id":  runID,
@@ -355,25 +292,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		"status":  "running",
 		"project": name,
 	})
-
-	workDir := p.RepoPath
-	go func() {
-		var output bytes.Buffer
-		tr, runErr := runner.RunOne(context.Background(), proj, taskName, runner.Options{
-			WorkDir:   workDir,
-			Variables: varStore,
-			Stdout:    &output,
-			Stderr:    &output,
-		})
-		st := tr
-		if runErr != nil && st.Status == "" {
-			st.Status = "failed"
-			st.Error = runErr.Error()
-		}
-		if err := s.runStore.ApplyTaskResult(runID, st, output.String()); err != nil {
-			log.Printf("approve task %s on run #%d: %v", taskName, runID, err)
-		}
-	}()
 }
 
 // handleCancelRun cancels a running pipeline run.

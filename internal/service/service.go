@@ -119,40 +119,53 @@ func (s *ProjectService) FindByGitLabID(id int) (*domain.ProjectConfig, error) {
 
 // RunService handles run lifecycle with background execution.
 type RunService struct {
-	runStore domain.RunStore
-	runner   domain.PipelineRunner
+	runStore   domain.RunStore
+	pipeline   domain.PipelineRunner
+	taskRunner domain.TaskRunner
 }
 
 // NewRunService creates a RunService.
-func NewRunService(runStore domain.RunStore, runner domain.PipelineRunner) *RunService {
-	return &RunService{runStore: runStore, runner: runner}
+func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, taskRunner domain.TaskRunner) *RunService {
+	return &RunService{runStore: runStore, pipeline: pipeline, taskRunner: taskRunner}
 }
 
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
-	var runID int
-	if s.runStore != nil {
-		var err error
-		runID, err = s.runStore.CreateRun(projectName, changed, opts.IncludeManual, proj)
-		if err != nil {
-			return 0, fmt.Errorf("create run: %w", err)
-		}
+	if s.pipeline == nil {
+		return 0, fmt.Errorf("pipeline runner not configured")
 	}
+	runID, err := s.createRun(projectName, changed, opts.IncludeManual, proj)
+	if err != nil {
+		return 0, err
+	}
+	output := &bytes.Buffer{}
+	s.prepareRunExecution(runID, output, &opts)
 
-	// Pre-populate all tasks as pending.
+	go s.executeRun(ctx, runID, proj, changed, opts, output)
+	return runID, nil
+}
+
+func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project) (int, error) {
+	if proj == nil {
+		return 0, fmt.Errorf("project not loaded")
+	}
+	if s.runStore == nil {
+		return 0, nil
+	}
+	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj)
+	if err != nil {
+		return 0, fmt.Errorf("create run: %w", err)
+	}
 	for _, t := range proj.Tasks {
-		if s.runStore != nil {
-			_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{
-				Name:   t.Name,
-				Status: "pending",
-			})
-		}
+		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: t.Name, Status: "pending"})
 	}
+	return runID, nil
+}
 
-	var output bytes.Buffer
-	opts.Stdout = &output
-	opts.Stderr = &output
+func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) {
+	opts.Stdout = output
+	opts.Stderr = output
 	opts.OnTaskStart = func(name string) {
 		if s.runStore != nil {
 			_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: name, Status: "running"})
@@ -164,45 +177,154 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 			_ = s.runStore.FlushRunOutput(runID, output.String())
 		}
 	}
+}
 
-	// Execute in background.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				if s.runStore != nil {
-					_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
-				}
+func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer) {
+	defer func() {
+		if r := recover(); r != nil && s.runStore != nil {
+			_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
+		}
+	}()
+
+	changedSet := make(map[string]bool, len(changed))
+	for _, c := range changed {
+		changedSet[c] = true
+	}
+	taskResults, err := s.pipeline.Run(ctx, *proj, changedSet, opts)
+	s.finishRun(runID, output.String(), taskResults, err)
+}
+
+func (s *RunService) finishRun(runID int, output string, taskResults []domain.TaskResult, runErr error) {
+	status, errMsg := runStatus(taskResults, runErr)
+	if s.runStore != nil {
+		_ = s.runStore.FinishRun(runID, status, output, errMsg, taskResults)
+	}
+}
+
+func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
+	status := "passed"
+	errMsg := ""
+	if runErr != nil {
+		status = "failed"
+		errMsg = runErr.Error()
+	}
+	for _, tr := range taskResults {
+		if tr.Status != "failed" {
+			continue
+		}
+		status = "failed"
+		if errMsg == "" {
+			errMsg = tr.Error
+		}
+		break
+	}
+	return status, errMsg
+}
+
+// RunTask executes a single task and appends the result to an existing run.
+func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	_ = projectName
+	if proj == nil {
+		return domain.TaskResult{}, fmt.Errorf("project not loaded")
+	}
+	if s.taskRunner == nil {
+		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
+	}
+	if s.runStore != nil {
+		_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running"}, "")
+	}
+
+	tr, err := s.taskRunner.RunTask(ctx, *proj, taskName, opts)
+	if err != nil && tr.Status == "" {
+		tr.Status = "failed"
+		tr.Error = err.Error()
+	}
+	if s.runStore != nil {
+		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
+	}
+	if err != nil {
+		return tr, fmt.Errorf("task %q failed: %w", taskName, err)
+	}
+	return tr, nil
+}
+
+func taskResultsByName(run *domain.Run) map[string]domain.TaskResult {
+	results := make(map[string]domain.TaskResult)
+	if run == nil {
+		return results
+	}
+	for _, tr := range run.TaskResults {
+		results[tr.Name] = tr
+	}
+	return results
+}
+
+func manualTaskContext(run *domain.Run, proj *model.Project, taskName string) (bool, []string) {
+	manualOK := false
+	dependsOn := []string{}
+	if run != nil && run.PipelineDef != nil {
+		for _, t := range run.PipelineDef.Tasks {
+			if t.Name == taskName {
+				manualOK = t.Manual
+				dependsOn = t.DependsOn
+				break
 			}
-		}()
-
-		changedSet := make(map[string]bool)
-		for _, c := range changed {
-			changedSet[c] = true
 		}
-
-		taskResults, err := s.runner.Run(ctx, *proj, changedSet, opts)
-
-		status := "passed"
-		errMsg := ""
-		if err != nil {
-			status = "failed"
-			errMsg = err.Error()
-		}
-		for _, tr := range taskResults {
-			if tr.Status == "failed" {
-				status = "failed"
-				if errMsg == "" {
-					errMsg = tr.Error
+	}
+	if proj != nil {
+		for i := range proj.Tasks {
+			if proj.Tasks[i].Name == taskName {
+				if proj.Tasks[i].Manual {
+					manualOK = true
+				}
+				if len(dependsOn) == 0 {
+					dependsOn = proj.Tasks[i].DependsOn
 				}
 				break
 			}
 		}
-		if s.runStore != nil {
-			_ = s.runStore.FinishRun(runID, status, output.String(), errMsg, taskResults)
-		}
-	}()
+	}
+	return manualOK, dependsOn
+}
 
-	return runID, nil
+func isWaitingForApproval(tr domain.TaskResult) bool {
+	return tr.Status == "manual" || (tr.Status == "skipped" && tr.Error != "dependency failed" && tr.Error != "dependency canceled")
+}
+
+// ApproveManualTask validates a waiting manual task and executes it.
+func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	if s.runStore == nil {
+		return domain.TaskResult{}, fmt.Errorf("runs not supported")
+	}
+	run, err := s.runStore.GetRun(runID)
+	if err != nil {
+		return domain.TaskResult{}, fmt.Errorf("get run: %w", err)
+	}
+	if run == nil || run.ProjectName != projectName {
+		return domain.TaskResult{}, fmt.Errorf("run not found")
+	}
+
+	latest := taskResultsByName(run)
+	cur, ok := latest[taskName]
+	if !ok {
+		return domain.TaskResult{}, fmt.Errorf("task not in run")
+	}
+	if !isWaitingForApproval(cur) {
+		return domain.TaskResult{}, fmt.Errorf("task %q is not waiting for manual approval (status=%s)", taskName, cur.Status)
+	}
+
+	manualOK, dependsOn := manualTaskContext(run, proj, taskName)
+	if !manualOK {
+		return domain.TaskResult{}, fmt.Errorf("task is not manual")
+	}
+	for _, dep := range dependsOn {
+		d, exists := latest[dep]
+		if !exists || d.Status != "passed" {
+			return domain.TaskResult{}, fmt.Errorf("dependency %q has not passed", dep)
+		}
+	}
+
+	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
 }
 
 // WebhookService handles webhook event processing.
@@ -217,6 +339,9 @@ func NewWebhookService(logSink domain.WebhookLogSink) *WebhookService {
 
 // Process parses and logs a webhook event.
 func (s *WebhookService) Process(event map[string]interface{}) error {
+	if s == nil || s.logSink == nil {
+		return nil
+	}
 	s.logSink.Append(event)
 	return nil
 }

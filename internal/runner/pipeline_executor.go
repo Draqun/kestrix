@@ -46,3 +46,17 @@ func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, chan
 		return nil, fmt.Errorf("unsupported runner mode %q", e.Mode)
 	}
 }
+
+// RunTask executes a single named task using the configured backend.
+func (e *PipelineExecutor) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	runnerOpts := Options{
+		WorkDir:        opts.WorkDir,
+		IncludeManual:  true,
+		Variables:      opts.Variables,
+		Stdout:         opts.Stdout,
+		Stderr:         opts.Stderr,
+		OnTaskStart:    opts.OnTaskStart,
+		OnTaskComplete: opts.OnTaskComplete,
+	}
+	return RunOne(ctx, project, taskName, runnerOpts)
+}

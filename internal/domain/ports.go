@@ -40,6 +40,12 @@ type PipelineRunner interface {
 	Run(ctx context.Context, project Project, changed map[string]bool, opts RunnerOptions) ([]TaskResult, error)
 }
 
+// TaskRunner is the port for executing a single manual task.
+// Implemented by runner.PipelineExecutor.
+type TaskRunner interface {
+	RunTask(ctx context.Context, project Project, taskName string, opts RunnerOptions) (TaskResult, error)
+}
+
 // VariableResolver supplies the variables visible to a task.
 type VariableResolver interface {
 	Get(repo, job, env string) map[string]string

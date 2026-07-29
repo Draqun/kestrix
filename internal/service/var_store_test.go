@@ -13,6 +13,7 @@ func TestBuildVarStore_Happy(t *testing.T) {
 		Variables: []model.Variable{
 			{Key: "DB_HOST", Value: "localhost", Scope: "project"},
 			{Key: "SECRET", Value: "s3cret", Scope: "project", Masked: true},
+			{Key: "PROTECTED", Value: "p", Scope: "project", Protected: true},
 			{Key: "REPO_VAR", Value: "rv", Scope: "repo", Repo: "backend"},
 			{Key: "JOB_VAR", Value: "jv", Scope: "job", Repo: "backend", Job: "test"},
 		},
