@@ -1,5 +1,9 @@
 // Kestrix API client
+import { normalizeProject } from './normalizers.js';
+
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+export { normalizeProject };
 
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/api/health`);
@@ -54,13 +58,18 @@ export async function listProjects(limit = 25, offset = 0) {
   const query = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`${API_BASE}/api/projects${query}`);
   if (!res.ok) throw new Error(`List projects failed: ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  if (data.items && Array.isArray(data.items)) {
+    data.items = data.items.map(normalizeProject);
+  }
+  return data;
 }
 
 export async function getProject(name) {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error(`Get project failed: ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  return normalizeProject(data);
 }
 
 export async function createProject(cfg) {
@@ -116,7 +125,8 @@ export async function getProjectDefinition(name) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Get pipeline definition failed: ${res.statusText}`);
   }
-  return res.json();
+  const data = await res.json();
+  return normalizeProject(data);
 }
 
 export async function saveProjectPipeline(name, hcl) {

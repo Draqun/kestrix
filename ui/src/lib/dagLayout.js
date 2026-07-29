@@ -1,6 +1,20 @@
 import dagre from 'dagre';
 
 export function layoutFromProject(project) {
+  if (!project) {
+    console.warn('[dagLayout] layoutFromProject called with null/undefined project');
+    return { nodes: [], edges: [] };
+  }
+  
+  // Defensive: log if expected fields are missing (helps catch API/field-name mismatches)
+  const hasRepos = Array.isArray(project.Repos) && project.Repos.length > 0;
+  const hasTasks = Array.isArray(project.Tasks) && project.Tasks.length > 0;
+  if (!hasRepos && !hasTasks) {
+    const keys = Object.keys(project);
+    console.warn('[dagLayout] Project missing Repos and Tasks arrays. Available keys:', keys);
+    console.warn('[dagLayout] Expected: Repos, Tasks (capitalized). Got:', keys);
+  }
+
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', nodesep: 80, ranksep: 120 });

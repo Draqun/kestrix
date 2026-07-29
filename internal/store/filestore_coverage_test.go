@@ -101,19 +101,6 @@ func TestFindByGitLabID(t *testing.T) {
 	}
 }
 
-// TestListAllRuns covers the FileStore stub.
-func TestListAllRuns(t *testing.T) {
-	dir := t.TempDir()
-	st, _ := New(filepath.Join(dir, "p.json"))
-	runs, err := st.ListAllRuns(10)
-	if err != nil {
-		t.Fatalf("ListAllRuns: %v", err)
-	}
-	if len(runs) != 0 {
-		t.Errorf("FileStore.ListAllRuns should return empty, got %v", runs)
-	}
-}
-
 // TestLoadInvalidJSON covers the unmarshal error path in Load().
 func TestLoadInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
@@ -210,5 +197,3 @@ func TestListSorted(t *testing.T) {
 		t.Errorf("List = %v, want a1,b1,c1", names)
 	}
 }
-
-

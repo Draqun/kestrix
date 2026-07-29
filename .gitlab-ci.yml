@@ -33,20 +33,25 @@ staticcheck:
 
 test:
   stage: test
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: metaci
+    POSTGRES_PASSWORD: metaci
+    POSTGRES_DB: metaci_test
+    METACI_TEST_DATABASE_URL: postgres://metaci:metaci@postgres:5432/metaci_test?sslmode=disable
   # bash is needed for internal/runner tests that shell out via `bash -c`.
   # golang:1.25-alpine ships busybox sh only — install explicit bash
   # because the runner tests skip when bash is unavailable.
   before_script:
-    - apk add --no-cache bash
+    - apk add --no-cache bash make gcc musl-dev
+    - export CGO_ENABLED=1
   script:
-    - go test ./... -v -coverprofile=coverage.out -covermode=atomic
+    - make test
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+\.\d+%)/'
   artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.out
     paths:
       - coverage.out
     expire_in: 7 days
@@ -55,9 +60,9 @@ test_fe:
   stage: test
   image: node:26-alpine
   before_script:
-    - cd ui && npm install --silent
+    - cd ui && npm ci --silent
   script:
-    - cd ui && node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
+    - node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
   coverage: '/coverage:\s+(\d+\.\d+)%/'
 
 # ─── Build ──────────────────────────────────────────────────

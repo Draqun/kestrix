@@ -4,27 +4,24 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gitlab.com/lunaris-bot/metaci/internal/dag"
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
 	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
 )
 
-// TaskResult captures the outcome of a single task execution.
-type TaskResult struct {
-	Name     string        `json:"name"`
-	Status   string        `json:"status"` // passed, failed, skipped
-	Output   string        `json:"output"`
-	Error    string        `json:"error,omitempty"`
-	Duration time.Duration `json:"duration"`
-}
+// TaskResult is an alias for domain.TaskResult, the single type used
+// across runner, store, and service layers.
+type TaskResult = domain.TaskResult
 
 // Options controls a local pipeline run.
 type Options struct {
@@ -33,7 +30,7 @@ type Options struct {
 	// IncludeManual runs tasks marked as manual. They are skipped by default.
 	IncludeManual bool
 	// Variables provides resolved variables injected as environment variables.
-	Variables *variables.Store
+	Variables domain.VariableResolver
 	// Stdout and Stderr receive aggregate command output. Nil values discard output.
 	Stdout io.Writer
 	Stderr io.Writer
@@ -43,9 +40,239 @@ type Options struct {
 	OnTaskComplete func(TaskResult)
 }
 
+func synchronizeOutput(opts *Options) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	lock := &sync.Mutex{}
+	opts.Stdout = &lockedWriter{mu: lock, w: opts.Stdout}
+	opts.Stderr = &lockedWriter{mu: lock, w: opts.Stderr}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+// Executor runs a single task in the pipeline.
+type Executor interface {
+	// RunTask executes a single task, returning its output and any error.
+	RunTask(ctx context.Context, task model.Task, opts Options) (output string, err error)
+}
+
+// taskFatal signals that a task-level setup error (e.g. repoDir failure)
+// should abort the entire pipeline rather than skip to the next task.
+type taskFatal struct{ err error }
+
+func (e taskFatal) Error() string { return e.err.Error() }
+func (e taskFatal) Unwrap() error { return e.err }
+
+// DockerExecutor runs tasks inside Docker containers with volume mounts.
+type DockerExecutor struct {
+	WorkDir      string
+	Repos        map[string]model.Repo
+	DefaultImage string
+}
+
+func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
+	repo := e.Repos[task.Execute.Repo]
+	taskDir, err := repoDir(e.WorkDir, repo)
+	if err != nil {
+		return "", taskFatal{err: fmt.Errorf("task %q: %w", task.Name, err)}
+	}
+
+	image := task.Execute.Image
+	if image == "" {
+		image = e.DefaultImage
+	}
+
+	relDir, _ := filepath.Rel(e.WorkDir, taskDir)
+	if relDir == "" {
+		relDir = "."
+	}
+
+	fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
+
+	args := []string{
+		"run", "--rm",
+		"--name", fmt.Sprintf("metaci-%s-%d", task.Name, time.Now().UnixNano()),
+		"-v", e.WorkDir + ":/workspace",
+		"-w", "/workspace/" + relDir,
+		"-e", "CI_PROJECT_DIR=/workspace/" + relDir,
+	}
+
+	if opts.Variables != nil {
+		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
+		for k, v := range vars {
+			args = append(args, "-e", k+"="+v)
+		}
+	}
+
+	args = append(args, image, "sh", "-c", task.Execute.Script)
+
+	var taskOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+
+	runErr := cmd.Run()
+
+	return taskOut.String(), runErr
+}
+
+// LocalExecutor runs tasks directly on the host via bash.
+type LocalExecutor struct {
+	WorkDir string
+	Repos   map[string]model.Repo
+}
+
+func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
+	repo := e.Repos[task.Execute.Repo]
+	taskDir, err := repoDir(e.WorkDir, repo)
+	if err != nil {
+		return "", taskFatal{err: fmt.Errorf("task %q: %w", task.Name, err)}
+	}
+
+	relDir, _ := filepath.Rel(e.WorkDir, taskDir)
+	if relDir == "" {
+		relDir = "."
+	}
+
+	fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
+
+	env := os.Environ()
+	env = append(env, "CI_PROJECT_DIR="+taskDir)
+	if opts.Variables != nil {
+		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
+		for k, v := range vars {
+			env = append(env, k+"="+v)
+		}
+	}
+
+	var taskOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
+	cmd.Dir = taskDir
+	cmd.Env = env
+	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+
+	runErr := cmd.Run()
+
+	return taskOut.String(), runErr
+}
+
+// GitLabRunnerExecutor runs tasks via gitlab-runner exec.
+type GitLabRunnerExecutor struct {
+	WorkDir  string
+	StageMap map[string]string
+}
+
+func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
+	stage := e.StageMap[task.Name]
+	fmt.Fprintf(opts.Stdout, "[RUN] %s (stage=%s via gitlab-runner exec)\n", task.Name, stage)
+
+	var taskOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
+	cmd.Dir = e.WorkDir
+	cmd.Env = append(os.Environ(), "CI_PROJECT_DIR="+e.WorkDir)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+
+	if opts.Variables != nil {
+		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
+		for k, v := range vars {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+
+	runErr := cmd.Run()
+
+	return taskOut.String(), runErr
+}
+
+// taskLoop iterates over ordered nodes, skipping manual/blocked tasks and
+// delegating execution to the provided Executor.
+func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts Options) ([]TaskResult, error) {
+	var results []TaskResult
+	failedTasks := make(map[string]bool)
+	for _, node := range ordered {
+		task := node.Task
+		if task.Manual && !opts.IncludeManual {
+			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
+			waiting := TaskResult{Name: task.Name, Status: "manual"}
+			results = append(results, waiting)
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(waiting)
+			}
+			continue
+		}
+		blocked := false
+		for _, dep := range task.DependsOn {
+			if failedTasks[dep] {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
+			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			results = append(results, skipped)
+			failedTasks[task.Name] = true
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(skipped)
+			}
+			continue
+		}
+
+		if opts.OnTaskStart != nil {
+			opts.OnTaskStart(task.Name)
+		}
+
+		start := time.Now()
+		output, runErr := executor.RunTask(ctx, task, opts)
+		dur := time.Since(start)
+
+		var fatal taskFatal
+		if errors.As(runErr, &fatal) {
+			return results, fatal
+		}
+
+		tr := TaskResult{
+			Name:     task.Name,
+			Output:   output,
+			Duration: dur,
+		}
+		if runErr != nil {
+			tr.Status = "failed"
+			tr.Error = runErr.Error()
+			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
+			results = append(results, tr)
+			failedTasks[task.Name] = true
+		} else {
+			tr.Status = "passed"
+			fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
+			results = append(results, tr)
+		}
+		if opts.OnTaskComplete != nil {
+			opts.OnTaskComplete(tr)
+		}
+	}
+	return results, nil
+}
+
 // Run resolves and executes the tasks selected by changed. Each task runs
 // in its own Docker container. Tasks run in dependency order.
 func Run(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -87,115 +314,18 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		defaultImage = "alpine:latest"
 	}
 
-	var results []TaskResult
-	failedTasks := make(map[string]bool)
-	for _, node := range ordered {
-		task := node.Task
-		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
-			waiting := TaskResult{Name: task.Name, Status: "manual"}
-			results = append(results, waiting)
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(waiting)
-			}
-			continue
-		}
-		// Skip tasks whose dependencies failed.
-		blocked := false
-		for _, dep := range task.DependsOn {
-			if failedTasks[dep] {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
-			results = append(results, skipped)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
-			}
-			continue
-		}
-		repo := repos[task.Execute.Repo]
-		taskDir, err := repoDir(workDir, repo)
-		if err != nil {
-			return results, fmt.Errorf("task %q: %w", task.Name, err)
-		}
-
-		image := task.Execute.Image
-		if image == "" {
-			image = defaultImage
-		}
-
-		relDir, _ := filepath.Rel(workDir, taskDir)
-		if relDir == "" {
-			relDir = "."
-		}
-
-		fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
-		if opts.OnTaskStart != nil {
-			opts.OnTaskStart(task.Name)
-		}
-
-		// Build docker run command.
-		args := []string{
-			"run", "--rm",
-			"--name", fmt.Sprintf("metaci-%s-%d", task.Name, time.Now().UnixNano()),
-			"-v", workDir + ":/workspace",
-			"-w", "/workspace/" + relDir,
-			"-e", "CI_PROJECT_DIR=/workspace/" + relDir,
-		}
-
-		// Inject resolved variables.
-		if opts.Variables != nil {
-			vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-			for k, v := range vars {
-				args = append(args, "-e", k+"="+v)
-			}
-		}
-
-		args = append(args, image, "sh", "-c", task.Execute.Script)
-
-		var taskOut bytes.Buffer
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-		cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
-
-		start := time.Now()
-		runErr := cmd.Run()
-		dur := time.Since(start)
-
-		tr := TaskResult{
-			Name:     task.Name,
-			Output:   taskOut.String(),
-			Duration: dur,
-		}
-		if runErr != nil {
-			tr.Status = "failed"
-			tr.Error = runErr.Error()
-			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
-			results = append(results, tr)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(tr)
-			}
-			continue
-		}
-		tr.Status = "passed"
-		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
-		results = append(results, tr)
-		if opts.OnTaskComplete != nil {
-			opts.OnTaskComplete(tr)
-		}
+	executor := &DockerExecutor{
+		WorkDir:      workDir,
+		Repos:        repos,
+		DefaultImage: defaultImage,
 	}
-	return results, nil
+	return taskLoop(ctx, ordered, executor, opts)
 }
 
 // RunLocal resolves and executes tasks directly on the host without Docker.
-// Each task runs via `sh -c` in the repo directory.
+// Each task runs via `bash -c` in the repo directory.
 func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -241,100 +371,16 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		repos[repo.Name] = repo
 	}
 
-	var results []TaskResult
-	failedTasks := make(map[string]bool)
-	for _, node := range ordered {
-		task := node.Task
-		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
-			waiting := TaskResult{Name: task.Name, Status: "manual"}
-			results = append(results, waiting)
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(waiting)
-			}
-			continue
-		}
-		blocked := false
-		for _, dep := range task.DependsOn {
-			if failedTasks[dep] {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
-			results = append(results, skipped)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
-			}
-			continue
-		}
-		repo := repos[task.Execute.Repo]
-		taskDir, err := repoDir(workDir, repo)
-		if err != nil {
-			return results, fmt.Errorf("task %q: %w", task.Name, err)
-		}
-
-		relDir, _ := filepath.Rel(workDir, taskDir)
-		if relDir == "" {
-			relDir = "."
-		}
-
-		fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
-		if opts.OnTaskStart != nil {
-			opts.OnTaskStart(task.Name)
-		}
-
-		env := os.Environ()
-		env = append(env, "CI_PROJECT_DIR="+taskDir)
-		if opts.Variables != nil {
-			vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-			for k, v := range vars {
-				env = append(env, k+"="+v)
-			}
-		}
-
-		var taskOut bytes.Buffer
-		cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
-		cmd.Dir = taskDir
-		cmd.Env = env
-		cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-		cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
-
-		start := time.Now()
-		runErr := cmd.Run()
-		dur := time.Since(start)
-
-		tr := TaskResult{
-			Name:     task.Name,
-			Output:   taskOut.String(),
-			Duration: dur,
-		}
-		if runErr != nil {
-			tr.Status = "failed"
-			tr.Error = runErr.Error()
-			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
-			results = append(results, tr)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(tr)
-			}
-			continue
-		}
-		tr.Status = "passed"
-		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
-		results = append(results, tr)
-		if opts.OnTaskComplete != nil {
-			opts.OnTaskComplete(tr)
-		}
+	executor := &LocalExecutor{
+		WorkDir: workDir,
+		Repos:   repos,
 	}
-	return results, nil
+	return taskLoop(ctx, ordered, executor, opts)
 }
 
 // RunGitLabRunner executes tasks via `gitlab-runner exec`.
 func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -372,85 +418,16 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 		return nil, err
 	}
 
-	var results []TaskResult
-	failedTasks := make(map[string]bool)
-	for _, node := range ordered {
-		task := node.Task
-		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
-			waiting := TaskResult{Name: task.Name, Status: "manual"}
-			results = append(results, waiting)
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(waiting)
-			}
-			continue
-		}
-		blocked := false
-		for _, dep := range task.DependsOn {
-			if failedTasks[dep] {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
-			results = append(results, skipped)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
-			}
-			continue
-		}
-
-		stage := stageMap[task.Name]
-		fmt.Fprintf(opts.Stdout, "[RUN] %s (stage=%s via gitlab-runner exec)\n", task.Name, stage)
-
-		var taskOut bytes.Buffer
-		cmd := exec.CommandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
-		cmd.Dir = workDir
-		cmd.Env = append(os.Environ(), "CI_PROJECT_DIR="+workDir)
-		cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-		cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
-
-		if opts.Variables != nil {
-			vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-			for k, v := range vars {
-				cmd.Env = append(cmd.Env, k+"="+v)
-			}
-		}
-
-		start := time.Now()
-		runErr := cmd.Run()
-		dur := time.Since(start)
-
-		tr := TaskResult{
-			Name:     task.Name,
-			Output:   taskOut.String(),
-			Duration: dur,
-		}
-		if runErr != nil {
-			tr.Status = "failed"
-			tr.Error = runErr.Error()
-			results = append(results, tr)
-			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(tr)
-			}
-			continue
-		}
-		tr.Status = "passed"
-		fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
-		results = append(results, tr)
-		if opts.OnTaskComplete != nil {
-			opts.OnTaskComplete(tr)
-		}
+	executor := &GitLabRunnerExecutor{
+		WorkDir:  workDir,
+		StageMap: stageMap,
 	}
-	return results, nil
+	return taskLoop(ctx, ordered, executor, opts)
 }
 
 // RunOne executes a single named task (used for manual job approval).
 func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
+	synchronizeOutput(&opts)
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
 )
 
 func seedProjects(t *testing.T, path string, names []string) {
@@ -326,7 +327,7 @@ func TestParsePaginationUnit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/projects?"+tt.query, nil)
-			limit, offset, errStr, status := parsePagination(req.URL.Query())
+			limit, offset, errStr, status := pagination.Parse(req.URL.Query())
 			if tt.wantErr {
 				if status == http.StatusOK {
 					t.Fatal("expected error, got OK")
@@ -369,7 +370,7 @@ func TestBuildPaginationLinks(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			next, prev := buildPaginationLinks(tt.offset, tt.limit, tt.total, prefix)
+			next, prev := pagination.Links(tt.offset, tt.limit, tt.total, prefix)
 			if next == nil && tt.wantNext != nil {
 				t.Errorf("next = nil, want %s", *tt.wantNext)
 			} else if next != nil && tt.wantNext == nil {

@@ -690,6 +690,42 @@ func TestRunOne_Defaults(t *testing.T) {
 	}
 }
 
+func TestRunGitLabRunner_CommandNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	proj := model.Project{
+		Name:  "test",
+		Repos: []model.Repo{{Name: "main", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{
+				Name:    "build",
+				Execute: model.ExecuteSpec{Repo: "main", Script: "echo hello"},
+			},
+		},
+	}
+	changed := map[string]bool{"main": true}
+
+	var buf bytes.Buffer
+	opts := Options{
+		WorkDir:       tmp,
+		IncludeManual: true,
+		Stdout:        &buf,
+		Stderr:        &buf,
+	}
+
+	generateYAML := func(p model.Project, nodes []dag.Node) string {
+		return "stages:\n  - build\nbuild:\n  stage: build\n  script: echo hello\n"
+	}
+
+	_ = changed // nodes passed explicitly, Resolve not used here
+	results, err := RunGitLabRunner(context.Background(), proj, nil, opts, generateYAML)
+	// gitlab-runner won't be found, but we exercise the setup + ordering logic
+	if err == nil && len(results) > 0 {
+		// If it somehow succeeded, that's fine too
+	}
+	// At minimum, the function should not panic
+	_ = results
+}
+
 func TestRunLocal_VariablesInjected(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {

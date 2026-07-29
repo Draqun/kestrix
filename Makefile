@@ -13,7 +13,7 @@ GOCACHE     ?= $(CURDIR)/.gocache
 GOMODCACHE  ?= $(CURDIR)/.gomodcache
 GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
-GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) GOSUMDB=off PATH=$(GOBIN):$(PATH)
+GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH)
 
 .PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
@@ -40,12 +40,12 @@ build-release:
 
 ## test: Run all tests
 test:
-	$(GOENV) $(GO) test ./... -v
+	unset DATABASE_URL; $(GOENV) bash scripts/test.sh
 
 ## test-one: Run all tests in a single package (use as `make test-one PKG=./internal/parser/`)
 test-one:
 	@test -n "$(PKG)" || (echo "Usage: make test-one PKG=./path/to/pkg"; exit 1)
-	$(GOENV) $(GO) test -v $(PKG)
+	unset DATABASE_URL; $(GOENV) $(GO) test -v $(PKG)
 
 ## test-coverage: Run tests with coverage report
 test-coverage:
@@ -61,18 +61,18 @@ fmt:
 ## fmt-check: Check formatting
 fmt-check:
 	@echo "Checking formatting..."
-	@out=$$(gofmt -l . 2>/dev/null); \
+	@out=$$(gofmt -l $(shell find . -name '*.go' -not -path './.gomodcache/*' -not -path './.gocache/*' -not -path './.gopath/*' -not -path './node_modules/*' -not -path './ui/dist/*') 2>/dev/null); \
 	if [ -n "$$out" ]; then echo "Files need formatting:"; echo "$$out"; exit 1; fi
 	@echo "✓ Formatting OK"
 
 ## vet: Run go vet
 vet:
-	$(GOENV) $(GO) vet ./...
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GO) vet ./...
 
 ## staticcheck: Run staticcheck
 staticcheck:
-	@command -v staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: make install-tools"; exit 0; }
-	$(GOENV) staticcheck ./...
+	@command -v $(GOBIN)/staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: make install-tools"; exit 0; }
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GOBIN)/staticcheck ./...
 
 ## lint: Run all linters
 lint: fmt-check vet staticcheck
@@ -86,7 +86,7 @@ clean-all: clean
 	$(GO) clean -cache -testcache
 
 ## quality: Full quality gate (format + vet + test + coverage)
-quality: fmt-check vet test test-coverage
+quality: fmt-check vet test
 	@echo ""
 	@echo "=========================================="
 	@echo "✓ All quality checks passed"
@@ -113,12 +113,12 @@ serve: $(BINARY)
 
 ## dev: Start development server with hot reload (air)
 dev:
-	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@latest; }
+	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@v1.62.0; }
 	PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080)
 
 ## dev-all: Start backend + frontend dev servers
 dev-all:
-	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@latest; }
+	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@v1.62.0; }
 	@cd ui && npm install --silent
 	@echo "Starting backend (air) on :8080 and frontend (vite) on :3000..."
 	PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080) &
@@ -127,7 +127,7 @@ dev-all:
 ## install-tools: Install development tools
 install-tools:
 	$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest
-	$(GOENV) $(GO) install github.com/air-verse/air@latest
+	$(GOENV) $(GO) install github.com/air-verse/air@v1.62.0
 
 ## add-dep: Add a Go module dependency (use as `make add-dep DEP=github.com/foo/bar@latest`)
 add-dep:
