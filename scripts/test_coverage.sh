@@ -35,7 +35,7 @@ pkg_coverage() {
   local prefix=$2
   awk -v pfx="$prefix" '
     /^mode:/ { next }
-    $1 ~ "^" pfx {
+    index($1, pfx) == 1 {
       n = $2 + 0          # statement count for this block
       if (n == 0) next
       covered = $3 + 0   # execution count; 0 = not covered

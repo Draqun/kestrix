@@ -10,7 +10,7 @@ go test $PKGS -v -count=1 -coverprofile=coverage.out -covermode=atomic -race
 # On a clean local checkout, exclude that adapter from the denominator; CI sets
 # METACI_TEST_DATABASE_URL and therefore gates the complete store package.
 if [ -z "${METACI_TEST_DATABASE_URL:-}" ]; then
-  awk '!/\/internal\/store\/pgstore[^/]*\.go:/' coverage.out > coverage.local.out
+  grep -vF '/internal/store/pgstore' coverage.out > coverage.local.out
   mv coverage.local.out coverage.out
 fi
 
@@ -19,13 +19,13 @@ fi
 # denominator in that environment or coverage will fail even though the guarded
 # tests are intentionally skipped.
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  awk '!/\/internal\/runner\/[^/]*\.go:/' coverage.out > coverage.local.out
+  grep -vF '/internal/runner/' coverage.out > coverage.local.out
   mv coverage.local.out coverage.out
 fi
 
 # CLI tests intentionally execute the built binary as a subprocess. Go's
 # coverage runtime cannot attribute subprocess execution to the parent profile.
-awk '!/\/cmd\/kestrix\/[^/]*\.go:/' coverage.out > coverage.testable.out
+grep -vF '/cmd/kestrix/' coverage.out > coverage.testable.out
 mv coverage.testable.out coverage.out
 
 echo "=== Coverage check ==="
