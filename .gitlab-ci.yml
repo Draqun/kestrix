@@ -45,7 +45,8 @@ test:
   # golang:1.25-alpine ships busybox sh only — install explicit bash
   # because the runner tests skip when bash is unavailable.
   before_script:
-    - apk add --no-cache bash make
+    - apk add --no-cache bash make gcc musl-dev
+    - export CGO_ENABLED=1
   script:
     - make test
     - go tool cover -func=coverage.out
