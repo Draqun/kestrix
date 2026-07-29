@@ -40,17 +40,6 @@ type Options struct {
 	OnTaskComplete func(TaskResult)
 }
 
-type synchronizedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (w *synchronizedWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.w.Write(p)
-}
-
 func synchronizeOutput(opts *Options) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
