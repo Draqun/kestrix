@@ -44,7 +44,7 @@ logs:
 
 ## logs-kestrix: Follow only Kestrix logs
 logs-kestrix:
-	$(COMPOSE) logs -f metaci
+	$(COMPOSE) logs -f kestrix
 
 ## rebuild: Rebuild images and restart
 rebuild:
@@ -62,7 +62,7 @@ ps:
 
 ## shell: Open a shell in the Kestrix container
 shell:
-	$(COMPOSE) exec metaci sh
+	$(COMPOSE) exec kestrix sh
 
 ## test-webhook: Send a test webhook to the local server
 test-webhook:

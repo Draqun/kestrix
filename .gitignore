@@ -54,3 +54,6 @@ coverage/
 Thumbs.db
 ui/dist/
 node_modules/
+
+# Local metadata
+meta.txt
