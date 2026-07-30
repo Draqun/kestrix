@@ -3,8 +3,8 @@
 > Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 > Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
 
-[![pipeline status](https://gitlab.com/lunaris-bot/metaci/badges/main/pipeline.svg)](https://gitlab.com/lunaris-bot/metaci/-/pipelines)
-[![coverage report](https://gitlab.com/lunaris-bot/metaci/badges/main/coverage.svg)](https://gitlab.com/lunaris-bot/metaci/-/pipelines)
+Project hosting and CI links are intentionally configured outside the Go
+module identity. See `project.yaml` for the optional source location.
 
 ---
 
@@ -64,7 +64,7 @@ make build
 ./bin/kestrix validate examples/demo-mono/pipeline.tf
 
 # CLI: run a pipeline locally in dependency order
-./bin/kestrix run --changed metaci .metaci/pipeline.tf
+./bin/kestrix run --changed kestrix ci/pipeline.tf
 
 # API: health check
 curl http://localhost:8080/api/health
@@ -110,6 +110,18 @@ dispatch:
 | `METACI_WEBHOOK_SECRET` | `--secret` | Webhook HMAC secret |
 | `METACI_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
 | `METACI_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
+
+## Project identity and repository location
+
+Kestrix is the product name and `kestrix` is the provider-neutral Go module
+path. The optional `source.url` field in `project.yaml` records where the
+repository is hosted, but changing that URL does not require changing Go
+imports. It is public metadata only; credentials belong in environment
+variables.
+
+Consumers that import internal packages must migrate imports from the former
+provider-owned module path to `kestrix/...`. The old path is no longer the
+project identity.
 
 ## Architecture
 
@@ -201,7 +213,7 @@ Three examples demonstrate different scales:
 # Build
 make build
 
-# Run this repository's .metaci/pipeline.tf locally (same jobs as .gitlab-ci.yml)
+# Run this repository's ci/pipeline.tf locally (same jobs as the configured CI)
 make pipeline
 
 # Test
@@ -234,9 +246,9 @@ cd ui && npm install && npm run dev
 ### Running a pipeline from the UI
 
 1. Start the application with `make ui-serve DIR=.`.
-2. Open **Projects**. If `metaci` is not listed, create it with repository path
-   set to this checkout's absolute path and pipeline directory set to `.metaci`.
-3. Select **Open Pipeline**, stay on the **Graph** view, enter `metaci` in
+2. Open **Projects**. If `kestrix` is not listed, create it with repository path
+   set to this checkout's absolute path and pipeline directory set to `ci`.
+3. Select **Open Pipeline**, stay on the **Graph** view, enter `kestrix` in
    **Changed repos**, then choose **Run locally**.
 4. The job output and final status appear below the graph. Manual tasks remain
    skipped unless **Auto-run manual jobs** is enabled.

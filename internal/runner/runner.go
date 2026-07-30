@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/dag"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 )
 
 var (

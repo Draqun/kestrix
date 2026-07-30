@@ -3,7 +3,7 @@ package dag
 import (
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 func newTestEngine() *Engine {

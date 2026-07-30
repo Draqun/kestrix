@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
+	"kestrix/internal/variables"
 )
 
 // ProjectService handles project CRUD with validation.

@@ -1,4 +1,4 @@
-module gitlab.com/lunaris-bot/metaci
+module kestrix
 
 go 1.25.0
 

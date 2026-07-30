@@ -32,8 +32,8 @@ services:
       - METACI_GITLAB_TOKEN=${METACI_GITLAB_TOKEN:-}
       - METACI_DISPATCH_PROJECT=${METACI_DISPATCH_PROJECT:-}
       - DATABASE_URL=postgres://metaci:metaci@postgres:5432/metaci?sslmode=disable
-      - DOCKER_REGISTRY=${DOCKER_REGISTRY:-registry.gitlab.com}
-      - DOCKER_IMAGE=${DOCKER_IMAGE:-registry.gitlab.com/lunaris-bot/metaci}
+      - DOCKER_REGISTRY=${DOCKER_REGISTRY:-}
+      - DOCKER_IMAGE=${DOCKER_IMAGE:-kestrix}
       - DOCKER_USERNAME=${DOCKER_USERNAME:-}
       - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
     healthcheck:

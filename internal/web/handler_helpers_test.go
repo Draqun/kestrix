@@ -3,7 +3,7 @@ package web
 import (
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 func TestBuildVarStore_NilProject(t *testing.T) {

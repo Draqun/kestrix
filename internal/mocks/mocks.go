@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 )
 
 // MockProjectStore records calls and returns configurable values.

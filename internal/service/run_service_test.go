@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
+	"kestrix/internal/model"
 )
 
 type emptyTaskRunner struct{}

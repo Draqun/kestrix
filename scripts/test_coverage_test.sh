@@ -41,14 +41,14 @@ run_test() {
 # Every package has 90%+ coverage, total is 90%.
 mock_file_1="$TMPDIR/coverage_high.out"
 write_mock_profile "$mock_file_1" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:5.10,10.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:12.10,15.2 10 90" \
-  "gitlab.com/lunaris-bot/metaci/internal/web/handler.go:3.10,8.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/web/handler.go:10.10,13.2 10 80" \
-  "gitlab.com/lunaris-bot/metaci/internal/store/pg.go:4.10,9.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/store/pg.go:11.10,14.2 10 85" \
-  "gitlab.com/lunaris-bot/metaci/internal/runner/run.go:6.10,11.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/runner/run.go:13.10,16.2 10 80"
+  "kestrix/internal/service/svc.go:5.10,10.2 10 100" \
+  "kestrix/internal/service/svc.go:12.10,15.2 10 90" \
+  "kestrix/internal/web/handler.go:3.10,8.2 10 100" \
+  "kestrix/internal/web/handler.go:10.10,13.2 10 80" \
+  "kestrix/internal/store/pg.go:4.10,9.2 10 100" \
+  "kestrix/internal/store/pg.go:11.10,14.2 10 85" \
+  "kestrix/internal/runner/run.go:6.10,11.2 10 100" \
+  "kestrix/internal/runner/run.go:13.10,16.2 10 80"
 
 run_test "pass when coverage above all thresholds" \
   bash "$COVERAGE_SCRIPT" "$mock_file_1"
@@ -57,8 +57,8 @@ run_test "pass when coverage above all thresholds" \
 # service: 10/20 covered = 50%, no other packages, total = 50%.
 mock_file_2="$TMPDIR/coverage_low_total.out"
 write_mock_profile "$mock_file_2" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:5.10,10.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:12.10,20.2 10 0"
+  "kestrix/internal/service/svc.go:5.10,10.2 10 100" \
+  "kestrix/internal/service/svc.go:12.10,20.2 10 0"
 
 if bash "$COVERAGE_SCRIPT" "$mock_file_2"; then
   echo "FAIL: should fail when total coverage below 80%"
@@ -72,11 +72,11 @@ fi
 # store has 50% (below 80% threshold), total is high enough.
 mock_file_3="$TMPDIR/coverage_low_pkg.out"
 write_mock_profile "$mock_file_3" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:5.10,10.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/web/handler.go:3.10,8.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/store/pg.go:4.10,9.2 10 100" \
-  "gitlab.com/lunaris-bot/metaci/internal/store/pg.go:11.10,20.2 10 0" \
-  "gitlab.com/lunaris-bot/metaci/internal/runner/run.go:6.10,11.2 10 100"
+  "kestrix/internal/service/svc.go:5.10,10.2 10 100" \
+  "kestrix/internal/web/handler.go:3.10,8.2 10 100" \
+  "kestrix/internal/store/pg.go:4.10,9.2 10 100" \
+  "kestrix/internal/store/pg.go:11.10,20.2 10 0" \
+  "kestrix/internal/runner/run.go:6.10,11.2 10 100"
 
 if bash "$COVERAGE_SCRIPT" "$mock_file_3"; then
   echo "FAIL: should fail when a package is below its threshold"
@@ -90,8 +90,8 @@ fi
 # A rounded 99.0% result must never pass the 100% unit gate.
 mock_file_4="$TMPDIR/coverage_unit_not_exact.out"
 write_mock_profile "$mock_file_4" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:5.10,10.2 99 1" \
-  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:12.10,20.2 1 0"
+  "kestrix/internal/service/svc.go:5.10,10.2 99 1" \
+  "kestrix/internal/service/svc.go:12.10,20.2 1 0"
 if UNIT_ONLY=1 WEB_COVERAGE_THRESHOLD=100 bash "$COVERAGE_SCRIPT" "$mock_file_4"; then
   echo "FAIL: unit mode must reject uncovered statements"
   FAIL_COUNT=$((FAIL_COUNT + 1))

@@ -8,9 +8,9 @@ import (
 	"log"
 	"net/http"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
+	"kestrix/internal/domain"
 
-	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
+	"kestrix/internal/web/pagination"
 
 	"github.com/go-chi/chi/v5"
 )

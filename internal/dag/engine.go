@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 // Node is a single task in the resolved DAG, annotated with whether its trigger

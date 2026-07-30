@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
+	"kestrix/internal/service"
 )
 
 func runHandlerProject(t *testing.T, valid bool) (*mocks.MockProjectStore, *domain.ProjectConfig) {

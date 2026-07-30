@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 // --- GitLab Webhook Payload ---

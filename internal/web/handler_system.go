@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/version"
+	"kestrix/internal/domain"
+	"kestrix/internal/version"
 )
 
 // handleDashboard returns aggregate metrics for the overview dashboard.

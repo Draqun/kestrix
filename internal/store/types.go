@@ -5,7 +5,7 @@
 package store
 
 import (
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
+	"kestrix/internal/domain"
 )
 
 // TaskResult is an alias for domain.TaskResult, the single type used

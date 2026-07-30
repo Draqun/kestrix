@@ -16,7 +16,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 // ParseFile reads a single HCL file and returns its Project definition.
