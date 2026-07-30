@@ -69,8 +69,8 @@ go test -run TestWebhook ./internal/web/ -count=1
 - **On failure, runner continues**: dependents → `skipped`; independent tasks still run. Overall status fails if any task failed.
 - **`pipeline_def` JSONB** on each run = historical DAG snapshot. Run detail UI must use this, not live pipeline.
 - **Scripts need bash** (`pipefail`); busybox `sh` breaks. Pipeline uses `bash scripts/*.sh`.
-- **Prod compose**: `docker/docker-compose.prod.yml`, metaci on **:8081** (dev often :8080).
-- **Module path**: `gitlab.com/lunaris-bot/metaci` (not github).
+- **Prod compose**: `docker/docker-compose.prod.yml`, Kestrix on **:8081** (dev often :8080).
+- **Module path**: `kestrix`; repository hosting is configured separately in `project.yaml`.
 
 ## Conventions
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`

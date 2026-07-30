@@ -27,15 +27,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/config"
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/runner"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
-	"gitlab.com/lunaris-bot/metaci/internal/web"
+	"kestrix/internal/config"
+	"kestrix/internal/dag"
+	"kestrix/internal/domain"
+	"kestrix/internal/parser"
+	"kestrix/internal/runner"
+	"kestrix/internal/service"
+	"kestrix/internal/store"
+	"kestrix/internal/variables"
+	"kestrix/internal/web"
 )
 
 func main() {

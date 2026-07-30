@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
+	"kestrix/internal/dag"
+	"kestrix/internal/parser"
 )
 
 var readPipelineFile = os.ReadFile

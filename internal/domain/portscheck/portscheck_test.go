@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/runner"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"kestrix/internal/domain"
+	"kestrix/internal/runner"
+	"kestrix/internal/store"
 )
 
 func TestCompileTime_ProjectStore_FileStore(t *testing.T) {
@@ -18,7 +18,12 @@ func TestCompileTime_ProjectStore_FileStore(t *testing.T) {
 }
 
 func TestDomainHasNoInternalImports(t *testing.T) {
-	out, err := exec.Command("go", "list", "-f", "{{join .Imports \"\\n\"}}", "gitlab.com/lunaris-bot/metaci/internal/domain").Output()
+	modulePath, err := exec.Command("go", "list", "-m").Output()
+	if err != nil {
+		t.Fatalf("list module: %v", err)
+	}
+	packagePath := strings.TrimSpace(string(modulePath)) + "/internal/domain"
+	out, err := exec.Command("go", "list", "-f", "{{join .Imports \"\\n\"}}", packagePath).Output()
 	if err != nil {
 		t.Fatalf("list domain imports: %v", err)
 	}

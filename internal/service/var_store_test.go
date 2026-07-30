@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 )
 
 func TestBuildVarStore_Happy(t *testing.T) {

@@ -3,15 +3,19 @@ set -euo pipefail
 
 echo "=== Docker Build ==="
 
-REGISTRY="${DOCKER_REGISTRY:-registry.gitlab.com}"
-IMAGE="${DOCKER_IMAGE:-${REGISTRY}/lunaris-bot/metaci}"
+REGISTRY="${DOCKER_REGISTRY:-}"
+IMAGE="${DOCKER_IMAGE:-kestrix}"
 TAG="${DOCKER_TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo 'dev')}"
 DOCKERFILE="${DOCKERFILE:-docker/Dockerfile}"
+
+if [ -n "$REGISTRY" ] && [[ "$IMAGE" != */* ]]; then
+  IMAGE="${REGISTRY}/${IMAGE}"
+fi
 
 FULL_IMAGE="${IMAGE}:${TAG}"
 LATEST="${IMAGE}:latest"
 
-echo "Registry:  ${REGISTRY}"
+echo "Registry:  ${REGISTRY:-local}"
 echo "Image:     ${FULL_IMAGE}"
 echo "Dockerfile: ${DOCKERFILE}"
 

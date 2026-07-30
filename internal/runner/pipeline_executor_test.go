@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
+	"kestrix/internal/domain"
 )
 
 func TestPipelineExecutor_RejectsUnsupportedMode(t *testing.T) {

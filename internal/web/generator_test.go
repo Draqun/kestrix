@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/dag"
+	"kestrix/internal/model"
 )
 
 func TestGenerateGitLabCIBasic(t *testing.T) {

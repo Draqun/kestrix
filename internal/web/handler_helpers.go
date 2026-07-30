@@ -1,8 +1,8 @@
 package web
 
 import (
-	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
+	"kestrix/internal/model"
+	"kestrix/internal/variables"
 )
 
 // buildVarStore constructs a variables.Store from a project's variables,

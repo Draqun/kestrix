@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 )
 
 func TestMockProjectStore_UpsertRecordsCall(t *testing.T) {

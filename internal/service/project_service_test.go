@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
 )
 
 func TestProjectService_Create_MissingName(t *testing.T) {

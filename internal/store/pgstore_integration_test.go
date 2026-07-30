@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 )
 
 func testPG(t *testing.T) *PGStore {

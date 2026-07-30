@@ -3,14 +3,18 @@ set -euo pipefail
 
 echo "=== Deploy ==="
 
-REGISTRY="${DOCKER_REGISTRY:-registry.gitlab.com}"
-IMAGE="${DOCKER_IMAGE:-${REGISTRY}/lunaris-bot/metaci}"
+REGISTRY="${DOCKER_REGISTRY:-}"
+IMAGE="${DOCKER_IMAGE:-kestrix}"
 TAG="${DOCKER_TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo 'dev')}"
 COMPOSE_DIR="${COMPOSE_DIR:-docker}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
 HEALTH_URL="${HEALTH_URL:-http://localhost:8081/health}"
 
 FULL_IMAGE="${IMAGE}:${TAG}"
+
+if [ -n "$REGISTRY" ] && [[ "$IMAGE" != */* ]]; then
+  FULL_IMAGE="${REGISTRY}/${FULL_IMAGE}"
+fi
 
 export METACI_IMAGE="${FULL_IMAGE}"
 
@@ -31,6 +35,10 @@ docker stop metaci-dev 2>/dev/null || true
 docker rm metaci-dev 2>/dev/null || true
 
 if [ -n "$DEPLOY_HOST" ]; then
+  if [ -z "${DOCKER_IMAGE:-}" ] && [ -z "$REGISTRY" ]; then
+    echo "DOCKER_IMAGE or DOCKER_REGISTRY is required for remote deployment"
+    exit 1
+  fi
   echo "Deploying to remote host ${DEPLOY_HOST}..."
   scp "${COMPOSE_DIR}/docker-compose.prod.yml" "${DEPLOY_HOST}:~/metaci-docker-compose.yml"
   ssh "${DEPLOY_HOST}" "METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml pull 2>/dev/null || true && METACI_IMAGE=${FULL_IMAGE} docker compose -f ~/metaci-docker-compose.yml up -d"

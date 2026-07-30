@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"kestrix/internal/parser"
+	"kestrix/internal/store"
 )
 
 // dockerAvailable mirrors the helper in internal/runner/runner_test.go and lets

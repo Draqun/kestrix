@@ -139,7 +139,7 @@ resolve: $(BINARY)
 
 ## pipeline: Run this repository's Kestrix pipeline locally
 pipeline: $(BINARY)
-	$(BINARY) run --changed metaci ci/pipeline.tf
+	$(BINARY) run --changed kestrix ci/pipeline.tf
 
 ## serve: Start the webhook server
 serve: $(BINARY)

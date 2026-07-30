@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/store"
-	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
+	"kestrix/internal/store"
+	"kestrix/internal/web/pagination"
 )
 
 func seedProjects(t *testing.T, path string, names []string) {

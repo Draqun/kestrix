@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/model"
 )
 
 func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project) (int, error) {

@@ -1,8 +1,8 @@
 package web
 
 import (
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"kestrix/internal/domain"
+	"kestrix/internal/store"
 )
 
 // newPGStores is the external PostgreSQL adapter. Its successful connection

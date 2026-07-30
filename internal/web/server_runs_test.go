@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
+	"kestrix/internal/service"
 
 	"github.com/go-chi/chi/v5"
 )

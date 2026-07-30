@@ -2,7 +2,7 @@
 // New code should import internal/domain directly.
 package model
 
-import "gitlab.com/lunaris-bot/metaci/internal/domain"
+import "kestrix/internal/domain"
 
 type Repo = domain.Repo
 type ExecuteSpec = domain.ExecuteSpec

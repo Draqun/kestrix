@@ -96,7 +96,7 @@ fi
 # ── Per-package thresholds ─────────────────────────────────────────
 # Each entry: "<path_prefix> <threshold>"
 # We strip the module prefix for matching.
-MODULE="gitlab.com/lunaris-bot/metaci"
+MODULE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && go list -m)"
 
 check_pkg() {
   local pkg=$1

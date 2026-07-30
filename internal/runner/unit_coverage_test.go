@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/variables"
+	"kestrix/internal/dag"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
+	"kestrix/internal/variables"
 )
 
 func TestRunnerHelperProcess(t *testing.T) {

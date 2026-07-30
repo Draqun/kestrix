@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/dispatch"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
+	"kestrix/internal/dag"
+	"kestrix/internal/dispatch"
+	"kestrix/internal/parser"
+	"kestrix/internal/service"
 )
 
 func (s *Server) logWebhook(entry map[string]interface{}) {

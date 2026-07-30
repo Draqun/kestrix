@@ -11,12 +11,12 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
-	"gitlab.com/lunaris-bot/metaci/internal/web/pagination"
+	"kestrix/internal/dag"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
+	"kestrix/internal/parser"
+	"kestrix/internal/service"
+	"kestrix/internal/web/pagination"
 
 	"github.com/go-chi/chi/v5"
 )

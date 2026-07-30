@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"gitlab.com/lunaris-bot/metaci/internal/dag"
-	"gitlab.com/lunaris-bot/metaci/internal/model"
+	"kestrix/internal/dag"
+	"kestrix/internal/model"
 )
 
 // GenerateGitLabCI produces a .gitlab-ci.yml string from the resolved DAG nodes.

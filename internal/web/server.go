@@ -8,16 +8,16 @@ import (
 	"strings"
 	"sync"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/parser"
-	"gitlab.com/lunaris-bot/metaci/internal/runner"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"kestrix/internal/domain"
+	"kestrix/internal/parser"
+	"kestrix/internal/runner"
+	"kestrix/internal/service"
+	"kestrix/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"gitlab.com/lunaris-bot/metaci/docs"
+	"kestrix/docs"
 )
 
 // SignatureConfig defines webhook authentication.

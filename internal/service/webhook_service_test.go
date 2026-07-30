@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
+	"kestrix/internal/mocks"
 )
 
 func TestWebhookService_Process_Happy(t *testing.T) {

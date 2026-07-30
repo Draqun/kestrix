@@ -1,0 +1,5 @@
+# Public project metadata. Repository hosting can change without changing Go imports.
+name: Kestrix
+module: kestrix
+source:
+  url: "https://gitlab.com/kestrix/kestrix"

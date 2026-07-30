@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/lunaris-bot/metaci/internal/domain"
-	"gitlab.com/lunaris-bot/metaci/internal/mocks"
-	"gitlab.com/lunaris-bot/metaci/internal/service"
-	"gitlab.com/lunaris-bot/metaci/internal/store"
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
+	"kestrix/internal/service"
+	"kestrix/internal/store"
 )
 
 func TestHandleCreateProject_InvalidJSON(t *testing.T) {
