@@ -206,12 +206,9 @@ func FromEnv(prefix string) *Store {
 		if !strings.HasPrefix(e, prefix) {
 			continue
 		}
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimPrefix(parts[0], prefix)
-		s.SetProject(key, parts[1])
+		name, value, _ := strings.Cut(e, "=")
+		key := strings.TrimPrefix(name, prefix)
+		s.SetProject(key, value)
 	}
 	return s
 }

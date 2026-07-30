@@ -17,6 +17,9 @@ import (
 )
 
 func dockerAvailable() bool {
+	if testing.Short() || os.Getenv("KESTRIX_UNIT_ONLY") == "1" {
+		return false
+	}
 	_, err := exec.LookPath("docker")
 	if err != nil {
 		return false
@@ -29,6 +32,9 @@ func dockerAvailable() bool {
 // shells out via bash -c so it needs a real bash (not busybox sh).
 // On alpine CI images bash isn't installed; those tests skip.
 func bashAvailable() bool {
+	if testing.Short() || os.Getenv("KESTRIX_UNIT_ONLY") == "1" {
+		return false
+	}
 	_, err := exec.LookPath("bash")
 	return err == nil
 }
@@ -66,21 +72,23 @@ func TestRunExecutesDependenciesInOrder(t *testing.T) {
 		Name:  "local",
 		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
 		Tasks: []model.Task{
-			{Name: "first", Trigger: "repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo", Script: "printf first > /workspace/order"}},
-			{Name: "second", Trigger: "repo.repo.changed", DependsOn: []string{"first"}, Execute: model.ExecuteSpec{Repo: "repo", Script: "printf second >> /workspace/order"}},
+			{Name: "first", Trigger: "repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo", Script: "printf first"}},
+			{Name: "second", Trigger: "repo.repo.changed", DependsOn: []string{"first"}, Execute: model.ExecuteSpec{Repo: "repo", Script: "printf second"}},
 		},
 	}
 	var output bytes.Buffer
-	_, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: dir, Stdout: &output, Stderr: &output})
+	results, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: dir, Stdout: &output, Stderr: &output})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(dir, "order"))
-	if err != nil {
-		t.Fatalf("read result: %v", err)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	if string(got) != "firstsecond" {
-		t.Errorf("execution order = %q, want firstsecond", string(got))
+	if results[0].Name != "first" || results[1].Name != "second" {
+		t.Errorf("execution order = %q, %q; want first, second", results[0].Name, results[1].Name)
+	}
+	if !strings.HasSuffix(results[0].Output, "first") || !strings.HasSuffix(results[1].Output, "second") {
+		t.Errorf("task outputs = %q, %q; want outputs ending in first and second", results[0].Output, results[1].Output)
 	}
 }
 
@@ -91,19 +99,21 @@ func TestRunSkipsManualTasks(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}
-	dir := t.TempDir()
 	project := model.Project{
 		Name:  "local",
 		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{{Name: "manual", Trigger: "repo.repo.changed", Manual: true, Execute: model.ExecuteSpec{Repo: "repo", Script: "touch /workspace/ran"}}},
+		Tasks: []model.Task{{Name: "manual", Trigger: "repo.repo.changed", Manual: true, Execute: model.ExecuteSpec{Repo: "repo", Script: "printf should-not-run"}}},
 	}
 	var output bytes.Buffer
-	_, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: dir, Stdout: &output})
+	results, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: t.TempDir(), Stdout: &output})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "ran")); !os.IsNotExist(err) {
-		t.Fatalf("manual task should not run, stat err = %v", err)
+	if len(results) != 1 || results[0].Name != "manual" || results[0].Status != "manual" {
+		t.Fatalf("manual task result = %+v", results)
+	}
+	if results[0].Output != "" {
+		t.Errorf("manual task output = %q, want empty", results[0].Output)
 	}
 }
 
@@ -691,6 +701,9 @@ func TestRunOne_Defaults(t *testing.T) {
 }
 
 func TestRunGitLabRunner_CommandNotFound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	tmp := t.TempDir()
 	proj := model.Project{
 		Name:  "test",

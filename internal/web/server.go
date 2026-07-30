@@ -74,6 +74,8 @@ type Server struct {
 	webhookService *service.WebhookService
 }
 
+var listenAndServe = http.ListenAndServe
+
 // NewServer creates a new HTTP server with the standard wiring.
 func NewServer(cfg Config) *Server {
 	projectStore, runStore := initStores(cfg)
@@ -126,13 +128,12 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore) {
 	var projectStore domain.ProjectStore
 	var runStore domain.RunStore
 	if cfg.DatabaseURL != "" {
-		pg, err := store.NewPG(cfg.DatabaseURL)
+		var err error
+		projectStore, runStore, err = newPGStores(cfg.DatabaseURL)
 		if err != nil {
 			log.Printf("warning: could not connect to database: %v, falling back to file store", err)
 		} else {
 			log.Printf("connected to PostgreSQL")
-			projectStore = pg
-			runStore = pg
 		}
 	}
 	if projectStore != nil {
@@ -252,5 +253,5 @@ func (s *Server) buildRouter() chi.Router {
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
 	log.Printf("Kestrix server listening on %s", s.cfg.ListenAddr)
-	return http.ListenAndServe(s.cfg.ListenAddr, s.router)
+	return listenAndServe(s.cfg.ListenAddr, s.router)
 }

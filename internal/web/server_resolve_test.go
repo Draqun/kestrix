@@ -39,7 +39,7 @@ func writeTaskPipeline(t *testing.T, dir string) {
 
 // --- handleResolve --------------------------------------------------------
 
-func TestHandleResolve_Happy(t *testing.T) {
+func TestHandleResolveRoute_Happy(t *testing.T) {
 	dir := t.TempDir()
 	writeTaskPipeline(t, dir)
 	srv := NewServer(Config{
@@ -64,7 +64,7 @@ func TestHandleResolve_Happy(t *testing.T) {
 	}
 }
 
-func TestHandleResolve_InvalidJSON(t *testing.T) {
+func TestHandleResolveRoute_InvalidJSON(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/resolve", strings.NewReader("{not json"))
@@ -78,7 +78,7 @@ func TestHandleResolve_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleResolve_BadDir(t *testing.T) {
+func TestHandleResolveRoute_BadDir(t *testing.T) {
 	srv := systemHandlerServer(t)
 	body := `{"dir":"/nonexistent/path"}`
 	w := httptest.NewRecorder()

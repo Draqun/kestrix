@@ -15,7 +15,7 @@ GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
 GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH)
 
-.PHONY: help init build build-release test test-coverage fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
+.PHONY: help init build build-release test test-coverage test-integration test-e2e runner-unit-coverage runner-integration web-e2e fmt fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-down docker-logs
 
 ## help: Show this help message
 help:
@@ -38,21 +38,44 @@ $(BINARY): $(shell find . -name '*.go' -type f 2>/dev/null) go.mod
 build-release:
 	$(GOENV) $(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/kestrix
 
-## test: Run all tests
+## test: Run unit tests (integration and e2e are separate targets)
 test:
-	unset DATABASE_URL; $(GOENV) bash scripts/test.sh
+	unset DATABASE_URL; $(GOENV) bash scripts/test.sh unit
 
 ## test-one: Run all tests in a single package (use as `make test-one PKG=./internal/parser/`)
 test-one:
 	@test -n "$(PKG)" || (echo "Usage: make test-one PKG=./path/to/pkg"; exit 1)
 	unset DATABASE_URL; $(GOENV) $(GO) test -v $(PKG)
 
-## test-coverage: Run tests with coverage report
+## test-coverage: Run unit tests with coverage report
 test-coverage:
 	@mkdir -p coverage
-	$(GOENV) $(GO) test ./... -coverprofile=coverage/coverage.out -covermode=atomic
+	unset DATABASE_URL; $(GOENV) bash scripts/test.sh unit
+	mv coverage.out coverage/coverage.out
 	$(GOENV) $(GO) tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	$(GOENV) $(GO) tool cover -func=coverage/coverage.out
+
+## test-integration: Run integration tests, including PostgreSQL and external runner regressions
+test-integration:
+	unset DATABASE_URL; $(GOENV) bash scripts/test.sh integration
+
+## test-e2e: Run end-to-end webhook and dispatch regressions
+test-e2e: web-e2e
+
+## runner-unit-coverage: Run runner unit tests without external executors and report coverage
+runner-unit-coverage:
+	@mkdir -p coverage
+	KESTRIX_UNIT_ONLY=1 $(GOENV) $(GO) test ./internal/runner -count=1 -coverprofile=coverage/runner-unit.out -covermode=atomic
+	$(GOENV) $(GO) tool cover -func=coverage/runner-unit.out | tee coverage/runner-unit-summary.txt
+	@awk '/^mode:/ { next } { n=$$2+0; if (n == 0) next; total+=n; if (($$3+0) > 0) covered+=n } END { if (total == 0) { print "FAIL: runner unit coverage profile is empty"; exit 1 } if (covered != total) { printf "FAIL: runner unit coverage is %d/%d statements, want exact 100%%\n", covered, total; exit 1 } }' coverage/runner-unit.out
+
+## runner-integration: Run external runner regression tests without coverage accounting
+runner-integration:
+	KESTRIX_UNIT_ONLY=0 $(GOENV) $(GO) test ./internal/runner -count=1 -run 'TestRunExecutesDependenciesInOrder|TestRunSkipsManualTasks|TestRunRejectsTaskWithUntriggeredDependency|TestRunReturnsPerTaskResults|TestRunLocal_|TestRunOne_|TestRunGitLabRunner_CommandNotFound'
+
+## web-e2e: Run critical webhook and dispatch regression tests without coverage accounting
+web-e2e:
+	$(GOENV) $(GO) test ./internal/web -count=1 -run 'TestFullWebhookFlow|TestProjectLifecycle|TestWebhookDispatchIntegration|TestWebhookNoDispatch|TestWebhookWrongSecret'
 
 ## fmt: Format code
 fmt:
@@ -71,7 +94,18 @@ vet:
 
 ## staticcheck: Run staticcheck
 staticcheck:
-	@command -v $(GOBIN)/staticcheck >/dev/null 2>&1 || { echo "⚠ staticcheck not installed, run: make install-tools"; exit 0; }
+	@set -eu; \
+	if [ ! -x "$(GOBIN)/staticcheck" ]; then \
+		echo "Installing staticcheck..."; \
+		$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest; \
+	else \
+		want="$$($(GO) version | awk '{print $$3}')"; \
+		have="$$($(GO) version -m "$(GOBIN)/staticcheck" 2>/dev/null | sed -n '1p' | awk -F: '{print $$2}' | xargs)"; \
+		if [ "$$want" != "$$have" ]; then \
+			echo "Rebuilding staticcheck ($$have -> $$want)..."; \
+			$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest; \
+		fi; \
+	fi
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GOBIN)/staticcheck ./...
 
 ## lint: Run all linters

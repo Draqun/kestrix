@@ -764,3 +764,55 @@ func TestHandleResolveProject_ResolveError(t *testing.T) {
 		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
 	}
 }
+
+// resolveServer seeds Server with a valid pipeline dir so handleResolve
+// can parse it.
+func resolveServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	// Pipeline needs at least a project block plus a ci_repo + ci_task
+	// so ParseDir + Resolve has something to walk.
+	hcl := `project "demo" {
+  default_image = "golang:1.22"
+
+  ci_repo "service" {
+    path = "svc"
+    kind = "subpath"
+  }
+
+  ci_task "build" {
+    trigger    = "repo.service.changed"
+    manual     = false
+    depends_on = []
+
+    execute {
+      repo   = "service"
+      script = ":"
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.tf"),
+		[]byte(hcl), 0o644); err != nil {
+		t.Fatalf("write pipeline: %v", err)
+	}
+	srv := NewServer(Config{
+		ListenAddr:  ":0",
+		PipelineDir: dir,
+		StorePath:   filepath.Join(dir, "projects.json"),
+	})
+	return srv, dir
+}
+
+func TestHandleValidate_DefaultDir(t *testing.T) {
+	srv, _ := resolveServer(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/validate", nil)
+	srv.handleValidate(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"project":"demo"`) {
+		t.Errorf("body = %q, want project name", w.Body.String())
+	}
+}

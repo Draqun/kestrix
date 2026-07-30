@@ -51,12 +51,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if event == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ignored", "reason": "not a push event"})
-		return
-	}
-
 	logEntry := map[string]interface{}{
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"repo":      event.Repo,

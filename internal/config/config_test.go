@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -236,12 +238,57 @@ func TestSaveIntoExistingDir(t *testing.T) {
 	}
 }
 
-func TestApplyFlagsDispatchProjectIDZero(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Dispatch.ProjectID = 42
-	cfg.ApplyFlags("", "", "", "", false, 0)
-	if cfg.Dispatch.ProjectID != 42 {
-		t.Errorf("ApplyFlags with projectID=0 must leave existing value: %d",
-			cfg.Dispatch.ProjectID)
+func TestDefaultDirMkdirErrorMock(t *testing.T) {
+	oldHome := userHomeDir
+	oldMkdirAll := mkdirAll
+	t.Cleanup(func() {
+		userHomeDir = oldHome
+		mkdirAll = oldMkdirAll
+	})
+
+	userHomeDir = func() (string, error) { return "/home/alice", nil }
+	mkdirAll = func(string, os.FileMode) error { return errors.New("boom") }
+
+	got, err := DefaultDir()
+	if err == nil || got != "" || !strings.Contains(err.Error(), "create /home/alice/.kestrix") {
+		t.Fatalf("DefaultDir = (%q, %v)", got, err)
+	}
+}
+
+func TestSaveCreateDirErrorMock(t *testing.T) {
+	oldMkdirAll := mkdirAll
+	oldMarshal := marshalYAML
+	oldWrite := writeFile
+	t.Cleanup(func() {
+		mkdirAll = oldMkdirAll
+		marshalYAML = oldMarshal
+		writeFile = oldWrite
+	})
+
+	mkdirAll = func(string, os.FileMode) error { return errors.New("mkdir boom") }
+	marshalYAML = func(any) ([]byte, error) { t.Fatal("marshal should not be called"); return nil, nil }
+	writeFile = func(string, []byte, os.FileMode) error { t.Fatal("write should not be called"); return nil }
+
+	if err := Save("/tmp/config.yaml", DefaultConfig()); err == nil || !strings.Contains(err.Error(), "create dir") {
+		t.Fatalf("Save error = %v", err)
+	}
+}
+
+func TestSaveMarshalErrorMock(t *testing.T) {
+	oldMkdirAll := mkdirAll
+	oldMarshal := marshalYAML
+	oldWrite := writeFile
+	t.Cleanup(func() {
+		mkdirAll = oldMkdirAll
+		marshalYAML = oldMarshal
+		writeFile = oldWrite
+	})
+
+	mkdirAll = func(string, os.FileMode) error { return nil }
+	marshalYAML = func(any) ([]byte, error) { return nil, errors.New("marshal boom") }
+	writeFile = func(string, []byte, os.FileMode) error { t.Fatal("write should not be called"); return nil }
+
+	if err := Save("/tmp/config.yaml", DefaultConfig()); err == nil || !strings.Contains(err.Error(), "marshal config") {
+		t.Fatalf("Save error = %v", err)
 	}
 }

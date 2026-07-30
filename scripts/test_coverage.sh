@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # test_coverage.sh — parse coverage.out and enforce thresholds.
-# Exit 1 if total coverage < 80% or any package is below its target.
+# Unit-only mode requires 100%; integration mode keeps an 80% aggregate floor.
 #
 # The coverage profile format (mode: atomic) is:
 #   <file>:<line>.<col>,<line>.<col> <stmt_count> <covered>
@@ -65,6 +65,8 @@ TOTAL_RESULT=$(awk '
   }
 ' "$COVERAGE_FILE")
 
+TOTAL_COVERED=$(echo "$TOTAL_RESULT" | awk '{print $1}')
+TOTAL_STATEMENTS=$(echo "$TOTAL_RESULT" | awk '{print $2}')
 TOTAL_COV=$(echo "$TOTAL_RESULT" | awk '{print $3}')
 
 if [ -z "$TOTAL_COV" ]; then
@@ -76,9 +78,18 @@ echo "Total coverage: ${TOTAL_COV}%"
 
 PASS=true
 
-# Check total threshold (80%).
-if awk "BEGIN {exit !($TOTAL_COV < 80)}"; then
-  echo "FAIL: total coverage ${TOTAL_COV}% is below 80% threshold"
+# Unit-only coverage is a hard 100% gate. Integration profiles retain the
+# historical 80% aggregate floor because external adapters may be unavailable.
+TOTAL_THRESHOLD=80
+if [ "${UNIT_ONLY:-0}" = "1" ]; then TOTAL_THRESHOLD=100; fi
+if [ "$TOTAL_STATEMENTS" -eq 0 ]; then
+  echo "FAIL: coverage profile contains no statements"
+  PASS=false
+elif [ "${UNIT_ONLY:-0}" = "1" ] && [ "$TOTAL_COVERED" -ne "$TOTAL_STATEMENTS" ]; then
+  echo "FAIL: exact unit coverage is ${TOTAL_COVERED}/${TOTAL_STATEMENTS} statements"
+  PASS=false
+elif [ "${UNIT_ONLY:-0}" != "1" ] && awk "BEGIN {exit !($TOTAL_COV < $TOTAL_THRESHOLD)}"; then
+  echo "FAIL: total coverage ${TOTAL_COV}% is below ${TOTAL_THRESHOLD}% threshold"
   PASS=false
 fi
 
@@ -101,7 +112,7 @@ check_pkg() {
       echo "  ${pkg}: no executable statements"
       return
     fi
-    if [ "$pkg" = "internal/runner" ] && ! docker_available; then
+    if [ "$pkg" = "internal/runner" ] && { [ "${UNIT_ONLY:-0}" = "1" ] || ! docker_available; }; then
       echo "  ${pkg}: skipped (Docker unavailable)"
       return
     fi
@@ -112,17 +123,31 @@ check_pkg() {
 
   local pct
   pct=$(echo "$result" | awk '{print $3}')
+  local covered_stmts
+  covered_stmts=$(echo "$result" | awk '{print $1}')
   echo "  ${pkg}: ${pct}% (threshold: ${threshold}%)"
-  if awk "BEGIN {exit !($pct < $threshold)}"; then
+  if [ "${UNIT_ONLY:-0}" = "1" ] && [ "$covered_stmts" -ne "$total_stmts" ]; then
+    echo "  FAIL: ${pkg} exact coverage is ${covered_stmts}/${total_stmts} statements"
+    PASS=false
+  elif [ "${UNIT_ONLY:-0}" != "1" ] && awk "BEGIN {exit !($pct < $threshold)}"; then
     echo "  FAIL: ${pkg} coverage ${pct}% is below ${threshold}% threshold"
     PASS=false
   fi
 }
 
 check_pkg "internal/domain" 90
-check_pkg "internal/service" 90
-check_pkg "internal/web" 85
-check_pkg "internal/store" 80
+if [ -z "${UNIT_ONLY:-}" ]; then
+  SERVICE_THRESHOLD=90
+else
+  SERVICE_THRESHOLD=100
+fi
+check_pkg "internal/service" "$SERVICE_THRESHOLD"
+check_pkg "internal/web" "${WEB_COVERAGE_THRESHOLD:-85}"
+if [ "${UNIT_ONLY:-0}" = "1" ]; then
+  check_pkg "internal/store" 100
+else
+  check_pkg "internal/store" 80
+fi
 check_pkg "internal/runner" 80
 
 if [ "$PASS" = false ]; then

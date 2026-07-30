@@ -86,6 +86,20 @@ else
   PASS_COUNT=$((PASS_COUNT + 1))
 fi
 
+# --- Test 4: unit mode requires exact statement equality ---
+# A rounded 99.0% result must never pass the 100% unit gate.
+mock_file_4="$TMPDIR/coverage_unit_not_exact.out"
+write_mock_profile "$mock_file_4" \
+  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:5.10,10.2 99 1" \
+  "gitlab.com/lunaris-bot/metaci/internal/service/svc.go:12.10,20.2 1 0"
+if UNIT_ONLY=1 WEB_COVERAGE_THRESHOLD=100 bash "$COVERAGE_SCRIPT" "$mock_file_4"; then
+  echo "FAIL: unit mode must reject uncovered statements"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+  echo "PASS: unit mode rejects non-exact coverage"
+  PASS_COUNT=$((PASS_COUNT + 1))
+fi
+
 # --- Summary ---
 echo ""
 echo "Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed"

@@ -1,23 +1,32 @@
 ## 1. Baseline the unit-only gap
 
-- [ ] 1.1 Run `go test ./internal/runner -coverprofile=/tmp/runner.cover -covermode=atomic`
-- [ ] 1.2 List uncovered statements from `/tmp/runner.cover`
-- [ ] 1.3 Classify each uncovered branch as pure logic, orchestration, or external execution
+- [x] 1.1 Run runner coverage with integration-capable tests explicitly disabled
+- [x] 1.2 List every uncovered production statement from the unit-only profile
+- [x] 1.3 Classify each gap as pure logic, orchestration, adapter behavior, or deterministic error handling
 
-## 2. Cover pure helper logic
+## 2. Cover pure runner behavior
 
-- [ ] 2.1 Add missing unit tests for pure helpers in `internal/runner/runner_test.go`
-- [ ] 2.2 Cover any uncovered error branches in `order`, `assignStage`, or `repoDir`
-- [ ] 2.3 Re-run runner coverage and confirm the pure helper surface is complete
+- [x] 2.1 Add direct unit tests for `order`, `assignStage`, and `repoDir`
+- [x] 2.2 Cover success, cycle, missing dependency, escape, missing path, and invalid path branches
+- [x] 2.3 Confirm the pure helper surface reaches 100.0% statement coverage
 
-## 3. Cover orchestration with fakes
+## 3. Cover orchestration and adapters with fakes
 
-- [ ] 3.1 Add fake executor / command-runner seams only if required
-- [ ] 3.2 Add unit tests for task ordering, dependency skips, manual skips, and callbacks
-- [ ] 3.3 Add unit tests for `PipelineExecutor` mode dispatch and nil/error branches
+- [x] 3.1 Add the minimum command, filesystem, resolver, and backend seams needed for deterministic unit tests
+- [x] 3.2 Unit-test task ordering, pass/fail results, dependency skips, manual skips, fatal errors, and callbacks with a fake executor
+- [x] 3.3 Unit-test Docker, local, and GitLab runner adapter behavior without executing their external binaries
+- [x] 3.4 Unit-test all `PipelineExecutor` modes and nil/error branches
 
-## 4. Verify
+## 4. Enforce and document the quality gate
 
-- [ ] 4.1 `go test ./internal/runner -count=1` passes
-- [ ] 4.2 `go test ./... -count=1` passes
-- [ ] 4.3 Record final unit-only runner coverage in the change notes
+- [x] 4.1 Add `make runner-unit-coverage` as the source-of-truth unit-only coverage command
+- [x] 4.2 Make `make runner-unit-coverage` fail when statement coverage is below `100.0%`
+- [x] 4.3 Verify integration and e2e-capable tests do not contribute to the unit coverage profile
+- [x] 4.4 Run the complete repository test suite and build independently from the unit coverage gate
+- [x] 4.5 Record the final unit-only coverage result and the separate role of integration/e2e tests in the change documentation
+
+## 5. Preserve separate critical regression coverage
+
+- [x] 5.1 Inventory difficult, high-risk, and business-critical runner flows that require real external or cross-component validation
+- [x] 5.2 Map each identified critical flow to an integration or e2e regression test, adding missing coverage where necessary
+- [x] 5.3 Verify integration and e2e suites run as separate CI results and never write to the unit-only coverage profile

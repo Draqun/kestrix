@@ -21,6 +21,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+var absPath = filepath.Abs
+
 // ─── Project Handlers (use FileStore) ─────────────────────────
 
 // handleListProjects godoc
@@ -172,11 +174,8 @@ func (s *Server) projectPipelineDir(p *domain.ProjectConfig) (string, error) {
 	pipelineDir := p.PipelineDir
 	if pipelineDir == "" {
 		pipelineDir = filepath.Dir(p.PipelineFile)
-		if pipelineDir == "" {
-			pipelineDir = "."
-		}
 	}
-	repoPath, err := filepath.Abs(p.RepoPath)
+	repoPath, err := absPath(p.RepoPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo path: %w", err)
 	}

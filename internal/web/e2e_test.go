@@ -269,6 +269,9 @@ project "tf-demo" {
 }
 
 func TestRunProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}
