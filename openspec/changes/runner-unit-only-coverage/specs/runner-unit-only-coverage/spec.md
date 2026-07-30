@@ -1,55 +1,51 @@
 ## ADDED Requirements
 
-### Requirement: Runner unit coverage must exclude integration-only paths
-The runner package SHALL be improved using unit tests only. Coverage accounting SHALL NOT depend on Docker-backed, bash-backed, or gitlab-runner-backed integration execution.
+### Requirement: Runner SHALL have complete unit-test statement coverage
+The project SHALL enforce 100.0% statement coverage for `internal/runner` using unit tests alone. Every production statement in the package, including orchestration, adapters, dispatch, callbacks, and error handling, SHALL be executable through deterministic unit tests.
 
-#### Scenario: Coverage target ignores integration tests
-- **WHEN** a test requires Docker or another external binary to run
-- **THEN** that test SHALL NOT be relied on to justify the unit coverage target
-- **AND** the coverage target SHALL be satisfied by unit-testable code paths only
+#### Scenario: Unit-only quality gate passes
+- **WHEN** the runner unit-coverage target executes without integration or e2e tests
+- **THEN** the reported statement coverage SHALL equal 100.0%
+- **AND** the quality gate SHALL fail for any lower result
 
-#### Scenario: External execution remains outside the unit metric
-- **WHEN** the runner executes Docker, bash, or gitlab-runner commands in production code
-- **THEN** those paths MAY remain covered only by integration-style tests
-- **AND** they SHALL NOT be treated as the unit-coverage objective
+#### Scenario: External adapter behavior is unit-tested
+- **WHEN** runner code constructs or dispatches Docker, bash, or `gitlab-runner` execution
+- **THEN** unit tests SHALL exercise that production logic through fakes or equivalent test seams
+- **AND** no external binary or service SHALL be required to reach 100.0% statement coverage
 
-### Requirement: Pure runner helpers SHALL be unit-testable
-Pure helper logic in `internal/runner` SHALL be covered by unit tests without external services.
+### Requirement: Coverage accounting SHALL exclude integration and end-to-end tests
+The unit coverage profile SHALL contain execution data only from unit tests. Integration and end-to-end suites SHALL NOT contribute to the unit coverage percentage, regardless of whether they execute the same production statements.
 
-#### Scenario: Order and dependency logic are tested directly
-- **WHEN** the runner orders tasks or validates dependencies
-- **THEN** unit tests SHALL verify the expected order and error behavior
-- **AND** the tests SHALL run without Docker
+#### Scenario: Integration-capable environment does not affect the metric
+- **WHEN** Docker, bash, `gitlab-runner`, databases, or external services are available on the test host
+- **THEN** the unit coverage target SHALL skip or exclude tests that execute those dependencies
+- **AND** the result SHALL remain deterministic across developer and CI environments
 
-#### Scenario: Repository path resolution is tested directly
-- **WHEN** the runner resolves task repository directories
-- **THEN** unit tests SHALL verify success and failure branches for valid paths, escapes, and missing paths
-- **AND** the tests SHALL run without Docker
+#### Scenario: Integration and e2e results remain separate
+- **WHEN** integration or end-to-end suites execute
+- **THEN** their pass or fail results SHALL be reported independently from unit coverage
+- **AND** their execution SHALL NOT modify the unit-only coverage profile
 
-### Requirement: Runner orchestration SHALL be testable with fakes
-Task-loop orchestration in the runner SHALL be testable with fake executors or equivalent test seams.
+### Requirement: Integration and end-to-end tests SHALL protect critical behavior
+Integration and end-to-end tests SHALL remain required regression layers for difficult, high-risk, and business-critical functionality that cannot be validated sufficiently through isolated unit behavior.
 
-#### Scenario: Manual tasks are skipped by a fake executor test
-- **WHEN** a task is marked manual and the run excludes manual tasks
-- **THEN** a unit test using a fake executor SHALL verify the task is skipped
-- **AND** the test SHALL not require Docker or bash
+#### Scenario: Critical external execution flow is validated
+- **WHEN** a runner flow depends on a real external executor or cross-component interaction
+- **THEN** an integration or end-to-end test SHALL validate the representative critical behavior
+- **AND** that test SHALL complement rather than replace the unit test for the underlying production statements
 
-#### Scenario: Dependency failures are propagated by a fake executor test
-- **WHEN** one task fails and another depends on it
-- **THEN** a unit test using a fake executor SHALL verify the dependent task is blocked or skipped as designed
-- **AND** the test SHALL not require Docker or bash
+### Requirement: Pure runner behavior SHALL be directly unit-testable
+Runner ordering, stage assignment, repository path resolution, manual handling, dependency propagation, callbacks, and mode selection SHALL be testable without external services.
 
-### Requirement: Mode dispatch SHALL be unit-tested
-`PipelineExecutor` mode selection SHALL be covered by unit tests.
+#### Scenario: Ordering and repository logic are tested directly
+- **WHEN** runner helpers process task dependencies or repository paths
+- **THEN** unit tests SHALL verify success, cycle, missing dependency, escape, missing path, and invalid path behavior
 
-#### Scenario: Local mode dispatches to local execution path
-- **WHEN** the executor mode is local or empty
-- **THEN** unit tests SHALL verify the local dispatch branch is selected
+#### Scenario: Orchestration is tested with fakes
+- **WHEN** a task passes, fails, is manual, or is blocked by a failed dependency
+- **THEN** unit tests SHALL verify results, ordering, skips, and callbacks with a fake executor
+- **AND** the tests SHALL not invoke Docker, bash, or `gitlab-runner`
 
-#### Scenario: Unsupported mode returns an error
-- **WHEN** the executor mode is unknown
-- **THEN** unit tests SHALL verify an error is returned
-
-#### Scenario: GitLab runner mode validates its generator dependency
-- **WHEN** the executor mode is `gitlab-runner` and no YAML generator is configured
-- **THEN** unit tests SHALL verify the appropriate error is returned
+#### Scenario: All execution modes are dispatched deterministically
+- **WHEN** `PipelineExecutor` receives local, empty, Docker, GitLab runner, or unsupported mode
+- **THEN** unit tests SHALL verify the selected path and all nil or error branches without invoking an external executor

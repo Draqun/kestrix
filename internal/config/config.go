@@ -12,6 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var (
+	marshalYAML = yaml.Marshal
+	userHomeDir = os.UserHomeDir
+	mkdirAll    = os.MkdirAll
+	readFile    = os.ReadFile
+	writeFile   = os.WriteFile
+)
+
 // Config is the top-level configuration.
 type Config struct {
 	ListenAddr  string         `yaml:"listen_addr"`
@@ -78,12 +86,12 @@ func DefaultConfig() *Config {
 
 // DefaultDir returns ~/.kestrix, creating it if needed.
 func DefaultDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
 	dir := filepath.Join(home, ".kestrix")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
 	return dir, nil
@@ -102,7 +110,7 @@ func DefaultPath() string {
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil
@@ -120,16 +128,16 @@ func Load(path string) (*Config, error) {
 // Save writes the config to the given path.
 func Save(path string, cfg *Config) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(cfg)
+	data, err := marshalYAML(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0o600)
+	return writeFile(path, data, 0o600)
 }
 
 // ApplyFlags overrides config values with non-empty CLI flags.

@@ -4,7 +4,13 @@ set -euo pipefail
 echo "=== Lint ==="
 
 echo "--- gofmt ---"
-UNFORMATTED=$(gofmt -l .)
+mapfile -t GO_FILES < <(find . -type f -name '*.go' \
+  -not -path './.gocache/*' \
+  -not -path './.gomodcache/*' \
+  -not -path './.gopath/*' \
+  -not -path './node_modules/*' \
+  -not -path './ui/dist/*')
+UNFORMATTED=$(gofmt -l "${GO_FILES[@]}")
 if [ -n "$UNFORMATTED" ]; then
   echo "Files need formatting:"
   echo "$UNFORMATTED"

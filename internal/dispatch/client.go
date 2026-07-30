@@ -12,6 +12,8 @@ import (
 	"net/http"
 )
 
+var marshalJSON = json.Marshal
+
 // Client dispatches pipelines to GitLab via its REST API.
 type Client struct {
 	// BaseURL is the GitLab instance URL (e.g. "https://gitlab.com").
@@ -61,7 +63,7 @@ func (c *Client) Dispatch(req DispatchRequest) (*DispatchResponse, error) {
 	body := map[string]interface{}{
 		"ref": req.Ref,
 	}
-	bodyJSON, err := json.Marshal(body)
+	bodyJSON, err := marshalJSON(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}

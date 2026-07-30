@@ -10,18 +10,20 @@ import (
 
 // MockProjectStore records calls and returns configurable values.
 type MockProjectStore struct {
-	mu          sync.Mutex
-	UpsertCalls []*domain.ProjectConfig
-	UpsertErr   error
-	GetCalls    []string
-	GetResult   *domain.ProjectConfig
-	GetErr      error
-	DeleteCalls []string
-	DeleteErr   error
-	ListResult  []string
-	ListErr     error
-	LoadResult  map[string]*domain.ProjectConfig
-	LoadErr     error
+	mu                   sync.Mutex
+	UpsertCalls          []*domain.ProjectConfig
+	UpsertErr            error
+	GetCalls             []string
+	GetResult            *domain.ProjectConfig
+	GetErr               error
+	FindByGitLabIDResult *domain.ProjectConfig
+	FindByGitLabIDErr    error
+	DeleteCalls          []string
+	DeleteErr            error
+	ListResult           []string
+	ListErr              error
+	LoadResult           map[string]*domain.ProjectConfig
+	LoadErr              error
 }
 
 func (m *MockProjectStore) Load() (map[string]*domain.ProjectConfig, error) {
@@ -35,7 +37,7 @@ func (m *MockProjectStore) Get(name string) (*domain.ProjectConfig, error) {
 	return m.GetResult, m.GetErr
 }
 func (m *MockProjectStore) FindByGitLabID(int) (*domain.ProjectConfig, error) {
-	return nil, nil
+	return m.FindByGitLabIDResult, m.FindByGitLabIDErr
 }
 func (m *MockProjectStore) Upsert(cfg *domain.ProjectConfig) error {
 	m.mu.Lock()
@@ -67,6 +69,7 @@ type MockRunStore struct {
 	AppendTaskErr       error
 	FlushRunCalls       []string
 	CancelRunCalls      []int
+	CancelRunErr        error
 	ApplyTaskCalls      []applyTaskCall
 	ApplyTaskCh         chan struct{} // closed once after the first ApplyTaskResult call
 	applyOnce           sync.Once     // protects ApplyTaskCh from double-close
@@ -135,7 +138,7 @@ func (m *MockRunStore) CancelRun(id int) error {
 	m.mu.Lock()
 	m.CancelRunCalls = append(m.CancelRunCalls, id)
 	m.mu.Unlock()
-	return nil
+	return m.CancelRunErr
 }
 func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra string) error {
 	m.mu.Lock()

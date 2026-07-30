@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+var marshalJSON = json.MarshalIndent
+var renameFile = os.Rename
+
 // Store is the interface for project configuration storage.
 // Kept for backwards compatibility; prefer domain.ProjectStore.
 type Store interface {
@@ -77,7 +80,7 @@ func (s *FileStore) Save(projects map[string]*ProjectConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := json.MarshalIndent(projects, "", "  ")
+	data, err := marshalJSON(projects, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal projects: %w", err)
 	}
@@ -87,7 +90,7 @@ func (s *FileStore) Save(projects map[string]*ProjectConfig) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := renameFile(tmp, s.path); err != nil {
 		os.Remove(tmp) //nolint:errcheck
 		return fmt.Errorf("rename temp: %w", err)
 	}
@@ -203,7 +206,7 @@ func (s *FileStore) loadLocked() (map[string]*ProjectConfig, error) {
 
 // saveLocked writes to disk without acquiring the mutex (caller holds it).
 func (s *FileStore) saveLocked(projects map[string]*ProjectConfig) error {
-	data, err := json.MarshalIndent(projects, "", "  ")
+	data, err := marshalJSON(projects, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal projects: %w", err)
 	}
@@ -212,7 +215,7 @@ func (s *FileStore) saveLocked(projects map[string]*ProjectConfig) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := renameFile(tmp, s.path); err != nil {
 		os.Remove(tmp) //nolint:errcheck
 		return fmt.Errorf("rename temp: %w", err)
 	}

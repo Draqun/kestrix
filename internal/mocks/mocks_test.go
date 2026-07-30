@@ -80,6 +80,16 @@ func TestMockPipelineRunner_Panics(t *testing.T) {
 	_, _ = m.Run(context.Background(), model.Project{}, nil, domain.RunnerOptions{})
 }
 
+func TestMockPipelineRunner_RunTaskPanics(t *testing.T) {
+	m := &MockPipelineRunner{PanicMsg: "boom"}
+	defer func() {
+		if r := recover(); r != "boom" {
+			t.Errorf("recover = %v, want boom", r)
+		}
+	}()
+	_, _ = m.RunTask(context.Background(), model.Project{}, "lint", domain.RunnerOptions{})
+}
+
 func TestMockWebhookLogSink_AppendAndList(t *testing.T) {
 	m := &MockWebhookLogSink{}
 	m.Append(map[string]interface{}{"event": "push"})
@@ -224,7 +234,87 @@ func TestMockRunStore_CountRunsByStatus(t *testing.T) {
 	}
 }
 
-// Sentinel error for tests.
+func TestMockRunStore_AsyncCallbacksAndHelpers(t *testing.T) {
+	m := &MockRunStore{
+		FinishRunCh: make(chan struct{}),
+		ApplyTaskCh: make(chan struct{}),
+	}
+
+	finishDone := make(chan struct{})
+	go func() {
+		defer close(finishDone)
+		_ = m.FinishRun(7, "passed", "out", "", []domain.TaskResult{{Name: "build", Status: "passed"}})
+	}()
+
+	applyDone := make(chan struct{})
+	tr := domain.TaskResult{Name: "deploy", Status: "running"}
+	go func() {
+		defer close(applyDone)
+		_ = m.ApplyTaskResult(8, tr, "extra")
+	}()
+
+	m.WaitFinish()
+	<-finishDone
+	m.WaitApply()
+	<-applyDone
+
+	if len(m.FinishRunCalls) != 1 || m.FinishRunCalls[0].ID != 7 {
+		t.Fatalf("FinishRunCalls = %+v", m.FinishRunCalls)
+	}
+	if m.AppendTaskCallCount() != 0 {
+		t.Fatalf("AppendTaskCallCount = %d, want 0", m.AppendTaskCallCount())
+	}
+	if err := m.AppendTaskResult(9, tr); err != nil {
+		t.Fatal(err)
+	}
+	if m.AppendTaskCallCount() != 1 {
+		t.Fatalf("AppendTaskCallCount = %d, want 1", m.AppendTaskCallCount())
+	}
+	if m.ApplyTaskCallCount() != 1 {
+		t.Fatalf("ApplyTaskCallCount = %d, want 1", m.ApplyTaskCallCount())
+	}
+	if got := m.FirstApplyTaskResult(); got.Name != "deploy" || got.Status != "running" {
+		t.Fatalf("FirstApplyTaskResult = %+v", got)
+	}
+}
+
+func TestMockRunStore_FirstApplyResultAndCounters(t *testing.T) {
+	m := &MockRunStore{}
+	if got := m.FirstApplyTaskResult(); got != (domain.TaskResult{}) {
+		t.Fatalf("FirstApplyTaskResult empty = %+v", got)
+	}
+
+	if err := m.AppendTaskResult(1, domain.TaskResult{Name: "build", Status: "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.AppendTaskCallCount() != 1 {
+		t.Fatalf("AppendTaskCallCount = %d, want 1", m.AppendTaskCallCount())
+	}
+	if got := m.FirstApplyTaskResult(); got != (domain.TaskResult{}) {
+		t.Fatalf("FirstApplyTaskResult should still be empty before ApplyTaskResult = %+v", got)
+	}
+}
+
+func TestMockPipelineRunner_RunTaskBranches(t *testing.T) {
+	m := &MockPipelineRunner{}
+	result, err := m.RunTask(context.Background(), model.Project{}, "lint", domain.RunnerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Name != "lint" || result.Status != "passed" {
+		t.Fatalf("RunTask default = %+v", result)
+	}
+
+	m.TaskResultList = []domain.TaskResult{{Name: "build", Status: "failed"}}
+	result, err = m.RunTask(context.Background(), model.Project{}, "build", domain.RunnerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Name != "build" || result.Status != "failed" {
+		t.Fatalf("RunTask configured = %+v", result)
+	}
+}
+
 var errNotFound = &notFoundErr{}
 
 type notFoundErr struct{}

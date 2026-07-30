@@ -26,6 +26,9 @@ project "test-app" {
 `
 
 func TestWebhookDispatchIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	// 1. Mock GitLab — captures pipeline creation.
 	var capturedRef string
 	mockGitLab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +104,9 @@ func TestWebhookDispatchIntegration(t *testing.T) {
 }
 
 func TestWebhookNoDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "pipeline.tf"), []byte(testPipeline), 0o644)
 
@@ -124,6 +130,9 @@ func TestWebhookNoDispatch(t *testing.T) {
 }
 
 func TestWebhookWrongSecret(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	tmpDir := t.TempDir()
 	os.WriteFile(filepath.Join(tmpDir, "pipeline.tf"), []byte(testPipeline), 0o644)
 

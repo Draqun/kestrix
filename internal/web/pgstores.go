@@ -1,0 +1,17 @@
+package web
+
+import (
+	"gitlab.com/lunaris-bot/metaci/internal/domain"
+	"gitlab.com/lunaris-bot/metaci/internal/store"
+)
+
+// newPGStores is the external PostgreSQL adapter. Its successful connection
+// path belongs to integration coverage; unit tests replace this seam with
+// in-memory stores while still covering initStores orchestration.
+var newPGStores = func(databaseURL string) (domain.ProjectStore, domain.RunStore, error) {
+	pg, err := store.NewPG(databaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pg, pg, nil
+}

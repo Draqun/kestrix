@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
 // --- Unreachable branches in toString -----------------------------------
@@ -411,15 +413,23 @@ func TestParseDir_PropagatesReadError(t *testing.T) {
 	}
 }
 
-func TestParseDir_DifferentProjectNames(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmp, "a.tf"), []byte(`project "one" {}`), 0o644); err != nil {
-		t.Fatal(err)
+func TestDecodeRepoBlockLabelGuard(t *testing.T) {
+	_, err := decodeRepoBlock(&hclsyntax.Block{Type: "ci_repo"})
+	if err == nil || !strings.Contains(err.Error(), "ci_repo requires 1 label") {
+		t.Fatalf("decodeRepoBlock guard err = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "b.tf"), []byte(`project "two" {}`), 0o644); err != nil {
-		t.Fatal(err)
+}
+
+func TestDecodeTaskBlockLabelGuard(t *testing.T) {
+	_, err := decodeTaskBlock(&hclsyntax.Block{Type: "ci_task"})
+	if err == nil || !strings.Contains(err.Error(), "ci_task requires 1 label") {
+		t.Fatalf("decodeTaskBlock guard err = %v", err)
 	}
-	if _, err := ParseDir(tmp); err == nil {
-		t.Fatal("expected err for mismatched project names")
+}
+
+func TestDecodeVariableBlockLabelGuard(t *testing.T) {
+	_, err := decodeVariableBlock(&hclsyntax.Block{Type: "variable"})
+	if err == nil || !strings.Contains(err.Error(), "variable requires 1 label") {
+		t.Fatalf("decodeVariableBlock guard err = %v", err)
 	}
 }

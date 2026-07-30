@@ -207,6 +207,14 @@ make pipeline
 # Test
 make test
 
+# Unit coverage (mandatory 100% gate; integration/e2e are excluded)
+make test-coverage
+
+# Separate regression layers
+make test-integration
+make test-e2e
+make runner-unit-coverage
+
 # Full quality gate
 make quality
 

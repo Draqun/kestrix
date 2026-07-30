@@ -11,6 +11,8 @@ import (
 	"gitlab.com/lunaris-bot/metaci/internal/parser"
 )
 
+var readPipelineFile = os.ReadFile
+
 // handleGetPipeline godoc
 // @Summary Parse and return pipeline definition
 // @Tags pipeline
@@ -64,7 +66,7 @@ func (s *Server) handleGetPipelineRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := os.ReadFile(tfFile)
+	data, err := readPipelineFile(tfFile)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

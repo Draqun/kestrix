@@ -19,6 +19,9 @@ import (
 
 func testPG(t *testing.T) *PGStore {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("integration test")
+	}
 	dbURL := os.Getenv("METACI_TEST_DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://metaci:metaci@localhost:5432/metaci_test?sslmode=disable&connect_timeout=2"

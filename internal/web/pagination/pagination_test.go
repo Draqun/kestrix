@@ -75,13 +75,16 @@ func TestLinks_NextAndPrev(t *testing.T) {
 	}
 }
 
-func TestLinks_FirstPage(t *testing.T) {
-	next, prev := Links(0, 25, 100, "/api/items")
+func TestLinks_ClampPrevOffsetToZero(t *testing.T) {
+	next, prev := Links(10, 25, 100, "/api/items")
 	if next == nil {
 		t.Fatal("expected next link")
 	}
-	if prev != nil {
-		t.Errorf("expected no prev on first page, got %s", *prev)
+	if prev == nil {
+		t.Fatal("expected prev link")
+	}
+	if *prev != "/api/items?limit=25&offset=0" {
+		t.Errorf("unexpected prev: %s", *prev)
 	}
 }
 

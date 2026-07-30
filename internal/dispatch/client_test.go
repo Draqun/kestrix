@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -247,6 +248,18 @@ func TestGetPipelineStatusNotFound(t *testing.T) {
 	_, err := client.GetPipelineStatus(1, 99999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent pipeline")
+	}
+}
+
+func TestDispatchMarshalError(t *testing.T) {
+	oldMarshal := marshalJSON
+	t.Cleanup(func() { marshalJSON = oldMarshal })
+	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("marshal boom") }
+
+	client := &Client{BaseURL: "https://gitlab.example", Token: "tok"}
+	_, err := client.Dispatch(DispatchRequest{ProjectID: 1, Ref: "main"})
+	if err == nil || !strings.Contains(err.Error(), "marshal request") {
+		t.Fatalf("Dispatch error = %v", err)
 	}
 }
 

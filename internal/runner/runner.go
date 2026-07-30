@@ -19,6 +19,16 @@ import (
 	"gitlab.com/lunaris-bot/metaci/internal/model"
 )
 
+var (
+	commandContext = exec.CommandContext
+	absPath        = filepath.Abs
+	makeTemp       = os.MkdirTemp
+	writeFile      = os.WriteFile
+	resolveNodes   = func(project model.Project, changed map[string]bool) ([]dag.Node, error) {
+		return dag.New(project).Resolve(changed)
+	}
+)
+
 // TaskResult is an alias for domain.TaskResult, the single type used
 // across runner, store, and service layers.
 type TaskResult = domain.TaskResult
@@ -96,9 +106,6 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	}
 
 	relDir, _ := filepath.Rel(e.WorkDir, taskDir)
-	if relDir == "" {
-		relDir = "."
-	}
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
 
@@ -120,9 +127,10 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	args = append(args, image, "sh", "-c", task.Execute.Script)
 
 	var taskOut bytes.Buffer
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
+	cmd := commandContext(ctx, "docker", args...)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 
 	runErr := cmd.Run()
 
@@ -143,9 +151,6 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	}
 
 	relDir, _ := filepath.Rel(e.WorkDir, taskDir)
-	if relDir == "" {
-		relDir = "."
-	}
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
 
@@ -159,11 +164,12 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	}
 
 	var taskOut bytes.Buffer
-	cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
+	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
+	cmd := commandContext(ctx, "bash", "-c", task.Execute.Script)
 	cmd.Dir = taskDir
 	cmd.Env = env
-	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 
 	runErr := cmd.Run()
 
@@ -181,11 +187,12 @@ func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opt
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (stage=%s via gitlab-runner exec)\n", task.Name, stage)
 
 	var taskOut bytes.Buffer
-	cmd := exec.CommandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
+	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
+	cmd := commandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
 	cmd.Dir = e.WorkDir
 	cmd.Env = append(os.Environ(), "CI_PROJECT_DIR="+e.WorkDir)
-	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 
 	if opts.Variables != nil {
 		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
@@ -273,19 +280,13 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 // in its own Docker container. Tasks run in dependency order.
 func Run(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
 	if err := dag.New(project).Validate(); err != nil {
 		return nil, fmt.Errorf("validate pipeline: %w", err)
 	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
-	workDir, err := filepath.Abs(opts.WorkDir)
+	workDir, err := absPath(opts.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workdir: %w", err)
 	}
@@ -296,7 +297,7 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		return nil, fmt.Errorf("workdir %q is not a directory", workDir)
 	}
 
-	nodes, err := dag.New(project).Resolve(changed)
+	nodes, err := resolveNodes(project, changed)
 	if err != nil {
 		return nil, fmt.Errorf("resolve pipeline: %w", err)
 	}
@@ -326,19 +327,13 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 // Each task runs via `bash -c` in the repo directory.
 func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
 	if err := dag.New(project).Validate(); err != nil {
 		return nil, fmt.Errorf("validate pipeline: %w", err)
 	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
-	workDir, err := filepath.Abs(opts.WorkDir)
+	workDir, err := absPath(opts.WorkDir)
 	// filepath.Abs on a non-empty relative path that resolves cleanly
 	// never errs on POSIX; t.TempDir()-supplied absolute paths also
 	// can't fail this. Defensive guard; branch is unreachable in the
@@ -354,7 +349,7 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		return nil, fmt.Errorf("workdir %q is not a directory", workDir)
 	}
 
-	nodes, err := dag.New(project).Resolve(changed)
+	nodes, err := resolveNodes(project, changed)
 	// Validate() above already exercised trigger syntax and cycle
 	// detection; Resolve only fails when a task not in the changed-set
 	// depends on a node that is — but Validate rejects such degenerate
@@ -381,21 +376,15 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 // RunGitLabRunner executes tasks via `gitlab-runner exec`.
 func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
-	workDir, err := filepath.Abs(opts.WorkDir)
+	workDir, err := absPath(opts.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workdir: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "metaci-runner-*")
+	tmpDir, err := makeTemp("", "metaci-runner-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
@@ -403,7 +392,7 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 
 	yaml := generateYAML(project, nodes)
 	ciFile := filepath.Join(tmpDir, ".gitlab-ci.yml")
-	if err := os.WriteFile(ciFile, []byte(yaml), 0o644); err != nil {
+	if err := writeFile(ciFile, []byte(yaml), 0o644); err != nil {
 		return nil, fmt.Errorf("write .gitlab-ci.yml: %w", err)
 	}
 	fmt.Fprintf(opts.Stdout, "[CI] Generated .gitlab-ci.yml (%d bytes)\n", len(yaml))
@@ -428,16 +417,10 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 // RunOne executes a single named task (used for manual job approval).
 func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
 	synchronizeOutput(&opts)
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
-	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
-	workDir, err := filepath.Abs(opts.WorkDir)
+	workDir, err := absPath(opts.WorkDir)
 	// See RunLocal: filepath.Abs on a clean POSIX path doesn't fail in
 	// practice. Defensive guard; the error branch is unreachable.
 	if err != nil {
@@ -465,12 +448,6 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		return TaskResult{}, fmt.Errorf("task %q: %w", task.Name, err)
 	}
 	relDir, _ := filepath.Rel(workDir, taskDir)
-	// filepath.Rel(base, base) == "." on every supported platform; the
-	// empty-string fallback only kicks in for mixed weird inputs that
-	// Resolve/Validate already rejected. Defensive guard only.
-	if relDir == "" {
-		relDir = "."
-	}
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (manual approve, dir=%s)\n", task.Name, relDir)
 	if opts.OnTaskStart != nil {
@@ -487,11 +464,12 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 	}
 
 	var taskOut bytes.Buffer
-	cmd := exec.CommandContext(ctx, "bash", "-c", task.Execute.Script)
+	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
+	cmd := commandContext(ctx, "bash", "-c", task.Execute.Script)
 	cmd.Dir = taskDir
 	cmd.Env = env
-	cmd.Stdout = io.MultiWriter(opts.Stdout, &taskOut)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, &taskOut)
+	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
+	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 
 	start := time.Now()
 	runErr := cmd.Run()
