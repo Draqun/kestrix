@@ -97,24 +97,24 @@ project "kestrix" {
 
   # ─── Business Website ──────────────────────────────────────
 
-  ci_task "business_build" {
-    trigger    = "repo.kestrix.changed"
-    depends_on = ["build_fe"]
-    execute {
-      repo   = "kestrix"
-      script = "bash scripts/build-business.sh"
-    }
-  }
+  # ci_task "business_page_build" {
+  #   trigger    = "repo.kestrix.changed"
+  #   depends_on = ["build_fe"]
+  #   execute {
+  #     repo   = "kestrix"
+  #     script = "bash scripts/build-business.sh"
+  #   }
+  # }
 
-  ci_task "business_deploy" {
-    trigger    = "repo.kestrix.changed"
-    depends_on = ["business_build"]
-    manual     = true
-    execute {
-      repo   = "kestrix"
-      script = "bash scripts/deploy-business.sh"
-    }
-  }
+  # ci_task "business_page_deploy" {
+  #   trigger    = "repo.kestrix.changed"
+  #   depends_on = ["business_page_build"]
+  #   manual     = true
+  #   execute {
+  #     repo   = "kestrix"
+  #     script = "bash scripts/deploy-business.sh"
+  #   }
+  # }
 
   # ─── Deploy ────────────────────────────────────────────────
 
