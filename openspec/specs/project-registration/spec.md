@@ -33,20 +33,21 @@ Each project configuration SHALL include GitLab-specific fields.
 - `created_at` (string) — RFC 3339 timestamp
 
 ### REQ-2: Project persistence (implemented)
-Project configurations SHALL survive server restarts.
+Project configurations SHALL survive server restarts by being stored in PostgreSQL. The server SHALL not load or write project configurations through a JSON FileStore.
 
 #### Scenario: Persistence across restarts
-- **WHEN** the server starts
-- **THEN** it SHALL load projects from `~/.metaci/projects.json`
+- **WHEN** the server starts with a working PostgreSQL database
+- **THEN** it SHALL load registered projects from PostgreSQL
 
-**WHEN** the server starts  
-**THEN** it SHALL load projects from `~/.metaci/projects.json`
+#### Scenario: Project mutation
+- **WHEN** a project is created, updated, or deleted
+- **THEN** the change SHALL be persisted in PostgreSQL
+- **AND** subsequent API requests SHALL observe the change
 
-**WHEN** a project is created, updated, or deleted  
-**THEN** the change SHALL be written to `~/.metaci/projects.json` atomically
-
-**WHEN** `~/.metaci/projects.json` does not exist  
-**THEN** the server SHALL create it on first write
+#### Scenario: PostgreSQL is unavailable
+- **WHEN** the server cannot connect to PostgreSQL
+- **THEN** it SHALL fail startup
+- **AND** it SHALL not create or read a JSON project store
 
 ### REQ-3: Project lookup by GitLab project ID (implemented)
 The webhook handler SHALL find projects by GitLab project ID.

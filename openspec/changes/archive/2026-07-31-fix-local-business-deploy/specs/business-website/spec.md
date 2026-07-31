@@ -11,6 +11,12 @@ The CI pipeline SHALL deploy the built business website to the production enviro
 - **AND** the business website SHALL be reachable at `http://localhost:${BUSINESS_PORT:-8082}`
 - **AND** the deployment SHALL be recorded as part of the pipeline status
 
+#### Scenario: Deploy after successful build
+
+- **WHEN** the UI build succeeds
+- **THEN** the deployment step SHALL copy the contents of `ui/dist/business` to the target location
+- **AND** the deployment SHALL be recorded as part of the pipeline status.
+
 #### Scenario: Missing local build artifact
 
 - **WHEN** `DEPLOY_HOST` is empty and `ui/dist/business` does not exist

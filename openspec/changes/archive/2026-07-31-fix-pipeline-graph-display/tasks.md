@@ -13,7 +13,7 @@
   - Check if this endpoint is used by NewRun page
   - Also applied to `getProject()` and `listProjects()` which return similar structures
 
-- [ ] 1.4 Add unit test for `normalizeProject` in `ui/src/api/client.test.js`
+- [x] 1.4 Add unit test for `normalizeProject` in `ui/src/api/client.test.js`
   - Test all field mappings
   - Test null/undefined handling
   - Test nested object transformation
@@ -30,17 +30,17 @@
 
 ## 3. Verification & Testing
 
-- [ ] 3.1 Start dev environment (`make dev-all`)
-- [ ] 3.2 Navigate to `http://localhost:3000/pipelines/new-run/kestrix` (or demo project)
-- [ ] 3.3 Verify pipeline graph renders with:
+- [x] 3.1 Start dev environment (`make dev-all`)
+- [x] 3.2 Navigate to `http://localhost:3000/pipelines/new-run/kestrix` (or demo project)
+- [x] 3.3 Verify pipeline graph renders with:
   - Repository nodes (📦 icon, path displayed)
   - Task nodes (⚙️ icon, trigger expression, manual badge)
   - Trigger edges (orange, animated, repo→task)
   - Execution edges (blue, animated, task→repo)
   - Dependency edges (purple, static, task→task)
 
-- [ ] 3.4 Test "Resolve" button highlights triggered tasks with colored borders
-- [ ] 3.5 Test "Run" button initiates pipeline execution
+- [x] 3.4 Test "Resolve" button highlights triggered tasks with colored borders
+- [x] 3.5 Test "Run" button initiates pipeline execution
 - [x] 3.6 Run frontend lint/build: `cd ui && npm run build` ✓
 - [x] 3.7 Run Go tests: `make test` ✓ (445 tests passed)
 
@@ -51,7 +51,7 @@
   - `/api/projects` (listProjects) - now normalizes items array
   - Apply same normalization if used by graph components
 
-- [ ] 4.2 Document the field naming convention in `AGENTS.md` or code comments
+- [x] 4.2 Document the field naming convention in `AGENTS.md` or code comments
   - API returns lowercase (Go convention)
   - Frontend layout expects capitalized (JS convention)
   - Normalization happens in API client layer

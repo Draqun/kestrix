@@ -8,7 +8,6 @@
 services:
   kestrix:
     image: ${KESTRIX_IMAGE:-kestrix:latest}
-    container_name: kestrix
     ports:
       - "${KESTRIX_PORT:-18080}:8080"
     environment:
@@ -33,7 +32,6 @@ services:
 
   business:
     image: nginx:1.27-alpine
-    container_name: kestrix-business
     ports:
       - "${BUSINESS_BIND_HOST:-127.0.0.1}:${BUSINESS_PORT:-8082}:80"
     volumes:
@@ -43,7 +41,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: kestrix-postgres
     environment:
       POSTGRES_DB: kestrix
       POSTGRES_USER: kestrix
@@ -61,7 +58,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: kestrix-redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:

@@ -1,6 +1,9 @@
 export function normalizeProject(proj) {
   if (!proj) return proj;
 
+  // Go API responses use lowercase JSON fields; React Flow layout code uses
+  // capitalized fields. Keep this translation at the API boundary so views
+  // and graph layout can consume one consistent frontend shape.
   const normalized = { ...proj };
 
   // Top-level fields

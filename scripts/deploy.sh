@@ -49,7 +49,7 @@ until curl -sf "${HEALTH_URL}" >/dev/null 2>&1; do
   RETRIES=$((RETRIES - 1))
   if [ "$RETRIES" -le 0 ]; then
     echo "Health check failed after retries"
-    docker logs kestrix 2>&1 | tail -20 || true
+    docker compose -f "${COMPOSE_DIR}/docker-compose.prod.yml" logs --no-color --tail=20 kestrix 2>&1 || true
     exit 1
   fi
   sleep 2

@@ -37,3 +37,19 @@ curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
   -d '{"name":"my-app","repo_path":"./my-app","gitlab_project_id":12345}'
 ```
+## Docker deployment E2E test
+
+Run the isolated production Compose smoke test with:
+
+```bash
+make docker-e2e
+```
+
+The test requires a running Docker daemon, Docker Compose, and `curl`. It builds
+a local test image, uses a unique Compose project, high local ports, and
+disposable PostgreSQL/Redis volumes. It checks `/api/health`, `/api/projects`,
+and `/api/runs` from outside the containers, then removes only its own
+containers, network, and volumes on success, failure, or interruption.
+
+Set `KESTRIX_E2E_IMAGE` to use an existing local image instead of building one,
+or override `KESTRIX_E2E_PORT` and `KESTRIX_E2E_TIMEOUT` when needed.

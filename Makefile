@@ -15,7 +15,7 @@ GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
 GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH)
 
-.PHONY: help init build build-release test test-coverage test-integration test-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-up-all docker-down docker-logs
+.PHONY: help init build build-release test test-coverage test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-up-all docker-down docker-logs
 
 ## help: Show this help message
 help:
@@ -61,6 +61,10 @@ test-integration:
 
 ## test-e2e: Run end-to-end webhook and dispatch regressions
 test-e2e: web-e2e
+
+## docker-e2e: Build and black-box test an isolated production Docker deployment
+docker-e2e:
+	bash scripts/docker-deployment-e2e.sh
 
 ## runner-unit-coverage: Run runner unit tests without external executors and report coverage
 runner-unit-coverage:

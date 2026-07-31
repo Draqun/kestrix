@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Project persistence
+### Requirement: REQ-2: Project persistence (implemented)
 
 Project configurations SHALL survive server restarts by being stored in PostgreSQL. The server SHALL not load or write project configurations through a JSON FileStore.
 
