@@ -113,6 +113,9 @@ func NewServerWithDeps(
 		runService:     runService,
 		webhookService: webhookService,
 	}
+	if s.webhookService == nil {
+		s.webhookService = service.NewWebhookService(s)
+	}
 	s.router = s.buildRouter()
 	return s
 }

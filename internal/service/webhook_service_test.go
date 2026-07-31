@@ -25,3 +25,10 @@ func TestWebhookService_Process_Happy(t *testing.T) {
 		t.Fatalf("expected 1 entry logged, got %d", len(sink.Entries))
 	}
 }
+
+func TestWebhookService_Process_NilSink(t *testing.T) {
+	svc := NewWebhookService(nil)
+	if err := svc.Process(map[string]interface{}{"event": "push"}); err != nil {
+		t.Fatalf("nil sink returned error: %v", err)
+	}
+}

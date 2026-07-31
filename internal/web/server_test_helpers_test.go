@@ -33,6 +33,6 @@ func NewServer(cfg Config) *Server {
 		pipelineRunner,
 		pipelineRunner,
 		service.NewRunService(runStore, pipelineRunner, pipelineRunner),
-		service.NewWebhookService(nil),
+		nil,
 	)
 }

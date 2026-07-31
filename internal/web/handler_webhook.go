@@ -13,12 +13,11 @@ import (
 	"kestrix/internal/dag"
 	"kestrix/internal/dispatch"
 	"kestrix/internal/parser"
-	"kestrix/internal/service"
 )
 
 func (s *Server) logWebhook(entry map[string]interface{}) {
 	if s.webhookService == nil {
-		s.webhookService = service.NewWebhookService(s)
+		return
 	}
 	_ = s.webhookService.Process(entry)
 }

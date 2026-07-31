@@ -59,6 +59,9 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	if server.router == nil {
 		t.Fatal("server router is nil")
 	}
+	if server.webhookService == nil {
+		t.Fatal("webhook service was not wired")
+	}
 }
 
 func TestNewServerDoesNotAutoRegisterPipelineDirectory(t *testing.T) {
