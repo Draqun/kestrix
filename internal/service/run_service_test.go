@@ -282,8 +282,8 @@ func TestProjectService_Update_GetError(t *testing.T) {
 func TestRunService_createRun_NoStore(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	runID, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || err.Error() != "run store is not configured" {
+		t.Fatalf("error = %v, want missing run store error", err)
 	}
 	if runID != 0 {
 		t.Fatalf("runID = %d, want 0", runID)

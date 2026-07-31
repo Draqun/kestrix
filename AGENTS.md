@@ -51,7 +51,7 @@ go test -run TestWebhook ./internal/web/ -count=1
 | `internal/dispatch/` | GitLab pipeline dispatch client |
 | `internal/model/` | Data model (Project, Task, Repo, Variable) |
 | `internal/parser/` | HCL parser (hclsyntax) |
-| `internal/store/` | Persistent project config (JSON file + PostgreSQL) |
+| `internal/store/` | PostgreSQL project config and run persistence |
 | `internal/variables/` | Variable resolution engine |
 | `internal/web/` | HTTP server, webhook handler, API, generator |
 | `examples/` | Example pipeline definitions (.tf files) |
@@ -62,20 +62,20 @@ go test -run TestWebhook ./internal/web/ -count=1
 
 ## Runtime facts agents miss
 - **Default runner mode is `local`** (host bash), not Docker. Config: `Runner.Mode` / env.
-- **DB is PostgreSQL** via `DATABASE_URL` / `--database-url`. Runs/history need PG; file store has no runs.
-- **Tests use `METACI_TEST_DATABASE_URL`** (default: `metaci_test` DB), NOT `DATABASE_URL`. The test helper refuses to connect to any database not ending in `_test`. `make docker-up` auto-creates `metaci_test` on first init.
+- **DB is PostgreSQL** via `DATABASE_URL` / `--database-url`. PostgreSQL is required for projects, runs, and history.
+- **Tests use `KESTRIX_TEST_DATABASE_URL`** (default: `kestrix_test` DB), NOT `DATABASE_URL`. The test helper refuses to connect to any database not ending in `_test`. `make docker-up` auto-creates `kestrix_test` on first init.
 - **`handleRunProject` is async**: returns `{run_id, status:"running"}` immediately; work in goroutine. FE polls `GET .../runs/{id}` ~1.5s.
 - **Task results are append-only during run** (`pending` → `running` → `passed|failed|skipped`). FE takes **last status per task name**.
 - **On failure, runner continues**: dependents → `skipped`; independent tasks still run. Overall status fails if any task failed.
 - **`pipeline_def` JSONB** on each run = historical DAG snapshot. Run detail UI must use this, not live pipeline.
 - **Scripts need bash** (`pipefail`); busybox `sh` breaks. Pipeline uses `bash scripts/*.sh`.
-- **Prod compose**: `docker/docker-compose.prod.yml`, Kestrix on **:8081** (dev often :8080).
+- **Prod compose**: `docker/docker-compose.prod.yml`, Kestrix (backend + React FE) on **:18080** (dev uses :8080/:3000); the unfinished business site is optional on :8082.
 - **Module path**: `kestrix`; repository hosting is configured separately in `project.yaml`.
 
 ## Conventions
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
 - One logical change per commit; push when user workflow expects it
-- No secrets in repo; env vars (`METACI_*`, `DATABASE_URL`)
+- No secrets in repo; env vars (`KESTRIX_*`, `DATABASE_URL`)
 - Do not invent Makefile targets — extend Makefile if needed
 - FE hooks: never after early returns (Rules of Hooks)
 - **Makefile = source of truth** — never run tools manually
@@ -121,7 +121,6 @@ project "name" {
 | `internal/dag/engine.go` | DAG resolution, trigger evaluation |
 | `internal/dag/expr.go` | Trigger expression parser |
 | `internal/parser/hcl_parser.go` | HCL → model.Project |
-| `internal/store/filestore.go` | Persistent JSON project store |
 | `internal/store/pgstore.go` | PostgreSQL projects + runs |
 | `internal/config/config.go` | YAML config loading |
 | `internal/dispatch/client.go` | GitLab API client |
@@ -130,7 +129,7 @@ project "name" {
 - Webhook: POST /webhook (HMAC-SHA256 or X-Gitlab-Token)
 - Dispatch: POST /api/v4/projects/:id/pipeline
 - Variables: POST /api/v4/projects/:id/pipelines/:pid/variables
-- Config: ~/.kestrix/config.yaml or env vars (METACI_*)
+- Config: ~/.kestrix/config.yaml or env vars (KESTRIX_* only)
 
 ## Cancel runs
 `POST /api/projects/{name}/runs/{id}/cancel` → `PGStore.CancelRun`:

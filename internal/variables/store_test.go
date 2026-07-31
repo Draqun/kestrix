@@ -1,7 +1,6 @@
 package variables
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -92,18 +91,22 @@ func TestExpand(t *testing.T) {
 }
 
 func TestFromEnv(t *testing.T) {
-	os.Setenv("TEST_PREFIX_FOO", "bar")
-	os.Setenv("TEST_PREFIX_BAZ", "qux")
-	defer os.Unsetenv("TEST_PREFIX_FOO")
-	defer os.Unsetenv("TEST_PREFIX_BAZ")
-
-	s := FromEnv("TEST_PREFIX_")
+	s := FromEntries([]string{"TEST_PREFIX_FOO=bar", "TEST_PREFIX_BAZ=qux"}, "TEST_PREFIX_")
 	vars := s.Get("", "", "")
 	if vars["FOO"] != "bar" {
 		t.Errorf("FOO = %q, want %q", vars["FOO"], "bar")
 	}
 	if vars["BAZ"] != "qux" {
 		t.Errorf("BAZ = %q, want %q", vars["BAZ"], "qux")
+	}
+}
+
+func TestFromConfiguredEnvironment(t *testing.T) {
+	if FromEnv("TEST_PREFIX_") == nil {
+		t.Fatal("FromEnv returned nil")
+	}
+	if FromKestrix() == nil {
+		t.Fatal("FromKestrix returned nil")
 	}
 }
 
@@ -332,21 +335,16 @@ func TestGetRawMatchesGet(t *testing.T) {
 }
 
 // TestFromEnvIgnoresUnprefixed verifies that environment variables lacking
-// the requested prefix are silently dropped. FromEnv's only build branch in
+// the requested prefix are silently dropped. FromEntries's only build branch in
 // this case is `!strings.HasPrefix(e, prefix)` → continue.
 //
 // The `if len(parts) != 2` continue branch of FromEnv is unreachable on any
-// supported platform: Go's os.Environ() only returns strings of the form
+// supported platform: the caller provides entries of the form
 // "KEY=VALUE" — every entry has at least one '='. The remaining 10% in
-// FromEnv is genuinely unreachable without OS-level surgery and is left
+// FromEntries is genuinely unreachable without malformed input and is left
 // documented here rather than instrumented to produce false coverage.
 func TestFromEnvIgnoresUnprefixed(t *testing.T) {
-	os.Setenv("UNRELATED_VAR", "noise")
-	os.Setenv("PFX_KEY", "value")
-	defer os.Unsetenv("UNRELATED_VAR")
-	defer os.Unsetenv("PFX_KEY")
-
-	s := FromEnv("PFX_")
+	s := FromEntries([]string{"UNRELATED_VAR=noise", "PFX_KEY=value"}, "PFX_")
 	vars := s.Get("", "", "")
 	if _, ok := vars["UNRELATED_VAR"]; ok {
 		t.Error("FromEnv leaked UNRELATED_VAR despite missing prefix")

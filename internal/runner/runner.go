@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
@@ -111,7 +112,7 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 
 	args := []string{
 		"run", "--rm",
-		"--name", fmt.Sprintf("metaci-%s-%d", task.Name, time.Now().UnixNano()),
+		"--name", fmt.Sprintf("kestrix-%s-%d", task.Name, time.Now().UnixNano()),
 		"-v", e.WorkDir + ":/workspace",
 		"-w", "/workspace/" + relDir,
 		"-e", "CI_PROJECT_DIR=/workspace/" + relDir,
@@ -154,7 +155,7 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
 
-	env := os.Environ()
+	env := config.Current().Environ()
 	env = append(env, "CI_PROJECT_DIR="+taskDir)
 	if opts.Variables != nil {
 		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
@@ -190,7 +191,7 @@ func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opt
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
 	cmd := commandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
 	cmd.Dir = e.WorkDir
-	cmd.Env = append(os.Environ(), "CI_PROJECT_DIR="+e.WorkDir)
+	cmd.Env = append(config.Current().Environ(), "CI_PROJECT_DIR="+e.WorkDir)
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 
@@ -384,7 +385,7 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 		return nil, fmt.Errorf("resolve workdir: %w", err)
 	}
 
-	tmpDir, err := makeTemp("", "metaci-runner-*")
+	tmpDir, err := makeTemp("", "kestrix-runner-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
@@ -454,7 +455,7 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		opts.OnTaskStart(task.Name)
 	}
 
-	env := os.Environ()
+	env := config.Current().Environ()
 	env = append(env, "CI_PROJECT_DIR="+taskDir)
 	if opts.Variables != nil {
 		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")

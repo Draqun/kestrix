@@ -5,8 +5,14 @@ import (
 	"kestrix/internal/variables"
 )
 
+func addEnvironmentVariables(vs *variables.Store, entries []variables.Variable) {
+	for _, v := range entries {
+		vs.SetProject(v.Key, v.Value)
+	}
+}
+
 // buildVarStore constructs a variables.Store from a project's variables,
-// METACI_* environment variables, and Docker config.
+// KESTRIX_* environment variables, and Docker config.
 func (s *Server) buildVarStore(proj *model.Project) *variables.Store {
 	vs := variables.New()
 	if proj != nil {
@@ -32,9 +38,7 @@ func (s *Server) buildVarStore(proj *model.Project) *variables.Store {
 			}
 		}
 	}
-	for _, v := range variables.FromEnv("METACI_").List() {
-		vs.SetProject(v.Key, v.Value)
-	}
+	addEnvironmentVariables(vs, variables.FromKestrix().List())
 	if s.cfg.Docker.Registry != "" {
 		vs.SetProject("DOCKER_REGISTRY", s.cfg.Docker.Registry)
 	}

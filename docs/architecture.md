@@ -8,6 +8,6 @@ The system consists of several loosely coupled components:
 - **Dispatch** – uses the GitLab API to start a pipeline.
 - **Webhook Receiver** – accepts GitLab push events, extracts changed repos, and triggers the resolution flow.
 - **Runner** – executes tasks locally (default) or via Docker/GitLab‑Runner.
-- **Store** – persists project metadata in PostgreSQL (or a JSON file in dev).
+- **Store** – persists project metadata and run history in PostgreSQL.
 
-These components communicate via Go interfaces and share configuration via environment variables (`METACI_*`).
+These components communicate via Go interfaces and share configuration via the startup environment snapshot (`KESTRIX_*`).

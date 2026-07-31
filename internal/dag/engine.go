@@ -1,4 +1,4 @@
-// Package dag implements the dependency-graph engine for MetaCI.
+// Package dag implements the dependency-graph engine for Kestrix.
 //
 // The engine takes a parsed model.Project and a set of "changed repos" (derived
 // from incoming webhook events or git diffs) and computes which tasks should

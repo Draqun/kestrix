@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"kestrix/internal/model"
+	"kestrix/internal/variables"
 )
 
 func TestBuildVarStore_NilProject(t *testing.T) {
@@ -15,6 +16,14 @@ func TestBuildVarStore_NilProject(t *testing.T) {
 	vs := srv.buildVarStore(nil)
 	if vs == nil {
 		t.Fatal("expected non-nil var store")
+	}
+}
+
+func TestAddEnvironmentVariables(t *testing.T) {
+	vs := variables.New()
+	addEnvironmentVariables(vs, []variables.Variable{{Key: "TEST_KEY", Value: "value"}})
+	if got := vs.Get("", "", "")["TEST_KEY"]; got != "value" {
+		t.Fatalf("environment variable = %q", got)
 	}
 }
 

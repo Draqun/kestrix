@@ -2,7 +2,7 @@
 // They auto-skip when the database is unreachable so `go test ./...` works
 // in CI environments without PostgreSQL.
 //
-// Tests connect via METACI_TEST_DATABASE_URL (NOT DATABASE_URL) to prevent
+// Tests connect via KESTRIX_TEST_DATABASE_URL (NOT DATABASE_URL) to prevent
 // accidental data loss on the development database. The test helper refuses
 // to connect to any database whose name does not end with "_test".
 package store
@@ -22,19 +22,19 @@ func testPG(t *testing.T) *PGStore {
 	if testing.Short() {
 		t.Skip("integration test")
 	}
-	dbURL := os.Getenv("METACI_TEST_DATABASE_URL")
+	dbURL := os.Getenv("KESTRIX_TEST_DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://metaci:metaci@localhost:5432/metaci_test?sslmode=disable&connect_timeout=2"
+		dbURL = "postgres://kestrix:kestrix@localhost:5433/kestrix_test?sslmode=disable&connect_timeout=2"
 	}
 
 	// Safety guard: refuse to connect to a database that doesn't end with _test.
-	// This prevents accidental data loss if someone points METACI_TEST_DATABASE_URL
+	// This prevents accidental data loss if someone points KESTRIX_TEST_DATABASE_URL
 	// at the dev/production database.
 	parsed, err := url.Parse(dbURL)
 	if err == nil {
 		dbName := strings.TrimPrefix(parsed.Path, "/")
 		if !strings.HasSuffix(dbName, "_test") {
-			t.Fatalf("tests must use a database ending with _test (got %q); set METACI_TEST_DATABASE_URL", dbName)
+			t.Fatalf("tests must use a database ending with _test (got %q); set KESTRIX_TEST_DATABASE_URL", dbName)
 		}
 	}
 
@@ -628,7 +628,7 @@ func TestPG_NewPG_BadURL(t *testing.T) {
 }
 
 func TestPG_NewPG_ConnectionFailed(t *testing.T) {
-	_, err := NewPG("postgres://metaci:metaci@localhost:54309/nonexistent?sslmode=disable&connect_timeout=2")
+	_, err := NewPG("postgres://kestrix:kestrix@localhost:54309/nonexistent?sslmode=disable&connect_timeout=2")
 	if err == nil {
 		t.Fatal("expected error for unreachable database")
 	}

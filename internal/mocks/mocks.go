@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"kestrix/internal/domain"
@@ -24,35 +25,79 @@ type MockProjectStore struct {
 	ListErr              error
 	LoadResult           map[string]*domain.ProjectConfig
 	LoadErr              error
+	Projects             map[string]*domain.ProjectConfig
 }
 
 func (m *MockProjectStore) Load() (map[string]*domain.ProjectConfig, error) {
-	return m.LoadResult, m.LoadErr
+	if m.LoadResult != nil {
+		return m.LoadResult, m.LoadErr
+	}
+	if m.Projects == nil {
+		m.Projects = make(map[string]*domain.ProjectConfig)
+	}
+	return m.Projects, m.LoadErr
 }
 func (m *MockProjectStore) Save(map[string]*domain.ProjectConfig) error { return nil }
 func (m *MockProjectStore) Get(name string) (*domain.ProjectConfig, error) {
 	m.mu.Lock()
 	m.GetCalls = append(m.GetCalls, name)
 	m.mu.Unlock()
-	return m.GetResult, m.GetErr
+	if m.GetErr != nil {
+		return nil, m.GetErr
+	}
+	if m.GetResult != nil {
+		return m.GetResult, nil
+	}
+	return m.Projects[name], nil
 }
-func (m *MockProjectStore) FindByGitLabID(int) (*domain.ProjectConfig, error) {
-	return m.FindByGitLabIDResult, m.FindByGitLabIDErr
+func (m *MockProjectStore) FindByGitLabID(id int) (*domain.ProjectConfig, error) {
+	if m.FindByGitLabIDErr != nil {
+		return nil, m.FindByGitLabIDErr
+	}
+	if m.FindByGitLabIDResult != nil {
+		return m.FindByGitLabIDResult, nil
+	}
+	for _, project := range m.Projects {
+		if project.GitLabProjectID == id {
+			return project, nil
+		}
+	}
+	return nil, nil
 }
 func (m *MockProjectStore) Upsert(cfg *domain.ProjectConfig) error {
 	m.mu.Lock()
 	m.UpsertCalls = append(m.UpsertCalls, cfg)
 	m.mu.Unlock()
+	if m.Projects == nil {
+		m.Projects = make(map[string]*domain.ProjectConfig)
+	}
+	m.Projects[cfg.Name] = cfg
 	return m.UpsertErr
 }
 func (m *MockProjectStore) Delete(name string) error {
 	m.mu.Lock()
 	m.DeleteCalls = append(m.DeleteCalls, name)
 	m.mu.Unlock()
-	return m.DeleteErr
+	if m.DeleteErr != nil {
+		return m.DeleteErr
+	}
+	if m.Projects != nil {
+		if _, ok := m.Projects[name]; !ok {
+			return fmt.Errorf("project %q not found", name)
+		}
+	}
+	delete(m.Projects, name)
+	return nil
 }
 func (m *MockProjectStore) List() ([]string, error) {
-	return m.ListResult, m.ListErr
+	if m.ListResult != nil {
+		return m.ListResult, m.ListErr
+	}
+	projects := make([]string, 0, len(m.Projects))
+	for name := range m.Projects {
+		projects = append(projects, name)
+	}
+	return projects, m.ListErr
 }
 
 // MockRunStore records calls for RunService tests.

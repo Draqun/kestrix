@@ -16,7 +16,6 @@ import (
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
 	"kestrix/internal/service"
-	"kestrix/internal/store"
 )
 
 func TestHandleCreateProject_InvalidJSON(t *testing.T) {
@@ -103,7 +102,7 @@ func savePipelineServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	tempDir := t.TempDir()
 	srv := systemHandlerServer(t)
-	if err := srv.projectStore.Upsert(&store.ProjectConfig{
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
 		RepoPath:     tempDir,
 		PipelineDir:  "ci",
@@ -167,7 +166,7 @@ func TestHandleSaveProjectPipeline_Happy(t *testing.T) {
 // already written to disk so the GET-style handlers can read it back.
 func writeSeedProject(t *testing.T, srv *Server, tempDir, body string) {
 	t.Helper()
-	if err := srv.projectStore.Upsert(&store.ProjectConfig{
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
 		RepoPath:     tempDir,
 		PipelineDir:  "ci",
@@ -217,7 +216,7 @@ func TestHandleGetProjectPipeline_Happy(t *testing.T) {
 func TestHandleGetProjectPipeline_ReadFails(t *testing.T) {
 	srv, tempDir := savePipelineServer(t)
 	// Seed project points to a file that doesn't exist.
-	if err := srv.projectStore.Upsert(&store.ProjectConfig{
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
 		RepoPath:     tempDir,
 		PipelineDir:  "ci",

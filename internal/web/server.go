@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,10 +10,8 @@ import (
 	"sync"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/parser"
 	"kestrix/internal/runner"
 	"kestrix/internal/service"
-	"kestrix/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -36,6 +35,8 @@ type Config struct {
 	ListenAddr  string
 	PipelineDir string
 	StaticDir   string
+	// StorePath is retained only for source compatibility with old callers;
+	// PostgreSQL is the sole runtime persistence backend.
 	StorePath   string
 	DatabaseURL string
 	Branch      string
@@ -66,7 +67,7 @@ type Server struct {
 	webhookLog     []map[string]interface{}
 	webhookMu      sync.RWMutex
 	projectStore   domain.ProjectStore
-	runStore       domain.RunStore // nil when using FileStore (no run persistence)
+	runStore       domain.RunStore
 	pipelineRunner domain.PipelineRunner
 	taskRunner     domain.TaskRunner
 	projectService *service.ProjectService
@@ -76,15 +77,19 @@ type Server struct {
 
 var listenAndServe = http.ListenAndServe
 
-// NewServer creates a new HTTP server with the standard wiring.
-func NewServer(cfg Config) *Server {
-	projectStore, runStore := initStores(cfg)
+// NewServerE creates a server and returns persistence initialization errors
+// before any HTTP listener is started.
+func NewServerE(cfg Config) (*Server, error) {
+	projectStore, runStore, err := initStores(cfg)
+	if err != nil {
+		return nil, err
+	}
 	projectService := service.NewProjectService(projectStore)
 	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI}
 	taskRunner := pipelineRunner
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
 	webhookService := service.NewWebhookService(nil)
-	return NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
+	return NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService), nil
 }
 
 // NewServerWithDeps creates a server from prebuilt dependencies.
@@ -108,48 +113,21 @@ func NewServerWithDeps(
 		runService:     runService,
 		webhookService: webhookService,
 	}
-	if cfg.PipelineDir != "" && s.projectStore != nil {
-		if proj, err := parser.ParseDir(cfg.PipelineDir); err == nil && proj.Name != "" {
-			_ = s.projectStore.Upsert(&domain.ProjectConfig{
-				Name:            proj.Name,
-				RepoPath:        cfg.PipelineDir,
-				PipelineDir:     cfg.PipelineDir,
-				PipelineFile:    "pipeline.tf",
-				DefaultBranch:   "main",
-				GitLabProjectID: 0,
-			})
-		}
-	}
 	s.router = s.buildRouter()
 	return s
 }
 
-func initStores(cfg Config) (domain.ProjectStore, domain.RunStore) {
-	var projectStore domain.ProjectStore
-	var runStore domain.RunStore
-	if cfg.DatabaseURL != "" {
-		var err error
-		projectStore, runStore, err = newPGStores(cfg.DatabaseURL)
-		if err != nil {
-			log.Printf("warning: could not connect to database: %v, falling back to file store", err)
-		} else {
-			log.Printf("connected to PostgreSQL")
-		}
+func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
+	if cfg.DatabaseURL == "" {
+		return nil, nil, fmt.Errorf("database URL is required")
 	}
-	if projectStore != nil {
-		return projectStore, runStore
-	}
-	storePath := cfg.StorePath
-	if storePath == "" {
-		storePath = store.DefaultPath()
-	}
-	fs, err := store.New(storePath)
+	projectStore, runStore, err := newPGStores(cfg.DatabaseURL)
 	if err != nil {
-		log.Printf("warning: could not init project store at %s: %v", storePath, err)
-		fallback := filepath.Join(os.TempDir(), "metaci-fallback-projects.json")
-		fs, _ = store.New(fallback)
+		message := strings.ReplaceAll(err.Error(), cfg.DatabaseURL, "[redacted database URL]")
+		return nil, nil, fmt.Errorf("initialize PostgreSQL: %s", message)
 	}
-	return fs, runStore
+	log.Printf("connected to PostgreSQL")
+	return projectStore, runStore, nil
 }
 
 // Append implements domain.WebhookLogSink.

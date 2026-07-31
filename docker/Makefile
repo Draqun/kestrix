@@ -5,7 +5,7 @@
 
 COMPOSE := docker compose
 
-.PHONY: help up down restart logs rebuild clean ps shell
+.PHONY: help up up-d deps-up deps-up-d down restart logs rebuild clean ps shell
 
 ## help: Show this help message
 help:
@@ -25,11 +25,19 @@ up-d:
 	@echo "Services started in background."
 	@echo "  Kestrix:   http://localhost:8080"
 	@echo "  Swagger:   http://localhost:8080/docs/"
-	@echo "  Postgres:  localhost:5432"
-	@echo "  Redis:     localhost:6379"
+	@echo "  Postgres:  localhost:5433"
+	@echo "  Redis:     localhost:6380"
 	@echo ""
 	@echo "  make logs    — follow logs"
 	@echo "  make down    — stop services"
+
+## deps-up: Start development dependencies only (foreground)
+deps-up:
+	$(COMPOSE) up postgres redis
+
+## deps-up-d: Start development dependencies only (background)
+deps-up-d:
+	$(COMPOSE) up -d postgres redis
 
 ## down: Stop and remove all services
 down:
@@ -69,7 +77,7 @@ test-webhook:
 	@echo "Sending test webhook..."
 	@curl -s -X POST http://localhost:8080/webhook \
 		-H "Content-Type: application/json" \
-		-H "X-Gitlab-Token: $${METACI_WEBHOOK_SECRET:-dev-secret}" \
+		-H "X-Gitlab-Token: $${KESTRIX_WEBHOOK_SECRET:-dev-secret}" \
 		-d '{ \
 			"object_kind": "push", \
 			"ref": "refs/heads/main", \
@@ -92,7 +100,7 @@ health:
 	@curl -s http://localhost:8080/health 2>/dev/null || echo "  Kestrix: not running"
 	@echo ""
 	@echo "Postgres:"
-	@$(COMPOSE) exec -T postgres pg_isready -U metaci 2>/dev/null || echo "  Postgres: not running"
+	@$(COMPOSE) exec -T postgres pg_isready -U kestrix 2>/dev/null || echo "  Postgres: not running"
 	@echo ""
 	@echo "Redis:"
 	@$(COMPOSE) exec -T redis redis-cli ping 2>/dev/null || echo "  Redis: not running"

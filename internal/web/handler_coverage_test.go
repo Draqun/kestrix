@@ -33,7 +33,7 @@ func mustGetwd() string {
 }
 
 func TestHandlerCoverageAbove85(t *testing.T) {
-	if os.Getenv("METACI_COV_SUB") == "1" {
+	if os.Getenv("KESTRIX_COV_SUB") == "1" {
 		t.Skip("skipping recursive coverage check in subprocess")
 	}
 
@@ -42,7 +42,7 @@ func TestHandlerCoverageAbove85(t *testing.T) {
 
 	cmd := exec.Command("go", "test", "-coverprofile="+profile, "-count=1", "./internal/web/")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "METACI_COV_SUB=1")
+	cmd.Env = append(os.Environ(), "KESTRIX_COV_SUB=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go test failed: %v\n%s", err, out)

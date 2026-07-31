@@ -3,9 +3,9 @@ set -euo pipefail
 
 echo "=== Build ==="
 
-VERSION="${METACI_VERSION:-dev}"
-COMMIT="${METACI_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
-BUILD_DIR="${METACI_BUILD_DIR:-bin}"
+VERSION="${KESTRIX_VERSION:-dev}"
+COMMIT="${KESTRIX_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
+BUILD_DIR="${KESTRIX_BUILD_DIR:-bin}"
 
 mkdir -p "$BUILD_DIR"
 

@@ -92,7 +92,7 @@ func TestHandleRoot(t *testing.T) {
 //   - Server with PGStore: covered by an existing type assertion in the
 //     handler; without a real DB the assertion falls through. Both
 //     branches are exercised here.
-func TestHandleDashboard_FileStore(t *testing.T) {
+func TestHandleDashboard_PostgreSQLStore(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/dashboard", nil)
@@ -111,8 +111,8 @@ func TestHandleDashboard_FileStore(t *testing.T) {
 			t.Errorf("missing %q in dashboard response", k)
 		}
 	}
-	if body["pg_available"] != false {
-		t.Errorf("pg_available should be false for file store, got %v", body["pg_available"])
+	if body["pg_available"] != true {
+		t.Errorf("pg_available should be true for PostgreSQL store, got %v", body["pg_available"])
 	}
 	if body["project_count"].(float64) != 0 {
 		t.Errorf("expected zero projects, got %v", body["project_count"])

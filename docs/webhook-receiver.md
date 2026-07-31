@@ -86,9 +86,9 @@ When dispatch is configured and tasks are triggered, the receiver creates a GitL
 
 - The generated `.gitlab-ci.yml` embedded as the pipeline configuration.
 - Pipeline variables:
-  - `METACI_TRIGGERED_TASKS` — comma-separated list of triggered tasks.
-  - `METACI_CHANGED_REPOS` — comma-separated list of changed repos.
-  - `METACI_DISPATCH_TIME` — UTC timestamp of the dispatch.
+  - `KESTRIX_TRIGGERED_TASKS` — comma-separated list of triggered tasks.
+  - `KESTRIX_CHANGED_REPOS` — comma-separated list of changed repos.
+  - `KESTRIX_DISPATCH_TIME` — UTC timestamp of the dispatch.
 
 ## Health Endpoints
 

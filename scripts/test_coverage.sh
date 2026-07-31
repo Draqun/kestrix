@@ -112,10 +112,14 @@ check_pkg() {
       echo "  ${pkg}: no executable statements"
       return
     fi
-    if [ "$pkg" = "internal/runner" ] && { [ "${UNIT_ONLY:-0}" = "1" ] || ! docker_available; }; then
-      echo "  ${pkg}: skipped (Docker unavailable)"
-      return
-    fi
+		if [ "$pkg" = "internal/runner" ] && { [ "${UNIT_ONLY:-0}" = "1" ] || ! docker_available; }; then
+			echo "  ${pkg}: skipped (Docker unavailable)"
+			return
+		fi
+		if [ "$pkg" = "internal/store" ] && { [ "${UNIT_ONLY:-0}" = "1" ] || [ -z "${KESTRIX_TEST_DATABASE_URL:-}" ]; }; then
+			echo "  ${pkg}: skipped (PostgreSQL integration unavailable)"
+			return
+		fi
     echo "  FAIL: ${pkg}: no coverage data"
     PASS=false
     return

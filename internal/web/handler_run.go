@@ -108,13 +108,11 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var runID int
-	if s.runStore != nil {
-		snap := &proj
-		runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	snap := &proj
+	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	tr, err := runService.RunTask(r.Context(), runID, name, &proj, taskName, domain.RunnerOptions{
@@ -135,10 +133,8 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			errMsg = tr.Error
 		}
 	}
-	if s.runStore != nil && runID > 0 {
-		if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
-			log.Printf("warning: could not finish run record: %v", err)
-		}
+	if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
+		log.Printf("warning: could not finish run record: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -167,10 +163,6 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects/{name}/runs [get]
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if s.runStore == nil {
-		json.NewEncoder(w).Encode([]interface{}{})
-		return
-	}
 	limit, offset, errStr, status := pagination.Parse(r.URL.Query())
 	if errStr != "" {
 		http.Error(w, errStr, status)
@@ -208,10 +200,6 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} store.Run
 // @Router /api/projects/{name}/runs/{runID} [get]
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
-	if s.runStore == nil {
-		writeError(w, http.StatusBadRequest, "runs not supported")
-		return
-	}
 	runID := 0
 	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
 	if runID == 0 {
@@ -229,10 +217,6 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 
 // handleApproveManualTask runs a manual task that is waiting for approval on a run.
 func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request) {
-	if s.runStore == nil {
-		writeError(w, http.StatusBadRequest, "runs not supported")
-		return
-	}
 	name := chi.URLParam(r, "name")
 	taskName := chi.URLParam(r, "task")
 	runID := 0
@@ -296,10 +280,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 
 // handleCancelRun cancels a running pipeline run.
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
-	if s.runStore == nil {
-		writeError(w, http.StatusBadRequest, "runs not supported")
-		return
-	}
 	runID := 0
 	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
 	if runID == 0 {
@@ -321,10 +301,6 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {array} store.Run
 // @Router /api/runs [get]
 func (s *Server) handleListAllRuns(w http.ResponseWriter, r *http.Request) {
-	if s.runStore == nil {
-		json.NewEncoder(w).Encode([]interface{}{})
-		return
-	}
 	runs, err := s.runStore.ListAllRuns(100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

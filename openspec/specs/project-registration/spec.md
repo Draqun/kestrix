@@ -63,21 +63,20 @@ The webhook handler SHALL find projects by GitLab project ID.
 **WHEN** no project matches  
 **THEN** the server SHALL return HTTP 200 with `{"status": "ignored", "reason": "unknown project"}`
 
-### REQ-4: Auto-load from pipeline_dir (implemented)
-The server SHALL auto-create a project from `--dir` on startup.
+### REQ-4: Explicit project registration
+The server SHALL NOT create or update a registered project as a side effect of startup or server construction based solely on `--dir` or `pipeline_dir`.
 
-#### Scenario: Auto-load from pipeline_dir
-- **WHEN** `--dir` is specified AND `pipeline.tf` exists in that directory
-- **THEN** the server SHALL create a project config pointing at that directory and use the project name from the HCL `project` block
-- **WHEN** `--dir` contains multiple `.tf` files
-- **THEN** only `pipeline.tf` SHALL be used for auto-load
+#### Scenario: Startup does not register a pipeline directory
+- **WHEN** `--dir` is specified and `pipeline.tf` exists in that directory
+- **THEN** the server SHALL NOT create or update a project row for the HCL `project` block
 
-**WHEN** `--dir` is specified AND `pipeline.tf` exists in that directory  
-**THEN** the server SHALL create a project config pointing at that directory  
-**AND** use the project name from the HCL `project` block
+#### Scenario: Deleted project remains deleted
+- **WHEN** a project is deleted through the project API and the server restarts with a pipeline directory configured
+- **THEN** the deleted project SHALL remain absent from the project list
 
-**WHEN** `--dir` contains multiple `.tf` files  
-**THEN** only `pipeline.tf` SHALL be used for auto-load
+#### Scenario: Project is registered through the API
+- **WHEN** a client creates a project through `POST /api/projects`
+- **THEN** the server SHALL persist the project and expose it through the project API
 
 ### REQ-5: API CRUD for projects (implemented)
 Existing CRUD endpoints SHALL be extended with new fields.
