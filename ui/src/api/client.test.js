@@ -1,97 +1,68 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert';
-import { normalizeProject } from './normalizers.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createCredential, createProject, listCredentials, saveProjectPipeline } from './client.js';
+import { remoteProjectPayload } from '../lib/projectForm.js';
 
-describe('normalizeProject', () => {
-  it('returns null/undefined input unchanged', () => {
-    assert.strictEqual(normalizeProject(null), null);
-    assert.strictEqual(normalizeProject(undefined), undefined);
-  });
+test('UI API creates a project with the remote-only payload', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options };
+    return new Response(options.body, { status: 201, headers: { 'Content-Type': 'application/json' } });
+  };
 
-  it('normalizes top-level fields from lowercase to capitalized', () => {
-    const input = {
-      name: 'demo',
-      repos: [],
-      tasks: [],
-      default_image: 'golang:1.26',
-      variables: [],
-    };
-    const result = normalizeProject(input);
-    assert.strictEqual(result.Name, 'demo');
-    assert.deepStrictEqual(result.Repos, []);
-    assert.deepStrictEqual(result.Tasks, []);
-    assert.strictEqual(result.DefaultImage, 'golang:1.26');
-    assert.deepStrictEqual(result.Variables, []);
+  const payload = remoteProjectPayload('demo', {
+    repo_url: 'https://git.example.test/demo.git', repo_ref: 'main',
+    repo_credential_ref: 'cred_demo', pipeline_dir: 'ci',
   });
+  await createProject(payload);
 
-  it('normalizes nested repo fields', () => {
-    const input = {
-      name: 'demo',
-      repos: [
-        { name: 'auth', path: 'src/auth', kind: 'subpath' },
-        { name: 'frontend', path: 'src/frontend', kind: 'git' },
-      ],
-      tasks: [],
-    };
-    const result = normalizeProject(input);
-    assert.strictEqual(result.Repos.length, 2);
-    assert.strictEqual(result.Repos[0].Name, 'auth');
-    assert.strictEqual(result.Repos[0].Path, 'src/auth');
-    assert.strictEqual(result.Repos[0].Kind, 'subpath');
-    assert.strictEqual(result.Repos[1].Name, 'frontend');
-    assert.strictEqual(result.Repos[1].Path, 'src/frontend');
-    assert.strictEqual(result.Repos[1].Kind, 'git');
-  });
+  assert.equal(captured.url, '/api/projects');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), payload);
+  assert.equal('repo_path' in JSON.parse(captured.options.body), false);
+});
 
-  it('normalizes nested task fields including execute block', () => {
-    const input = {
-      name: 'demo',
-      repos: [],
-      tasks: [
-        {
-          name: 'build',
-          trigger: 'repo.auth.changed',
-          depends_on: ['lint'],
-          manual: true,
-          execute: {
-            repo: 'auth',
-            script: 'make build',
-            image: 'golang:1.26',
-          },
-        },
-      ],
-    };
-    const result = normalizeProject(input);
-    assert.strictEqual(result.Tasks.length, 1);
-    const task = result.Tasks[0];
-    assert.strictEqual(task.Name, 'build');
-    assert.strictEqual(task.Trigger, 'repo.auth.changed');
-    assert.deepStrictEqual(task.DependsOn, ['lint']);
-    assert.strictEqual(task.Manual, true);
-    assert.strictEqual(task.Execute.Repo, 'auth');
-    assert.strictEqual(task.Execute.Script, 'make build');
-    assert.strictEqual(task.Execute.Image, 'golang:1.26');
-  });
+test('UI API surfaces the explicit read-only pipeline response', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: 'registered pipeline content is read-only; update it in the remote Git repository' }),
+    { status: 405, headers: { 'Content-Type': 'application/json' } },
+  );
 
-  it('preserves original lowercase fields alongside normalized ones', () => {
-    const input = { name: 'demo', repos: [], tasks: [] };
-    const result = normalizeProject(input);
-    assert.strictEqual(result.name, 'demo');
-    assert.strictEqual(result.Name, 'demo');
-  });
+  await assert.rejects(
+    saveProjectPipeline('demo', 'project "demo" {}'),
+    /registered pipeline content is read-only/,
+  );
+});
 
-  it('handles empty project object', () => {
-    const result = normalizeProject({});
-    assert.strictEqual(result.Name, undefined);
-    assert.strictEqual(result.Repos, undefined);
-    assert.strictEqual(result.Tasks, undefined);
-  });
+test('UI can create and refresh credential metadata before a project exists', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === 'POST') {
+      return new Response(
+        JSON.stringify({ ref: 'cred_new', name: 'GitLab', type: 'token', revoked: false }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(
+      JSON.stringify({ items: [{ ref: 'cred_new', name: 'GitLab', type: 'token', revoked: false }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
 
-  it('handles project with no repos or tasks arrays', () => {
-    const input = { name: 'demo' };
-    const result = normalizeProject(input);
-    assert.strictEqual(result.Name, 'demo');
-    assert.strictEqual(result.Repos, undefined);
-    assert.strictEqual(result.Tasks, undefined);
-  });
+  const created = await createCredential({ name: 'GitLab', type: 'token', token: 'write-only' });
+  const refreshed = await listCredentials();
+
+  assert.equal(created.ref, 'cred_new');
+  assert.deepEqual(refreshed.items, [created]);
+  assert.deepEqual(calls.map(call => [call.url, call.options.method || 'GET']), [
+    ['/api/credentials', 'POST'],
+    ['/api/credentials', 'GET'],
+  ]);
 });

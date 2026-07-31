@@ -9,12 +9,155 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
 	"kestrix/internal/parser"
+	"kestrix/internal/source"
 )
+
+func gitE2E(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+	return string(bytes.TrimSpace(output))
+}
+
+func remoteWorkflowPipeline(marker string) string {
+	return `project "remote-e2e" {
+  ci_repo "app" {
+    path = "."
+  }
+  ci_task "verify" {
+    trigger = "repo.app.changed"
+    execute {
+      repo = "app"
+      script = "test -f ` + marker + `"
+    }
+  }
+}`
+}
+
+func cacheEntryCount(t *testing.T, root string) int {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() && len(entry.Name()) == 64 {
+			count++
+		}
+	}
+	return count
+}
+
+func TestRemoteProjectWorkflowE2E(t *testing.T) {
+	root := t.TempDir()
+	bare := filepath.Join(root, "remote.git")
+	work := filepath.Join(root, "work")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitE2E(t, root, "init", "--quiet", "--bare", "--initial-branch=main", bare)
+	gitE2E(t, work, "init", "--quiet", "--initial-branch=main")
+	gitE2E(t, work, "remote", "add", "origin", bare)
+	if err := os.MkdirAll(filepath.Join(work, "ci"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "ci", "pipeline.tf"), []byte(remoteWorkflowPipeline("version-1")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "version-1"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitE2E(t, work, "add", ".")
+	gitE2E(t, work, "-c", "user.name=Kestrix E2E", "-c", "user.email=e2e@example.test", "commit", "--quiet", "-m", "version one")
+	gitE2E(t, work, "push", "--quiet", "-u", "origin", "main")
+
+	srv := NewServer(Config{ListenAddr: ":0", StorePath: filepath.Join(root, "projects.json")})
+	cacheRoot := filepath.Join(root, "cache")
+	cache, err := source.NewGitCache(source.CacheOptions{Root: cacheRoot, MaxAge: time.Hour, MaxBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.sourceSessions = cache
+	runStore := srv.runStore.(*mocks.MockRunStore)
+	runStore.FinishRunCh = make(chan struct{})
+
+	createBody, _ := json.Marshal(map[string]interface{}{
+		"name": "remote-e2e", "repo_url": bare, "repo_ref": "main",
+		"pipeline_dir": "ci", "pipeline_file": "pipeline.tf",
+	})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := cacheEntryCount(t, cacheRoot); got != 1 {
+		t.Fatalf("cache entries after create=%d, want 1", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(work, "ci", "pipeline.tf"), []byte(remoteWorkflowPipeline("version-2")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "version-2"), []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(work, "version-1")); err != nil {
+		t.Fatal(err)
+	}
+	gitE2E(t, work, "add", "-A")
+	gitE2E(t, work, "-c", "user.name=Kestrix E2E", "-c", "user.email=e2e@example.test", "commit", "--quiet", "-m", "version two")
+	secondSHA := gitE2E(t, work, "rev-parse", "HEAD")
+	gitE2E(t, work, "push", "--quiet", "origin", "main")
+
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/remote-e2e/definition", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "version-2") {
+		t.Fatalf("updated definition status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := cacheEntryCount(t, cacheRoot); got != 1 {
+		t.Fatalf("branch refresh created %d cache entries, want reuse of 1", got)
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/projects/remote-e2e/run", strings.NewReader(`{"changed":["app"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("run status=%d body=%s", w.Code, w.Body.String())
+	}
+	select {
+	case <-runStore.FinishRunCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for remote pipeline run")
+	}
+	if len(runStore.FinishRunCalls) != 1 || runStore.FinishRunCalls[0].Status != "passed" {
+		t.Fatalf("finish calls=%+v", runStore.FinishRunCalls)
+	}
+	if len(runStore.UpdateSourcesCalls) != 1 || len(runStore.UpdateSourcesCalls[0]) == 0 || runStore.UpdateSourcesCalls[0][0].ResolvedRevision != secondSHA {
+		t.Fatalf("recorded sources=%+v, want primary SHA %s", runStore.UpdateSourcesCalls, secondSHA)
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"local-rejected","repo_path":"/srv/repo","pipeline_dir":"ci"}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("local registration status=%d body=%s", w.Code, w.Body.String())
+	}
+}
 
 // dockerAvailable mirrors the helper in internal/runner/runner_test.go and lets
 // us skip end-to-end tests that depend on a working Docker daemon. Running the
@@ -189,24 +332,9 @@ project "p" {
 
 func TestProjectLifecycle(t *testing.T) {
 	repoDir := t.TempDir()
-
-	srv := NewServer(Config{
-		ListenAddr:  ":0",
-		PipelineDir: "./examples/demo-mono",
-		StorePath:   filepath.Join(t.TempDir(), "projects.json"),
-	})
-
-	// 1. Create project pointing at repoDir.
-	createBody := `{"name":"tf-demo","repo_path":"` + repoDir + `"}`
-	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(createBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, want 201: %s", w.Code, w.Body.String())
+	if err := os.MkdirAll(filepath.Join(repoDir, "ci"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-
-	// 2. Save pipeline.tf (multi-line HCL).
 	pipeline := `
 project "tf-demo" {
   ci_repo "tf_plugin" {
@@ -233,17 +361,34 @@ project "tf-demo" {
   }
 }
 `
+	if err := os.WriteFile(filepath.Join(repoDir, "ci", "pipeline.tf"), []byte(pipeline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(Config{
+		ListenAddr:  ":0",
+		PipelineDir: "./examples/demo-mono",
+		StorePath:   filepath.Join(t.TempDir(), "projects.json"),
+	})
+	srv.sourceSessions = &testSourceSessions{root: repoDir}
+
+	// 1. Create a remote-only project after server-side source validation.
+	createBody := `{"name":"tf-demo","repo_url":"https://git.example.test/tf-demo.git","repo_ref":"main","pipeline_dir":"ci"}`
+	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(createBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Registered pipeline content is Git-owned and read-only.
 	req = httptest.NewRequest("POST", "/api/projects/tf-demo/pipeline", bytes.NewBufferString(pipeline))
 	req.Header.Set("Content-Type", "text/plain")
 	w = httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("save status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-
-	// File should exist on disk.
-	if _, err := os.Stat(filepath.Join(repoDir, "pipeline.tf")); err != nil {
-		t.Fatalf("pipeline.tf not written: %v", err)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("save status = %d, want 405: %s", w.Code, w.Body.String())
 	}
 
 	// 3. Resolve with tf_plugin changed.
@@ -303,7 +448,8 @@ func TestRunProject(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
+	srv.sourceSessions = &testSourceSessions{root: repoDir}
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "run-demo", RepoURL: "https://git.example.test/run-demo.git", RepoRef: "main", PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", "/api/projects/run-demo/run", bytes.NewBufferString(`{"changed":["app"]}`))
@@ -375,7 +521,8 @@ func TestResolveProjectManual(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
+	srv.sourceSessions = &testSourceSessions{root: repoDir}
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "manual-demo", RepoURL: "https://git.example.test/manual-demo.git", RepoRef: "main", PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 

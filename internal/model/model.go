@@ -10,3 +10,4 @@ type Task = domain.Task
 type Project = domain.Project
 type ProjectFile = domain.ProjectFile
 type Variable = domain.Variable
+type AcquiredSource = domain.AcquiredSource

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,6 +185,77 @@ func TestParseSource(t *testing.T) {
 	}
 	if len(proj.Repos) != 1 || len(proj.Tasks) != 1 {
 		t.Errorf("repos=%d tasks=%d, want 1,1", len(proj.Repos), len(proj.Tasks))
+	}
+}
+
+func TestParseRemoteRepositoryDeclaration(t *testing.T) {
+	src := `project "remote" {
+  ci_repo "public" {
+    url = "https://git.example.test/team/app.git"
+    ref = "v2.1.0"
+  }
+  ci_repo "private" {
+    url = "ssh://git@example.test/team/auth.git"
+    ref = "main"
+    credential_ref = "build-auth"
+  }
+}`
+	proj, err := ParseSource([]byte(src), "remote.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if len(proj.Repos) != 2 {
+		t.Fatalf("repos = %d, want 2", len(proj.Repos))
+	}
+	if proj.Repos[0].URL == "" || proj.Repos[0].Ref != "v2.1.0" {
+		t.Fatalf("public repo = %+v", proj.Repos[0])
+	}
+	if proj.Repos[1].CredentialRef != "build-auth" {
+		t.Fatalf("private repo = %+v", proj.Repos[1])
+	}
+}
+
+func TestParseRepositoryRequiresExactlyOneSource(t *testing.T) {
+	tests := []struct {
+		name string
+		repo string
+	}{
+		{name: "neither", repo: `ci_repo "repo" {}`},
+		{name: "both", repo: "ci_repo \"repo\" {\n path = \"src\"\n url = \"https://git.example.test/repo.git\"\n ref = \"main\"\n}"},
+		{name: "embedded credentials", repo: `ci_repo "repo" { url = "https://user:secret@git.example.test/repo.git" }`},
+		{name: "malformed URL", repo: "ci_repo \"repo\" {\n url = \"https://%gh&\"\n ref = \"main\"\n}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := []byte("project \"invalid\" {\n" + tt.repo + "\n}")
+			if _, err := ParseSource(src, tt.name+".tf"); err == nil {
+				t.Fatal("expected repository declaration error")
+			}
+		})
+	}
+}
+
+func TestParseRepositoryRejectsEscapingLocalPath(t *testing.T) {
+	for _, path := range []string{"/srv/repo", "../repo", "nested/../../repo"} {
+		src := fmt.Sprintf(`project "p" {
+  ci_repo "repo" {
+    path = %q
+  }
+}`, path)
+		if _, err := ParseSource([]byte(src), "pipeline.tf"); err == nil || !strings.Contains(err.Error(), "must be relative") {
+			t.Fatalf("path %q: err = %v", path, err)
+		}
+	}
+}
+
+func TestParseRemoteRepositoryRequiresRef(t *testing.T) {
+	for _, body := range []string{
+		`ci_repo "remote" { url = "https://git.example/repo.git" }`,
+		"ci_repo \"local\" {\n path = \"src\"\n ref = \"main\"\n}",
+	} {
+		if _, err := ParseSource([]byte("project \"invalid\" {\n"+body+"\n}"), "invalid.tf"); err == nil {
+			t.Fatalf("expected required-ref error for %s", body)
+		}
 	}
 }
 

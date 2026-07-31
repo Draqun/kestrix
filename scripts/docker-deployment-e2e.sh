@@ -14,6 +14,7 @@ HEALTH_URL="http://127.0.0.1:${BASE_PORT}/api/health"
 IMAGE_OVERRIDE="${KESTRIX_E2E_IMAGE:-}"
 IMAGE_TAG="${KESTRIX_E2E_IMAGE_TAG:-kestrix:e2e-${PROJECT_NAME}}"
 TEMP_DIR=""
+OVERRIDE_FILE=""
 IMAGE_BUILT=0
 
 if docker compose version >/dev/null 2>&1; then
@@ -33,6 +34,10 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required but was not found in PATH." >&2
   exit 1
 fi
+if ! command -v git >/dev/null 2>&1; then
+  echo "git is required but was not found in PATH." >&2
+  exit 1
+fi
 if [[ ! -f "${COMPOSE_FILE}" ]]; then
   echo "Production Compose file not found: ${COMPOSE_FILE}" >&2
   exit 1
@@ -43,6 +48,45 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kestrix-docker-e2e.XXXXXX")"
+OVERRIDE_FILE="${TEMP_DIR}/docker-compose.override.yml"
+REMOTE_BARE="${TEMP_DIR}/remote.git"
+REMOTE_WORK="${TEMP_DIR}/remote-work"
+MASTER_KEY_FILE="${TEMP_DIR}/master.key"
+CONFIG_FILE="${TEMP_DIR}/config.yaml"
+
+mkdir -p "${REMOTE_WORK}/ci"
+git init --quiet --bare --initial-branch=main "${REMOTE_BARE}"
+git -C "${REMOTE_WORK}" init --quiet --initial-branch=main
+git -C "${REMOTE_WORK}" remote add origin "${REMOTE_BARE}"
+printf '%s\n' \
+  'project "docker-remote" {' \
+  '  ci_repo "app" { path = "." }' \
+  '  ci_task "verify" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "test -f version.txt"' \
+  '    }' \
+  '  }' \
+  '}' > "${REMOTE_WORK}/ci/pipeline.tf"
+printf '%s\n' 'docker-e2e-source' > "${REMOTE_WORK}/version.txt"
+git -C "${REMOTE_WORK}" add .
+git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
+git -C "${REMOTE_WORK}" push --quiet -u origin main
+
+printf '%s' '01234567890123456789012345678901' > "${MASTER_KEY_FILE}"
+chmod 600 "${MASTER_KEY_FILE}"
+printf '%s\n' 'master_key_path: /run/secrets/kestrix_master_key' > "${CONFIG_FILE}"
+printf '%s\n' \
+  'services:' \
+  '  kestrix:' \
+  '    entrypoint: ["/bin/sh", "-c"]' \
+  '    command: ["git config --global --add safe.directory /e2e/remote.git && exec /kestrix serve --addr :8080 --config /e2e/config.yaml --static ./ui/dist"]' \
+  '    volumes:' \
+  '      - source_cache:/var/lib/kestrix/cache/git' \
+  "      - ${REMOTE_BARE}:/e2e/remote.git:ro" \
+  "      - ${MASTER_KEY_FILE}:/run/secrets/kestrix_master_key:ro" \
+  "      - ${CONFIG_FILE}:/e2e/config.yaml:ro" > "${OVERRIDE_FILE}"
 
 export KESTRIX_IMAGE="${IMAGE_OVERRIDE:-${IMAGE_TAG}}"
 export KESTRIX_PORT="${BASE_PORT}"
@@ -52,7 +96,7 @@ export POSTGRES_PORT
 export REDIS_PORT
 
 compose() {
-  "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" "$@"
+  "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" "$@"
 }
 
 diagnose() {
@@ -98,19 +142,23 @@ fi
 compose config >/dev/null
 compose up -d --force-recreate
 
-echo "Waiting up to ${HEALTH_TIMEOUT}s for ${HEALTH_URL}..."
-deadline=$((SECONDS + HEALTH_TIMEOUT))
-health_body=""
-until health_body="$(curl -fsS --max-time 3 "${HEALTH_URL}" 2>/dev/null)" \
-  && [[ "${health_body}" == *'"status"'* ]] \
-  && [[ "${health_body}" == *'"ok"'* ]]; do
-  if (( SECONDS >= deadline )); then
-    echo "Deployment did not become healthy within ${HEALTH_TIMEOUT}s." >&2
-    exit 1
-  fi
-  sleep 2
-done
-echo "Health response: ${health_body}"
+wait_for_health() {
+  echo "Waiting up to ${HEALTH_TIMEOUT}s for ${HEALTH_URL}..."
+  local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  local health_body=""
+  until health_body="$(curl -fsS --max-time 3 "${HEALTH_URL}" 2>/dev/null)" \
+    && [[ "${health_body}" == *'"status"'* ]] \
+    && [[ "${health_body}" == *'"ok"'* ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "Deployment did not become healthy within ${HEALTH_TIMEOUT}s." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  echo "Health response: ${health_body}"
+}
+
+wait_for_health
 
 assert_json_endpoint() {
   local path="$1"
@@ -139,4 +187,106 @@ assert_json_endpoint() {
 
 assert_json_endpoint /api/projects items
 assert_json_endpoint /api/runs array
+
+API_BASE="http://127.0.0.1:${BASE_PORT}"
+SETTINGS_HTML="${TEMP_DIR}/settings.html"
+SETTINGS_BUNDLE="${TEMP_DIR}/settings.js"
+status="$(curl -sS -o "${SETTINGS_HTML}" -w '%{http_code}' --max-time 10 "${API_BASE}/settings")"
+if [[ "${status}" != "200" ]] || ! grep -q '<div id="root"></div>' "${SETTINGS_HTML}"; then
+  echo "Direct /settings route did not return the production SPA (HTTP ${status})." >&2
+  exit 1
+fi
+SETTINGS_ASSET="$(sed -n 's/.*src="\([^"]*\.js\)".*/\1/p' "${SETTINGS_HTML}" | head -n 1)"
+if [[ -z "${SETTINGS_ASSET}" ]]; then
+  echo "Production SPA did not reference a JavaScript bundle." >&2
+  exit 1
+fi
+curl -fsS --max-time 20 "${API_BASE}${SETTINGS_ASSET}" > "${SETTINGS_BUNDLE}"
+if ! grep -q '/settings' "${SETTINGS_BUNDLE}" || ! grep -q 'Repository credentials' "${SETTINGS_BUNDLE}"; then
+  echo "Production bundle does not contain the Settings credential section." >&2
+  exit 1
+fi
+echo "/settings: HTTP ${status} (SPA route and credential section verified)"
+
+SECRET_VALUE='e2e-secret-do-not-log'
+CREDENTIAL_RESPONSE="${TEMP_DIR}/credential.json"
+status="$(curl -sS -o "${CREDENTIAL_RESPONSE}" -w '%{http_code}' --max-time 10 \
+  -X POST "${API_BASE}/api/credentials" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Docker E2E\",\"type\":\"token\",\"provider\":\"git\",\"host\":\"local\",\"token\":\"${SECRET_VALUE}\"}")"
+if [[ "${status}" != "201" ]]; then
+  echo "Credential creation returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${CREDENTIAL_RESPONSE}" >&2
+  exit 1
+fi
+if grep -q "${SECRET_VALUE}" "${CREDENTIAL_RESPONSE}"; then
+  echo "Credential response exposed the secret value." >&2
+  exit 1
+fi
+CREDENTIAL_REF="$(sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' "${CREDENTIAL_RESPONSE}")"
+if [[ -z "${CREDENTIAL_REF}" ]]; then
+  echo "Credential response did not contain a reference." >&2
+  exit 1
+fi
+
+PROJECT_RESPONSE="${TEMP_DIR}/project.json"
+status="$(curl -sS -o "${PROJECT_RESPONSE}" -w '%{http_code}' --max-time 20 \
+  -X POST "${API_BASE}/api/projects" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"docker-remote\",\"repo_url\":\"file:///e2e/remote.git\",\"repo_ref\":\"main\",\"repo_credential_ref\":\"${CREDENTIAL_REF}\",\"pipeline_dir\":\"ci\",\"pipeline_file\":\"pipeline.tf\"}")"
+if [[ "${status}" != "201" ]]; then
+  echo "Remote project creation returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${PROJECT_RESPONSE}" >&2
+  exit 1
+fi
+if grep -Eq "${SECRET_VALUE}|repo_path|source-session|/var/lib/kestrix/cache" "${PROJECT_RESPONSE}"; then
+  echo "Project API response exposed secret or host/cache path data." >&2
+  exit 1
+fi
+
+PIPELINE_BEFORE="${TEMP_DIR}/pipeline-before.tf"
+status="$(curl -sS -o "${PIPELINE_BEFORE}" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+if [[ "${status}" != "200" ]] || ! grep -q 'docker-remote' "${PIPELINE_BEFORE}"; then
+  echo "Remote pipeline read failed before restart (HTTP ${status})." >&2
+  exit 1
+fi
+CACHE_BEFORE="$(compose exec -T kestrix sh -c 'find /var/lib/kestrix/cache/git -type d -name mirror.git | sort')"
+if [[ -z "${CACHE_BEFORE}" ]]; then
+  echo "Source cache was not populated." >&2
+  exit 1
+fi
+
+compose restart kestrix >/dev/null
+wait_for_health
+CACHE_AFTER="$(compose exec -T kestrix sh -c 'find /var/lib/kestrix/cache/git -type d -name mirror.git | sort')"
+if [[ "${CACHE_AFTER}" != "${CACHE_BEFORE}" ]]; then
+  echo "Source cache did not persist unchanged across container restart." >&2
+  exit 1
+fi
+status="$(curl -sS -o "${TEMP_DIR}/pipeline-after.tf" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+if [[ "${status}" != "200" ]]; then
+  echo "Cached pipeline read failed after restart (HTTP ${status})." >&2
+  exit 1
+fi
+
+status="$(curl -sS -o "${TEMP_DIR}/revoke-response" -w '%{http_code}' --max-time 10 \
+  -X POST "${API_BASE}/api/credentials/${CREDENTIAL_REF}/revoke")"
+if [[ "${status}" != "204" ]]; then
+  echo "Credential revocation returned HTTP ${status}." >&2
+  exit 1
+fi
+status="$(curl -sS -o "${TEMP_DIR}/revoked-read.json" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+if [[ "${status}" != "400" ]] || ! grep -qi 'revoked' "${TEMP_DIR}/revoked-read.json"; then
+  echo "Cached source did not fail closed after credential revocation (HTTP ${status})." >&2
+  exit 1
+fi
+
+curl -fsS --max-time 10 "${API_BASE}/api/credentials" > "${TEMP_DIR}/credentials.json"
+curl -fsS --max-time 10 "${API_BASE}/api/projects/docker-remote" > "${TEMP_DIR}/project-read.json"
+compose logs --no-color > "${TEMP_DIR}/compose.log"
+if grep -R -q "${SECRET_VALUE}" "${CREDENTIAL_RESPONSE}" "${PROJECT_RESPONSE}" "${TEMP_DIR}/credentials.json" "${TEMP_DIR}/project-read.json" "${TEMP_DIR}/revoked-read.json" "${TEMP_DIR}/compose.log"; then
+  echo "Credential secret was found in an API response or deployment log." >&2
+  exit 1
+fi
+
 echo "=== Docker deployment E2E passed ==="

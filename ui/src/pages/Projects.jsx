@@ -15,10 +15,16 @@ import {
   AccountTree as PipelineIcon,
   ArrowBack as BackIcon,
   Edit as EditIcon,
-  Save as SaveIcon,
 } from '@mui/icons-material';
 import { listProjects, createProject, deleteProject, getProject, updateProject, getProjectDefinition } from '../api/client';
+import CredentialSelectField from '../components/credentials/CredentialSelectField.jsx';
 import Pagination from '../components/Pagination';
+import useCredentials from '../hooks/useCredentials.js';
+import {
+  remoteProjectPayload,
+  repositorySourceLabel,
+  validateRemoteProject,
+} from '../lib/projectForm.js';
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -40,14 +46,17 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ repo_path: '', repo_url: '', pipeline_dir: 'ci' });
+  const [editForm, setEditForm] = useState({ repo_url: '', repo_ref: '', repo_credential_ref: '', pipeline_dir: 'ci' });
   const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState('');
-  const [repoPath, setRepoPath] = useState('');
+	const [repoURL, setRepoURL] = useState('');
+	const [repoRef, setRepoRef] = useState('main');
+	const [credentialRef, setCredentialRef] = useState('');
   const [pipelineDir, setPipelineDir] = useState('ci');
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState(null);
+	const { items: credentials, refresh: fetchCredentials } = useCredentials();
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
@@ -99,9 +108,12 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
     e.preventDefault();
     setCreating(true);
     setFormError(null);
-    try {
-      await createProject({ name, repo_path: repoPath, pipeline_dir: pipelineDir });
-      setName(''); setRepoPath(''); setPipelineDir('ci');
+	try {
+		const form = { repo_url: repoURL, repo_ref: repoRef, repo_credential_ref: credentialRef, pipeline_dir: pipelineDir };
+		const validationError = validateRemoteProject(name, form);
+		if (validationError) throw new Error(validationError);
+		await createProject(remoteProjectPayload(name, form));
+		setName(''); setRepoURL(''); setRepoRef('main'); setCredentialRef(''); setPipelineDir('ci');
       setShowCreate(false);
       await fetchProjects();
     } catch (err) {
@@ -123,8 +135,9 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 
   const openEdit = () => {
     setEditForm({
-      repo_path: config?.repo_path || '',
       repo_url: config?.repo_url || '',
+      repo_ref: config?.repo_ref || '',
+      repo_credential_ref: config?.repo_credential_ref || '',
       pipeline_dir: config?.pipeline_dir || 'ci',
     });
     setShowEdit(true);
@@ -134,54 +147,15 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
     setSaving(true);
     setError(null);
     try {
-      const updated = { ...config, ...editForm };
-      await updateProject(selectedName, updated);
-      setConfig(updated);
+		const validationError = validateRemoteProject(undefined, editForm);
+		if (validationError) throw new Error(validationError);
+		await updateProject(selectedName, remoteProjectPayload(undefined, editForm));
+		const [validatedConfig, validatedDefinition] = await Promise.all([
+			getProject(selectedName), getProjectDefinition(selectedName),
+		]);
+		setConfig(validatedConfig);
+		setDetail(validatedDefinition);
       setShowEdit(false);
-    } catch (e) {
-      setError(e.message);
-    }
-    setSaving(false);
-  };
-
-  const handleAddRepo = async () => {
-    const updated = {
-      ...config,
-      extra_repos: [...(config.extra_repos || []), { name: '', path: '', url: '', kind: 'subpath' }],
-    };
-    try {
-      await updateProject(selectedName, updated);
-      setConfig(updated);
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-
-  const handleRemoveRepo = async (idx) => {
-    const updated = {
-      ...config,
-      extra_repos: config.extra_repos.filter((_, i) => i !== idx),
-    };
-    try {
-      await updateProject(selectedName, updated);
-      setConfig(updated);
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-
-  const handleRepoChange = (idx, field, value) => {
-    setConfig(prev => ({
-      ...prev,
-      extra_repos: prev.extra_repos.map((r, i) => i === idx ? { ...r, [field]: value } : r),
-    }));
-  };
-
-  const handleSaveRepos = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await updateProject(selectedName, config);
     } catch (e) {
       setError(e.message);
     }
@@ -221,8 +195,12 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         {/* Detail cards */}
         <Card sx={{ mb: 2 }}>
           <CardContent>
-            <Typography variant="subtitle2" color="text.secondary" gutterBottom>Repository path</Typography>
-            <Typography variant="body1" sx={{ mb: 2 }}>{config?.repo_path || config?.repo_url || 'Not configured'}</Typography>
+			<Typography variant="subtitle2" color="text.secondary" gutterBottom>Remote repository</Typography>
+			<Typography variant="body1">{config?.repo_url || 'Not configured'}</Typography>
+			<Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+				Requested ref: {config?.repo_ref || 'Not configured'}
+				{config?.repo_credential_ref ? ` · Credential: ${credentials.find(item => item.ref === config.repo_credential_ref)?.name || config.repo_credential_ref}` : ' · Public access'}
+			</Typography>
 
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>Pipeline directory</Typography>
             <Typography variant="body1" sx={{ mb: 2 }}>{config?.pipeline_dir || 'ci'}</Typography>
@@ -232,8 +210,8 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" color="text.secondary" gutterBottom>Repositories ({detail.Repos?.length ?? 0})</Typography>
                 <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                  {detail.Repos?.map(r => (
-                    <Chip key={r.Name} label={r.Name} size="small" variant="outlined" />
+				  {detail.Repos?.map(r => (
+					<Chip key={r.Name} label={repositorySourceLabel(r)} size="small" variant="outlined" />
                   )) || <Typography variant="body2" color="text.secondary">None</Typography>}
                 </Stack>
 
@@ -257,71 +235,26 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           </CardContent>
         </Card>
 
-        {/* Additional repos */}
+        {/* Repository declarations are owned by pipeline HCL. */}
         <Card>
           <CardContent>
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-              <Typography variant="h6" sx={{ flexGrow: 1 }}>Additional repositories</Typography>
-              <Button size="small" startIcon={<AddIcon />} onClick={handleAddRepo}>
-                Add repo
-              </Button>
-            </Box>
+			<Typography variant="h6" sx={{ mb: 1 }}>Pipeline repositories</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Extra repositories that participate in this project's pipeline.
-              Define them here, then reference in your pipeline.tf as ci_repo blocks.
+			  Read-only declarations loaded from the selected remote revision. Edit <code>ci_repo</code> blocks in Git to change them.
             </Typography>
-            {(config?.extra_repos || []).length === 0 && (
+			{(detail?.Repos || []).length === 0 && (
               <Typography variant="body2" color="text.secondary">
-                No additional repos configured.
+				No repositories declared in the pipeline.
               </Typography>
             )}
-            <Stack spacing={2}>
-              {(config?.extra_repos || []).map((repo, idx) => (
-                <Card key={idx} variant="outlined" sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>{repo.name || `Repo ${idx + 1}`}</Typography>
-                    <IconButton size="small" color="error" onClick={() => handleRemoveRepo(idx)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                  <Stack spacing={1.5}>
-                    <TextField
-                      label="Name"
-                      value={repo.name}
-                      onChange={(e) => handleRepoChange(idx, 'name', e.target.value)}
-                      size="small"
-                      fullWidth
-                      placeholder="auth_service"
-                      helperText="Local identifier used in trigger expressions"
-                    />
-                    <TextField
-                      label="Path"
-                      value={repo.path}
-                      onChange={(e) => handleRepoChange(idx, 'path', e.target.value)}
-                      size="small"
-                      fullWidth
-                      placeholder="src/auth or https://gitlab.com/org/auth.git"
-                      helperText="Subdirectory within monorepo or clone URL"
-                    />
-                    <TextField
-                      label="URL (optional)"
-                      value={repo.url || ''}
-                      onChange={(e) => handleRepoChange(idx, 'url', e.target.value)}
-                      size="small"
-                      fullWidth
-                      placeholder="https://gitlab.com/group/repo"
-                    />
-                  </Stack>
-                </Card>
-              ))}
-            </Stack>
-            {(config?.extra_repos || []).length > 0 && (
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
-                <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveRepos} disabled={saving}>
-                  {saving ? 'Saving…' : 'Save repos'}
-                </Button>
-              </Box>
-            )}
+			<Stack spacing={1}>{detail?.Repos?.map(repo => (
+				<Box key={repo.Name} sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+					<Typography variant="subtitle2">{repo.Name}</Typography>
+					<Typography variant="body2" color="text.secondary">
+						{repo.URL ? `${repo.URL} @ ${repo.Ref}${repo.CredentialRef ? ` · credential ${repo.CredentialRef}` : ''}` : `Subpath: ${repo.Path}`}
+					</Typography>
+				</Box>
+			))}</Stack>
           </CardContent>
         </Card>
 
@@ -331,21 +264,29 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
               <TextField
-                label="Repo path (local)"
-                value={editForm.repo_path}
-                onChange={(e) => setEditForm(prev => ({ ...prev, repo_path: e.target.value }))}
-                size="small"
-                fullWidth
-                helperText="Directory on this machine containing the source checkout"
-              />
-              <TextField
-                label="Repository URL (optional)"
+				label="Repository URL"
                 value={editForm.repo_url}
                 onChange={(e) => setEditForm(prev => ({ ...prev, repo_url: e.target.value }))}
                 size="small"
-                fullWidth
+				fullWidth
+				required
                 placeholder="https://gitlab.com/group/repo"
               />
+              <TextField
+				label="Repository ref"
+                value={editForm.repo_ref}
+                onChange={(e) => setEditForm(prev => ({ ...prev, repo_ref: e.target.value }))}
+                size="small"
+				fullWidth
+				required
+                placeholder="main, v1.2.3, or commit SHA"
+              />
+			  <CredentialSelectField
+				value={editForm.repo_credential_ref}
+				onChange={(value) => setEditForm(prev => ({ ...prev, repo_credential_ref: value }))}
+				credentials={credentials}
+				onCredentialsChanged={fetchCredentials}
+			  />
               <TextField
                 label="Pipeline directory"
                 value={editForm.pipeline_dir}
@@ -358,7 +299,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setShowEdit(false)}>Cancel</Button>
-            <Button variant="contained" onClick={handleSaveEdit} disabled={saving}>
+			<Button variant="contained" onClick={handleSaveEdit} disabled={saving || !editForm.repo_url || !editForm.repo_ref || !editForm.pipeline_dir}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </DialogActions>
@@ -402,7 +343,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
                     <Chip label={p.pipeline_dir || 'ci'} size="small" variant="outlined" />
                   </Box>
                 }
-                secondary={p.repo_path || p.repo_url || 'No path configured'}
+				secondary={`${p.repo_url || 'No remote configured'}${p.repo_ref ? ` @ ${p.repo_ref}` : ''}`}
               />
               <ListItemSecondaryAction>
                 <Tooltip title="Open pipeline">
@@ -433,7 +374,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Point Kestrix at a local repository and the directory containing its pipeline files.
+			Register a remote Git repository. Kestrix validates the selected revision and pipeline before saving the project.
           </Typography>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
@@ -447,14 +388,23 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
               fullWidth
             />
             <TextField
-              label="Repo path (local)"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
-              size="small"
-              placeholder="/home/user/repos/my-project"
-              helperText="Directory on this machine containing the source checkout"
-              fullWidth
-            />
+			  label="Repository URL"
+			  value={repoURL}
+			  onChange={(e) => setRepoURL(e.target.value)}
+			  size="small"
+			  placeholder="https://gitlab.com/group/project.git"
+			  helperText="Do not include a token or password in the URL"
+			  required
+			  fullWidth
+			/>
+			<TextField label="Repository ref" value={repoRef} onChange={(e) => setRepoRef(e.target.value)} size="small" placeholder="main, v1.2.3, or commit SHA" required fullWidth />
+			<CredentialSelectField
+			  value={credentialRef}
+			  onChange={setCredentialRef}
+			  credentials={credentials}
+			  onCredentialsChanged={fetchCredentials}
+			  helperText="Use public access or add a write-only credential for a private repository."
+			/>
             <TextField
               label="Pipeline directory"
               value={pipelineDir}
@@ -470,7 +420,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={creating || !name}>
+		  <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !repoURL || !repoRef || !pipelineDir}>
             {creating ? 'Creating…' : 'Create project'}
           </Button>
         </DialogActions>

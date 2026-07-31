@@ -16,6 +16,29 @@ import (
 
 type emptyTaskRunner struct{}
 
+type sourceSessionTracker struct {
+	pins      [][]domain.AcquiredSource
+	releases  []int
+	releaseCh chan struct{}
+	pinErr    error
+}
+
+func (s *sourceSessionTracker) Open(context.Context, domain.SourceRequest) (domain.SourceSession, error) {
+	return domain.SourceSession{}, nil
+}
+func (s *sourceSessionTracker) Pin(_ context.Context, _ int, sources []domain.AcquiredSource) error {
+	s.pins = append(s.pins, append([]domain.AcquiredSource(nil), sources...))
+	return s.pinErr
+}
+func (s *sourceSessionTracker) Release(_ context.Context, runID int) error {
+	s.releases = append(s.releases, runID)
+	if s.releaseCh != nil {
+		close(s.releaseCh)
+	}
+	return nil
+}
+func (s *sourceSessionTracker) Maintain(context.Context) error { return nil }
+
 func (emptyTaskRunner) Run(ctx context.Context, project model.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	return nil, fmt.Errorf("boom")
 }
@@ -58,6 +81,82 @@ func TestRunService_Start_Happy(t *testing.T) {
 	}
 	if mockRun.FinishRunCalls[0].Status != "passed" {
 		t.Errorf("expected finish status 'passed', got %q", mockRun.FinishRunCalls[0].Status)
+	}
+}
+
+func TestRunServicePersistsPinsAndRetainsSourcesForManualWork(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 51, FinishRunCh: make(chan struct{})}
+	additional := domain.AcquiredSource{RepoName: "docs", URL: "https://git.test/docs.git", RequestedRef: "main", ResolvedRevision: "docs-sha"}
+	runner := &mocks.MockPipelineRunner{
+		AcquiredSources: []domain.AcquiredSource{additional},
+		TaskResultList:  []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+	}
+	manager := &sourceSessionTracker{}
+	primary := domain.AcquiredSource{RepoName: "app", URL: "https://git.test/app.git", RequestedRef: "main", ResolvedRevision: "app-sha", Primary: true}
+	svc := NewRunService(store, runner, runner)
+	_, err := svc.Start(context.Background(), "app", &model.Project{Name: "app", Tasks: []model.Task{{Name: "deploy", Manual: true}}}, nil, domain.RunnerOptions{
+		SourceSessions: manager, InitialSources: []domain.AcquiredSource{primary},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.WaitFinish()
+	if len(store.UpdateSourcesCalls) != 1 || len(store.UpdateSourcesCalls[0]) != 2 {
+		t.Fatalf("persisted sources = %+v", store.UpdateSourcesCalls)
+	}
+	if len(manager.pins) != 1 || len(manager.pins[0]) != 2 {
+		t.Fatalf("pins = %+v", manager.pins)
+	}
+	if len(manager.releases) != 0 {
+		t.Fatalf("manual run released pins: %v", manager.releases)
+	}
+	if len(store.FinishRunCalls) != 1 || store.FinishRunCalls[0].Status != "running" {
+		t.Fatalf("finish calls = %+v", store.FinishRunCalls)
+	}
+}
+
+func TestRunServiceReleasesSourcesWhenRunIsTerminal(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 52, FinishRunCh: make(chan struct{})}
+	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "build", Status: "passed"}}}
+	manager := &sourceSessionTracker{releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	_, err := svc.Start(context.Background(), "app", &model.Project{Name: "app", Tasks: []model.Task{{Name: "build"}}}, nil, domain.RunnerOptions{SourceSessions: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.WaitFinish()
+	<-manager.releaseCh
+	if len(manager.releases) != 1 || manager.releases[0] != 52 {
+		t.Fatalf("releases = %v", manager.releases)
+	}
+}
+
+func TestRunServicePanicReleasesSourcePins(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 53, FinishRunCh: make(chan struct{})}
+	runner := &mocks.MockPipelineRunner{PanicMsg: "panic"}
+	manager := &sourceSessionTracker{releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	if _, err := svc.Start(context.Background(), "app", &model.Project{Name: "app"}, nil, domain.RunnerOptions{SourceSessions: manager}); err != nil {
+		t.Fatal(err)
+	}
+	store.WaitFinish()
+	<-manager.releaseCh
+	if len(manager.releases) != 1 || manager.releases[0] != 53 {
+		t.Fatalf("releases = %v", manager.releases)
+	}
+}
+
+func TestRunStatusRemainsRunningWhileManualWorkCanStillExecute(t *testing.T) {
+	status, errMsg := runStatus([]domain.TaskResult{
+		{Name: "test", Status: "failed", Error: "exit 1"},
+		{Name: "deploy", Status: "manual"},
+	}, nil)
+
+	if status != "running" {
+		t.Fatalf("status = %q, want running", status)
+	}
+	if errMsg != "exit 1" {
+		t.Fatalf("error = %q, want preserved task failure", errMsg)
 	}
 }
 
@@ -279,6 +378,28 @@ func TestProjectService_Update_GetError(t *testing.T) {
 	}
 }
 
+func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
+	store := &mocks.MockProjectStore{Projects: map[string]*domain.ProjectConfig{
+		"demo": {Name: "demo", RepoURL: "https://git.test/old.git", RepoRef: "main"},
+	}}
+	svc := NewProjectService(store)
+	validationErr := errors.New("remote denied")
+	validate := func(*domain.ProjectConfig) error { return validationErr }
+
+	if err := svc.CreateValidated(&domain.ProjectConfig{Name: "new", RepoURL: "https://git.test/new.git", RepoRef: "main"}, validate); !errors.Is(err, ErrValidation) {
+		t.Fatalf("create error = %v", err)
+	}
+	if _, exists := store.Projects["new"]; exists {
+		t.Fatal("failed create was persisted")
+	}
+	if err := svc.UpdateValidated("demo", &domain.ProjectConfig{RepoURL: "https://git.test/new.git", RepoRef: "main"}, validate); !errors.Is(err, ErrValidation) {
+		t.Fatalf("update error = %v", err)
+	}
+	if store.Projects["demo"].RepoURL != "https://git.test/old.git" {
+		t.Fatal("failed update replaced existing project")
+	}
+}
+
 func TestRunService_createRun_NoStore(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	runID, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"})
@@ -310,6 +431,108 @@ func TestRunService_prepareRunExecution_InvokesCallbacks(t *testing.T) {
 	if len(mockRun.FlushRunCalls) != 1 {
 		t.Fatalf("FlushRunCalls = %d, want 1", len(mockRun.FlushRunCalls))
 	}
+	opts.OnSourcesAcquired([]domain.AcquiredSource{{RepoName: "repo"}})
+	withSources := &runSourceMock{MockRunStore: &mocks.MockRunStore{}}
+	NewRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &domain.RunnerOptions{})
+	// The callback is installed by prepareRunExecution and reaches the optional
+	// run-source persistence port.
+	var sourceOpts domain.RunnerOptions
+	NewRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &sourceOpts)
+	sourceOpts.OnSourcesAcquired([]domain.AcquiredSource{{RepoName: "repo"}})
+	if withSources.sourceCalls != 1 {
+		t.Fatalf("source calls=%d", withSources.sourceCalls)
+	}
+}
+
+func TestRunServicePrepareRunExecutionSourceCallbackFailures(t *testing.T) {
+	persistStore := &runSourceMock{MockRunStore: &mocks.MockRunStore{}, sourceErr: errors.New("persist failed")}
+	var persistOpts domain.RunnerOptions
+	NewRunService(persistStore, nil, nil).prepareRunExecution(1, &bytes.Buffer{}, &persistOpts)
+	if err := persistOpts.OnSourcesAcquired(nil); err == nil || !strings.Contains(err.Error(), "persist run sources") {
+		t.Fatalf("persist error = %v", err)
+	}
+
+	manager := &sourceSessionTracker{pinErr: errors.New("pin failed")}
+	var pinOpts = domain.RunnerOptions{SourceSessions: manager}
+	NewRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(2, &bytes.Buffer{}, &pinOpts)
+	if err := pinOpts.OnSourcesAcquired(nil); err == nil || !strings.Contains(err.Error(), "pin run sources") {
+		t.Fatalf("pin error = %v", err)
+	}
+	if len(manager.releases) != 1 || manager.releases[0] != 2 {
+		t.Fatalf("pin rollback releases = %v", manager.releases)
+	}
+
+	previousErr := errors.New("previous callback failed")
+	previousOpts := domain.RunnerOptions{OnSourcesAcquired: func([]domain.AcquiredSource) error { return previousErr }}
+	NewRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(3, &bytes.Buffer{}, &previousOpts)
+	if err := previousOpts.OnSourcesAcquired(nil); !errors.Is(err, previousErr) {
+		t.Fatalf("previous callback error = %v", err)
+	}
+}
+
+type runSourceMock struct {
+	*mocks.MockRunStore
+	sourceCalls int
+	sourceErr   error
+}
+
+func (m *runSourceMock) UpdateRunSources(int, []domain.AcquiredSource) error {
+	m.sourceCalls++
+	return m.sourceErr
+}
+
+func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
+	t.Run("workspace cleanup", func(t *testing.T) {
+		cleaned := 0
+		runner := &mocks.MockPipelineRunner{}
+		_, err := NewRunService(nil, runner, runner).RunTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+			SourcesPrepared: true, WorkspaceCleanup: func() { cleaned++ },
+		})
+		if err != nil || cleaned != 1 {
+			t.Fatalf("error=%v cleaned=%d", err, cleaned)
+		}
+	})
+
+	t.Run("persist source failure", func(t *testing.T) {
+		store := &runSourceMock{MockRunStore: &mocks.MockRunStore{}, sourceErr: errors.New("persist failed")}
+		runner := &mocks.MockPipelineRunner{}
+		_, err := NewRunService(store, runner, runner).RunTask(context.Background(), 2, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{})
+		if err == nil || !strings.Contains(err.Error(), "persist run sources") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("pin failure rolls back", func(t *testing.T) {
+		manager := &sourceSessionTracker{pinErr: errors.New("pin failed")}
+		runner := &mocks.MockPipelineRunner{}
+		_, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 3, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{SourceSessions: manager})
+		if err == nil || !strings.Contains(err.Error(), "pin run sources") || len(manager.releases) != 1 {
+			t.Fatalf("error=%v releases=%v", err, manager.releases)
+		}
+	})
+
+	t.Run("previous callback failure", func(t *testing.T) {
+		previousErr := errors.New("callback failed")
+		runner := &mocks.MockPipelineRunner{}
+		_, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 4, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+			OnSourcesAcquired: func([]domain.AcquiredSource) error { return previousErr },
+		})
+		if err == nil || !strings.Contains(err.Error(), previousErr.Error()) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("terminal run releases pins", func(t *testing.T) {
+		store := &mocks.MockRunStore{GetRunResult: &domain.Run{TaskResults: []domain.TaskResult{{Name: "task", Status: "passed"}}}}
+		manager := &sourceSessionTracker{}
+		runner := &mocks.MockPipelineRunner{}
+		_, err := NewRunService(store, runner, runner).RunTask(context.Background(), 5, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+			SourcesPrepared: true, SourceSessions: manager,
+		})
+		if err != nil || len(manager.releases) != 1 || manager.releases[0] != 5 {
+			t.Fatalf("error=%v releases=%v", err, manager.releases)
+		}
+	})
 }
 
 func TestRunService_RunTask_NilProject(t *testing.T) {

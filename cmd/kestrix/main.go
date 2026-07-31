@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
@@ -135,6 +136,9 @@ func cmdServe(args []string) {
 	dockerImage := fs.String("docker-image", "", "Docker image name (env: DOCKER_IMAGE)")
 	dockerUsername := fs.String("docker-username", "", "Docker registry username (env: DOCKER_USERNAME)")
 	dockerPassword := fs.String("docker-password", "", "Docker registry password (env: DOCKER_PASSWORD)")
+	sourceCacheDir := fs.String("source-cache-dir", "", "Git object cache directory (env: KESTRIX_SOURCE_CACHE_DIR)")
+	sourceCacheMaxAge := fs.Duration("source-cache-max-age", 0, "maximum age of an unused Git cache entry (env: KESTRIX_SOURCE_CACHE_MAX_AGE)")
+	sourceCacheMaxBytes := fs.Int64("source-cache-max-bytes", 0, "maximum total Git cache bytes (env: KESTRIX_SOURCE_CACHE_MAX_BYTES)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -143,6 +147,32 @@ func cmdServe(args []string) {
 	// Load config from file (defaults if missing).
 	cfg, err := config.Load(*configPath)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	if err := cfg.ApplySourceCacheEnvironment(env); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	cacheAgeSet, cacheBytesSet := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "source-cache-max-age":
+			cacheAgeSet = true
+		case "source-cache-max-bytes":
+			cacheBytesSet = true
+		}
+	})
+	if cacheAgeSet && *sourceCacheMaxAge <= 0 {
+		fmt.Fprintln(os.Stderr, "config: source-cache-max-age must be positive")
+		os.Exit(1)
+	}
+	if cacheBytesSet && *sourceCacheMaxBytes <= 0 {
+		fmt.Fprintln(os.Stderr, "config: source-cache-max-bytes must be positive")
+		os.Exit(1)
+	}
+	cfg.ApplySourceCacheFlags(*sourceCacheDir, *sourceCacheMaxAge, *sourceCacheMaxBytes)
+	if err := cfg.SourceCache.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
@@ -219,11 +249,17 @@ func cmdServe(args []string) {
 
 	// Convert to web.Config.
 	webCfg := web.Config{
-		ListenAddr:  cfg.ListenAddr,
-		PipelineDir: cfg.Pipeline.Dir,
-		StaticDir:   *staticDir,
-		DatabaseURL: *dbURL,
-		Branch:      cfg.Branch,
+		ListenAddr:    cfg.ListenAddr,
+		PipelineDir:   cfg.Pipeline.Dir,
+		StaticDir:     *staticDir,
+		DatabaseURL:   *dbURL,
+		MasterKeyPath: cfg.MasterKeyPath,
+		Branch:        cfg.Branch,
+		SourceCache: web.SourceCacheConfig{
+			Directory: cfg.SourceCache.Directory,
+			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),
+			MaxBytes:  cfg.SourceCache.MaxBytes,
+		},
 		Docker: web.DockerConfig{
 			Registry: cfg.Docker.Registry,
 			Image:    cfg.Docker.Image,

@@ -15,7 +15,7 @@ GOPATH      ?= $(CURDIR)/.gopath
 GOBIN       ?= $(GOPATH)/bin
 GOENV       := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH)
 
-.PHONY: help init build build-release test test-coverage test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-serve docker-up docker-up-all docker-down docker-logs
+.PHONY: help init build build-release test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs
 
 ## help: Show this help message
 help:
@@ -55,6 +55,16 @@ test-coverage:
 	$(GOENV) $(GO) tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	$(GOENV) $(GO) tool cover -func=coverage/coverage.out
 
+## coverage-report: Print function coverage from the latest test run
+coverage-report:
+	@test -f coverage.out || (echo "coverage.out not found; run make test first"; exit 1)
+	$(GOENV) $(GO) tool cover -func=coverage.out
+
+## coverage-uncovered: List uncovered statement ranges from the latest test run
+coverage-uncovered:
+	@test -f coverage.out || (echo "coverage.out not found; run make test first"; exit 1)
+	@awk 'NR > 1 && $$3 == 0 { print $$1, "statements=" $$2 }' coverage.out
+
 ## test-integration: Run integration tests, including PostgreSQL and external runner regressions
 test-integration:
 	unset DATABASE_URL; $(GOENV) bash scripts/test.sh integration
@@ -79,7 +89,7 @@ runner-integration:
 
 ## web-e2e: Run critical webhook and dispatch regression tests without coverage accounting
 web-e2e:
-	$(GOENV) $(GO) test ./internal/web -count=1 -run 'TestFullWebhookFlow|TestProjectLifecycle|TestWebhookDispatchIntegration|TestWebhookNoDispatch|TestWebhookWrongSecret'
+	$(GOENV) $(GO) test ./internal/web -count=1 -run 'TestFullWebhookFlow|TestProjectLifecycle|TestRemoteProjectWorkflowE2E|TestWebhookDispatchIntegration|TestWebhookNoDispatch|TestWebhookWrongSecret'
 
 ## fmt: Format code
 fmt:
@@ -117,6 +127,10 @@ staticcheck:
 
 ## lint: Run all linters
 lint: fmt-check vet staticcheck
+
+## swagger: Regenerate Swagger API documentation
+swagger:
+	$(GOENV) $(GO) run github.com/swaggo/swag/cmd/swag@v1.8.1 init -g cmd/kestrix/main.go
 
 ## clean: Remove build artifacts
 clean:
@@ -188,6 +202,18 @@ ui-dev: ui-install
 ui-build: ui-install
 	cd ui && npm run build
 	cp -r docs ui/dist/docs
+
+## ui-lint: Run frontend static analysis
+ui-lint: ui-install
+	cd ui && npm run lint
+
+## ui-test: Run frontend unit tests
+ui-test: ui-install
+	cd ui && npm test
+
+## ui-coverage: Run frontend component tests with enforced coverage thresholds
+ui-coverage: ui-install
+	cd ui && npm run test:coverage
 
 ## ui-serve: Build frontend + serve via Go (single binary, port 8080)
 ui-serve: ui-build $(BINARY)

@@ -20,7 +20,8 @@ func seedProjects(t *testing.T, path string, names []string) {
 	for _, name := range names {
 		projects[name] = &domain.ProjectConfig{
 			Name:      name,
-			RepoPath:  "/tmp/repo",
+			RepoURL:   "https://git.example.test/repo.git",
+			RepoRef:   "main",
 			CreatedAt: "2025-01-01T00:00:00Z",
 		}
 	}

@@ -15,10 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// handleRunProject executes a registered project's selected tasks in its local
-// checkout. This endpoint intentionally accepts only a project name, rather
-// than a path or command, so execution stays limited to registered projects
-// and the scripts committed in their pipeline definition.
+// handleRunProject executes a registered project's selected tasks from one
+// immutable remote source session.
 func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := s.projectStore.Get(name)
@@ -34,7 +32,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	proj, err := s.parseProjectPipeline(p)
+	proj, primary, err := s.loadProjectPipeline(r.Context(), p, "", "pipeline-run")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -50,13 +48,19 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	varStore := s.buildVarStore(&proj)
 	runService := s.runService
 	if runService == nil {
+		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
 	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
-		WorkDir: p.RepoPath, IncludeManual: req.IncludeManual, Variables: varStore,
+		WorkDir: primary.Root, IncludeManual: req.IncludeManual, Variables: varStore,
+		CredentialResolver: s.credentialResolver(),
+		SourceSessions:     s.sourceSessions,
+		InitialSources:     []domain.AcquiredSource{primary.Source},
+		WorkspaceCleanup:   primary.Cleanup,
 	})
 	if err != nil {
+		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -81,7 +85,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	proj, err := s.parseProjectPipeline(p)
+	proj, primary, err := s.loadProjectPipeline(r.Context(), p, "", "single-task-run")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -96,6 +100,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
+		primary.Cleanup()
 		writeError(w, http.StatusNotFound, fmt.Sprintf("task %q not found", taskName))
 		return
 	}
@@ -103,6 +108,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	varStore := s.buildVarStore(&proj)
 	runService := s.runService
 	if runService == nil {
+		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
@@ -111,15 +117,20 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	snap := &proj
 	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap)
 	if err != nil {
+		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	tr, err := runService.RunTask(r.Context(), runID, name, &proj, taskName, domain.RunnerOptions{
-		WorkDir:   p.RepoPath,
-		Variables: varStore,
-		Stdout:    io.Discard,
-		Stderr:    io.Discard,
+		WorkDir:            primary.Root,
+		Variables:          varStore,
+		CredentialResolver: s.credentialResolver(),
+		SourceSessions:     s.sourceSessions,
+		InitialSources:     []domain.AcquiredSource{primary.Source},
+		WorkspaceCleanup:   primary.Cleanup,
+		Stdout:             io.Discard,
+		Stderr:             io.Discard,
 	})
 	status := "passed"
 	errMsg := ""
@@ -247,12 +258,12 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	p, err := s.projectStore.Get(name)
-	if err != nil || p == nil {
-		writeError(w, http.StatusNotFound, "project not found")
+	if run.PipelineDef == nil {
+		writeError(w, http.StatusBadRequest, "run has no pipeline snapshot")
 		return
 	}
-	proj, err := s.parseProjectPipeline(p)
+	proj := *run.PipelineDef
+	workDir, repoPaths, cleanup, err := s.openRecordedRunSources(r.Context(), run)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -264,7 +275,12 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, err := runService.ApproveManualTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{WorkDir: p.RepoPath, Variables: s.buildVarStore(&proj)}); err != nil {
+	if _, err := runService.ApproveManualTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
+		WorkDir: workDir, RepoPaths: repoPaths, SourcesPrepared: true,
+		Variables: s.buildVarStore(&proj), CredentialResolver: s.credentialResolver(),
+		SourceSessions: s.sourceSessions, WorkspaceCleanup: cleanup,
+	}); err != nil {
+		cleanup()
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -289,6 +305,9 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.runStore.CancelRun(runID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.sourceSessions != nil {
+		_ = s.sourceSessions.Release(context.Background(), runID)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "canceled"})

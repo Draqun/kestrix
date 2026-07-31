@@ -11,6 +11,7 @@ func TestParseGitLabPushEvent(t *testing.T) {
 	payload := `{
 		"object_kind": "push",
 		"ref": "refs/heads/main",
+		"checkout_sha": "immutable123",
 		"project": {
 			"path_with_namespace": "org/service-a",
 			"default_branch": "main"
@@ -39,6 +40,9 @@ func TestParseGitLabPushEvent(t *testing.T) {
 	}
 	if event.CommitCount != 1 {
 		t.Errorf("commit count = %d, want 1", event.CommitCount)
+	}
+	if event.CheckoutSHA != "immutable123" {
+		t.Errorf("checkout SHA = %q, want immutable123", event.CheckoutSHA)
 	}
 	if len(event.FilesChanged) != 4 {
 		t.Errorf("files changed = %d, want 4 (new_file.go, handler.go, docs/README.md, old_file.go)", len(event.FilesChanged))

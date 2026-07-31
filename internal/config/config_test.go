@@ -6,9 +6,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
+func TestDurationRejectsInvalidYAML(t *testing.T) {
+	var duration Duration
+	if err := duration.UnmarshalYAML(&yaml.Node{Value: "not-a-duration"}); err == nil {
+		t.Fatal("expected invalid duration error")
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	cfg := DefaultConfig()
 	if cfg.ListenAddr != ":8080" {
 		t.Errorf("ListenAddr = %q", cfg.ListenAddr)
@@ -18,6 +29,99 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Dispatch.GitLabURL != "https://gitlab.com" {
 		t.Errorf("GitLabURL = %q", cfg.Dispatch.GitLabURL)
+	}
+	if cfg.SourceCache.Directory == "" || time.Duration(cfg.SourceCache.MaxAge) <= 0 || cfg.SourceCache.MaxBytes <= 0 {
+		t.Fatalf("invalid source-cache defaults: %+v", cfg.SourceCache)
+	}
+}
+
+func TestSourceCacheConfigPrecedenceAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	fileCache := filepath.Join(dir, "file-cache")
+	if err := os.WriteFile(path, []byte("source_cache:\n  directory: "+fileCache+"\n  max_age: 48h\n  max_bytes: 2048\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := LoadEnvironment([]string{
+		"KESTRIX_SOURCE_CACHE_DIR=" + filepath.Join(dir, "env-cache"),
+		"KESTRIX_SOURCE_CACHE_MAX_AGE=24h",
+		"KESTRIX_SOURCE_CACHE_MAX_BYTES=1024",
+	})
+	if err := cfg.ApplySourceCacheEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourceCache.Directory != fileCache || time.Duration(cfg.SourceCache.MaxAge) != 48*time.Hour || cfg.SourceCache.MaxBytes != 2048 {
+		t.Fatalf("file did not override environment: %+v", cfg.SourceCache)
+	}
+	cliCache := filepath.Join(dir, "cli-cache")
+	cfg.ApplySourceCacheFlags(cliCache, 2*time.Hour, 4096)
+	if cfg.SourceCache.Directory != cliCache || time.Duration(cfg.SourceCache.MaxAge) != 2*time.Hour || cfg.SourceCache.MaxBytes != 4096 {
+		t.Fatalf("CLI did not override file: %+v", cfg.SourceCache)
+	}
+	if err := cfg.SourceCache.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if info, err := os.Stat(cliCache); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("cache directory info=%v err=%v", info, err)
+	}
+}
+
+func TestSourceCacheValidationRejectsInvalidValuesAndFilePath(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cfg := range []SourceCacheConfig{
+		{Directory: "", MaxAge: Duration(time.Hour), MaxBytes: 1},
+		{Directory: filepath.Join(dir, "age"), MaxAge: 0, MaxBytes: 1},
+		{Directory: filepath.Join(dir, "bytes"), MaxAge: Duration(time.Hour), MaxBytes: 0},
+		{Directory: filePath, MaxAge: Duration(time.Hour), MaxBytes: 1},
+	} {
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected invalid cache config rejection: %+v", cfg)
+		}
+	}
+}
+
+func TestSourceCacheValidationFilesystemFailures(t *testing.T) {
+	oldMkdirAll, oldStatPath, oldChmodPath := mkdirAll, statPath, chmodPath
+	t.Cleanup(func() {
+		mkdirAll, statPath, chmodPath = oldMkdirAll, oldStatPath, oldChmodPath
+	})
+	dirInfo, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := SourceCacheConfig{Directory: "/cache", MaxAge: Duration(time.Hour), MaxBytes: 1}
+
+	mkdirAll = func(string, os.FileMode) error { return nil }
+	statPath = func(string) (os.FileInfo, error) { return nil, errors.New("stat failed") }
+	if err := valid.Validate(); err == nil || !strings.Contains(err.Error(), "inspect") {
+		t.Fatalf("stat error = %v", err)
+	}
+
+	statPath = func(string) (os.FileInfo, error) { return fileInfo, nil }
+	if err := valid.Validate(); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file error = %v", err)
+	}
+
+	statPath = func(string) (os.FileInfo, error) { return dirInfo, nil }
+	chmodPath = func(string, os.FileMode) error { return errors.New("chmod failed") }
+	if err := valid.Validate(); err == nil || !strings.Contains(err.Error(), "secure") {
+		t.Fatalf("chmod error = %v", err)
 	}
 }
 
@@ -91,6 +195,48 @@ func TestLoadInvalidYAML(t *testing.T) {
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadReportsPresenceDecodeFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("listen_addr: ':8080'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := unmarshalYAML
+	calls := 0
+	unmarshalYAML = func(data []byte, target interface{}) error {
+		calls++
+		if calls == 2 {
+			return errors.New("presence decode failed")
+		}
+		return yaml.Unmarshal(data, target)
+	}
+	t.Cleanup(func() { unmarshalYAML = old })
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "presence") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestApplySourceCacheEnvironmentBranches(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := cfg.ApplySourceCacheEnvironment(nil); err != nil {
+		t.Fatal(err)
+	}
+	invalid := LoadEnvironment([]string{"KESTRIX_SOURCE_CACHE_MAX_AGE=invalid"})
+	if err := cfg.ApplySourceCacheEnvironment(invalid); err == nil {
+		t.Fatal("expected environment validation error")
+	}
+	env := LoadEnvironment([]string{
+		"KESTRIX_SOURCE_CACHE_DIR=/env/cache",
+		"KESTRIX_SOURCE_CACHE_MAX_AGE=12h",
+		"KESTRIX_SOURCE_CACHE_MAX_BYTES=1234",
+	})
+	if err := cfg.ApplySourceCacheEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourceCache.Directory != "/env/cache" || time.Duration(cfg.SourceCache.MaxAge) != 12*time.Hour || cfg.SourceCache.MaxBytes != 1234 {
+		t.Fatalf("source cache = %+v", cfg.SourceCache)
 	}
 }
 

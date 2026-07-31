@@ -34,8 +34,7 @@ func TestHandleCreateProject_InvalidJSON(t *testing.T) {
 
 func TestHandleCreateProject_MissingName(t *testing.T) {
 	srv := systemHandlerServer(t)
-	// repo_path present but no name
-	body := `{"repo_path":"/tmp/repo"}`
+	body := `{"repo_url":"https://git.example/repo.git","repo_ref":"main"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
 	srv.handleCreateProject(w, r)
@@ -50,7 +49,7 @@ func TestHandleCreateProject_MissingName(t *testing.T) {
 
 func TestHandleCreateProject_MissingRepo(t *testing.T) {
 	srv := systemHandlerServer(t)
-	// name present but neither repo_path nor repo_url
+	// name present but neither repo_url nor repo_ref
 	body := `{"name":"demo"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
@@ -59,28 +58,26 @@ func TestHandleCreateProject_MissingRepo(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "repo_path or repo_url is required") {
+	if !strings.Contains(w.Body.String(), "repo_url is required") {
 		t.Errorf("body = %q, want repo-reference error", w.Body.String())
 	}
 }
 
-func TestHandleCreateProject_RepoURLAlone(t *testing.T) {
-	// repo_url alone (no repo_path) is accepted — exercises the second
-	// clause of the OR condition in the guard.
+func TestHandleCreateProject_RepoURLRequiresRef(t *testing.T) {
 	srv := systemHandlerServer(t)
 	body := `{"name":"demo","repo_url":"https://example.com/repo.git"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
 	srv.handleCreateProject(w, r)
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (body=%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
 func TestHandleCreateProject_Happy(t *testing.T) {
 	srv := systemHandlerServer(t)
-	body := `{"name":"demo","repo_path":"/tmp/demo"}`
+	body := `{"name":"demo","repo_url":"https://git.example/demo.git","repo_ref":"main"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
 	srv.handleCreateProject(w, r)
@@ -96,6 +93,21 @@ func TestHandleCreateProject_Happy(t *testing.T) {
 	}
 }
 
+func TestHandleCreateProjectRejectsRepoPath(t *testing.T) {
+	srv := systemHandlerServer(t)
+	body := `{"name":"demo","repo_path":"/tmp/demo","repo_url":"https://git.example/demo.git","repo_ref":"main"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
+	srv.handleCreateProject(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "repo_path") {
+		t.Fatalf("body = %q, want repo_path rejection", w.Body.String())
+	}
+}
+
 // savePipelineServer returns a Server whose on-disk file store contains
 // a single project pointing at tempDir as its repo root.
 func savePipelineServer(t *testing.T) (*Server, string) {
@@ -104,7 +116,8 @@ func savePipelineServer(t *testing.T) (*Server, string) {
 	srv := systemHandlerServer(t)
 	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tempDir,
+		RepoURL:      "file://" + tempDir,
+		RepoRef:      "main",
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}); err != nil {
@@ -129,7 +142,7 @@ func TestHandleSaveProjectPipeline_ProjectNotFound(t *testing.T) {
 }
 
 func TestHandleSaveProjectPipeline_Happy(t *testing.T) {
-	srv, tempDir := savePipelineServer(t)
+	srv, _ := savePipelineServer(t)
 	body := `project "demo" {}` + "\n"
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
@@ -139,26 +152,8 @@ func TestHandleSaveProjectPipeline_Happy(t *testing.T) {
 	// so URLParams are populated correctly.
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	var resp map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp["status"] != "saved" {
-		t.Errorf("status field = %v, want saved", resp["status"])
-	}
-	if path, _ := resp["path"].(string); !strings.Contains(path, "pipeline.tf") {
-		t.Errorf("path = %v, want it to point at pipeline.tf", resp["path"])
-	}
-	// And the file should actually exist on disk with our body.
-	saved, err := os.ReadFile(filepath.Join(tempDir, "ci", "pipeline.tf"))
-	if err != nil {
-		t.Fatalf("expect pipeline.tf on disk: %v", err)
-	}
-	if !strings.Contains(string(saved), "project \"demo\"") {
-		t.Errorf("saved file = %q, want it to contain our body", saved)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -168,7 +163,8 @@ func writeSeedProject(t *testing.T, srv *Server, tempDir, body string) {
 	t.Helper()
 	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tempDir,
+		RepoURL:      "file://" + tempDir,
+		RepoRef:      "main",
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}); err != nil {
@@ -218,7 +214,8 @@ func TestHandleGetProjectPipeline_ReadFails(t *testing.T) {
 	// Seed project points to a file that doesn't exist.
 	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tempDir,
+		RepoURL:      "file://" + tempDir,
+		RepoRef:      "main",
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}); err != nil {
@@ -300,7 +297,7 @@ func TestHandleUpdateProject_Happy(t *testing.T) {
 	srv, _ := savePipelineServer(t)
 	// Update with empty optional fields -> they should be inherited
 	// from the existing record.
-	body := `{}`
+	body := `{"repo_url":"https://git.example.test/demo.git","repo_ref":"main","pipeline_dir":"ci"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("PUT", "/api/projects/demo",
 		strings.NewReader(body))
@@ -363,10 +360,9 @@ func TestProjectPipelineDir_Escape(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
 		Name:        "test",
-		RepoPath:    "/tmp/test-repo",
 		PipelineDir: "../../etc",
 	}
-	_, err := srv.projectPipelineDir(cfg)
+	_, err := srv.projectPipelineDir(cfg, "/tmp/test-repo")
 	if err == nil {
 		t.Fatal("expected error for escaping pipeline dir, got nil")
 	}
@@ -382,11 +378,10 @@ func TestProjectPipelinePath_DefaultFile(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     tmp,
 		PipelineDir:  ".",
 		PipelineFile: "",
 	}
-	path, err := srv.projectPipelinePath(cfg)
+	path, err := srv.projectPipelinePath(cfg, tmp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -400,10 +395,9 @@ func TestProjectPipelinePath_DefaultFile(t *testing.T) {
 func TestParseProjectPipeline_BadDir(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
-		Name:        "test",
-		RepoPath:    "/tmp/nonexistent-repo-abc123",
-		PipelineDir: "ci",
+		Name: "test", RepoURL: "file:///tmp/nonexistent-repo-abc123", RepoRef: "main", PipelineDir: "ci",
 	}
+	srv.sourceSessions = &testSourceSessions{}
 	_, err := srv.parseProjectPipeline(cfg)
 	if err == nil {
 		t.Fatal("expected error for non-existent pipeline dir, got nil")
@@ -413,10 +407,9 @@ func TestParseProjectPipeline_BadDir(t *testing.T) {
 func TestParseProjectPipeline_EscapingDir(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
-		Name:        "test",
-		RepoPath:    "/tmp/test-repo",
-		PipelineDir: "../../etc",
+		Name: "test", RepoURL: "file:///tmp/test-repo", RepoRef: "main", PipelineDir: "../../etc",
 	}
+	srv.sourceSessions = &testSourceSessions{}
 	_, err := srv.parseProjectPipeline(cfg)
 	if err == nil {
 		t.Fatal("expected error for escaping dir, got nil")
@@ -435,7 +428,8 @@ func TestHandleSaveProjectPipeline_MkdirError(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:         "demo",
-			RepoPath:     tmp,
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
 			PipelineDir:  "blocking",
 			PipelineFile: "pipeline.tf",
 		},
@@ -452,8 +446,8 @@ func TestHandleSaveProjectPipeline_MkdirError(t *testing.T) {
 		strings.NewReader("body"))
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -475,7 +469,8 @@ func TestHandleSaveProjectPipeline_WriteError(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:         "demo",
-			RepoPath:     tmp,
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
 			PipelineDir:  "rodir",
 			PipelineFile: "pipeline.tf",
 		},
@@ -492,8 +487,8 @@ func TestHandleSaveProjectPipeline_WriteError(t *testing.T) {
 		strings.NewReader("body"))
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -501,7 +496,8 @@ func TestHandleSaveProjectPipeline_EscapePath(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    "/tmp/test-repo",
+			RepoURL:     "https://git.example.test/demo.git",
+			RepoRef:     "main",
 			PipelineDir: "../../etc",
 		},
 	}
@@ -517,8 +513,8 @@ func TestHandleSaveProjectPipeline_EscapePath(t *testing.T) {
 		strings.NewReader("body"))
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -530,7 +526,8 @@ func TestHandleResolveProject_InvalidJSON(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    tmp,
+			RepoURL:     "file://" + tmp,
+			RepoRef:     "main",
 			PipelineDir: ".",
 		},
 	}
@@ -538,6 +535,7 @@ func TestHandleResolveProject_InvalidJSON(t *testing.T) {
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
+		sourceSessions: &testSourceSessions{},
 	}
 	srv.router = srv.buildRouter()
 
@@ -557,15 +555,14 @@ func TestHandleResolveProject_InvalidJSON(t *testing.T) {
 func TestHandleResolveProject_BadPipeline(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
-			Name:        "demo",
-			RepoPath:    "/nonexistent/path",
-			PipelineDir: "ci",
+			Name: "demo", RepoURL: "file:///nonexistent/path", RepoRef: "main", PipelineDir: "ci",
 		},
 	}
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
+		sourceSessions: &testSourceSessions{},
 	}
 	srv.router = srv.buildRouter()
 
@@ -586,11 +583,10 @@ func TestProjectPipelineDir_EmptyPipelineDir(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     tmp,
 		PipelineDir:  "",
 		PipelineFile: "ci/pipeline.tf",
 	}
-	dir, err := srv.projectPipelineDir(cfg)
+	dir, err := srv.projectPipelineDir(cfg, tmp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -604,11 +600,10 @@ func TestProjectPipelineDir_EmptyPipelineFile(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     tmp,
 		PipelineDir:  "",
 		PipelineFile: "",
 	}
-	dir, err := srv.projectPipelineDir(cfg)
+	dir, err := srv.projectPipelineDir(cfg, tmp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -624,11 +619,10 @@ func TestProjectPipelineDir_EmptyPipelineFileNoDir(t *testing.T) {
 	// filepath.Dir("pipeline.tf") returns ".", so dir = repoPath.
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     tmp,
 		PipelineDir:  "",
 		PipelineFile: "pipeline.tf",
 	}
-	dir, err := srv.projectPipelineDir(cfg)
+	dir, err := srv.projectPipelineDir(cfg, tmp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -644,11 +638,10 @@ func TestProjectPipelinePath_EmptyPipelineDir(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     tmp,
 		PipelineDir:  "",
 		PipelineFile: "ci/pipeline.tf",
 	}
-	path, err := srv.projectPipelinePath(cfg)
+	path, err := srv.projectPipelinePath(cfg, tmp)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -661,11 +654,10 @@ func TestProjectPipelinePath_EscapingFile(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     "/tmp/test-repo",
 		PipelineDir:  ".",
 		PipelineFile: "../../etc/passwd",
 	}
-	_, err := srv.projectPipelinePath(cfg)
+	_, err := srv.projectPipelinePath(cfg, "/tmp/test-repo")
 	if err == nil {
 		t.Fatal("expected error for escaping file path, got nil")
 	}
@@ -678,11 +670,10 @@ func TestProjectPipelinePath_DirError(t *testing.T) {
 	srv := &Server{cfg: Config{PipelineDir: "/tmp"}}
 	cfg := &domain.ProjectConfig{
 		Name:         "test",
-		RepoPath:     "/tmp/test-repo",
 		PipelineDir:  "../../etc",
 		PipelineFile: "pipeline.tf",
 	}
-	_, err := srv.projectPipelinePath(cfg)
+	_, err := srv.projectPipelinePath(cfg, "/tmp/test-repo")
 	if err == nil {
 		t.Fatal("expected error for escaping dir, got nil")
 	}
@@ -694,7 +685,8 @@ func TestHandleSaveProjectPipeline_PipelinePathError(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    "/tmp/test-repo",
+			RepoURL:     "https://git.example.test/demo.git",
+			RepoRef:     "main",
 			PipelineDir: ".",
 			// PipelineFile escapes the pipeline directory
 			PipelineFile: "../../etc/passwd",
@@ -712,8 +704,8 @@ func TestHandleSaveProjectPipeline_PipelinePathError(t *testing.T) {
 		strings.NewReader("body"))
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -743,7 +735,8 @@ func TestHandleResolveProject_ResolveError(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    tmp,
+			RepoURL:     "file://" + tmp,
+			RepoRef:     "main",
 			PipelineDir: ".",
 		},
 	}
@@ -751,6 +744,7 @@ func TestHandleResolveProject_ResolveError(t *testing.T) {
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
+		sourceSessions: &testSourceSessions{},
 	}
 	srv.router = srv.buildRouter()
 

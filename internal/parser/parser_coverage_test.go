@@ -259,7 +259,7 @@ func TestParseSource_RepoPathKind(t *testing.T) {
 	// decodeRepoBlock 'path' / 'kind' attribute branches.
 	src := `project "p" {
 		ci_repo "a" {
-			path = "/"
+			path = "services/a"
 			kind = "subpath"
 		}
 	}`
@@ -267,7 +267,7 @@ func TestParseSource_RepoPathKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSource: %v", err)
 	}
-	if len(proj.Repos) != 1 || proj.Repos[0].Path != "/" || proj.Repos[0].Kind != "subpath" {
+	if len(proj.Repos) != 1 || proj.Repos[0].Path != "services/a" || proj.Repos[0].Kind != "subpath" {
 		t.Fatalf("repo decode: %+v", proj.Repos)
 	}
 }

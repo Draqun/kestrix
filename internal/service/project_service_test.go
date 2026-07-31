@@ -12,7 +12,7 @@ func TestProjectService_Create_MissingName(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)
 
-	err := svc.Create(&domain.ProjectConfig{RepoPath: "/some/path"})
+	err := svc.Create(&domain.ProjectConfig{RepoURL: "https://git.example/repo.git", RepoRef: "main"})
 	if err == nil {
 		t.Fatal("expected error for missing name")
 	}
@@ -34,11 +34,26 @@ func TestProjectService_Create_MissingRepo(t *testing.T) {
 	}
 }
 
+func TestProjectService_CreateRejectsInvalidRemoteForms(t *testing.T) {
+	for _, cfg := range []*domain.ProjectConfig{
+		{Name: "x", RepoURL: "https://git.example/x.git"},
+		{Name: "x", RepoURL: "https://user:secret@git.example/x.git", RepoRef: "main"},
+		{Name: "x", RepoRef: "main"},
+	} {
+		if err := NewProjectService(&mocks.MockProjectStore{}).Create(cfg); err == nil {
+			t.Fatalf("expected invalid config rejection: %+v", cfg)
+		}
+	}
+	if err := NewProjectService(&mocks.MockProjectStore{}).Create(&domain.ProjectConfig{Name: "x", RepoURL: "%gh&", RepoRef: "main"}); err == nil {
+		t.Fatal("expected malformed URL rejection")
+	}
+}
+
 func TestProjectService_Create_Happy(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)
 
-	cfg := &domain.ProjectConfig{Name: "myproject", RepoPath: "/some/path", PipelineDir: "ci", PipelineFile: "pipeline.tf", DefaultBranch: "main"}
+	cfg := &domain.ProjectConfig{Name: "myproject", RepoURL: "https://git.example/myproject.git", RepoRef: "main", PipelineDir: "ci", PipelineFile: "pipeline.tf", DefaultBranch: "main"}
 	err := svc.Create(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -47,18 +62,18 @@ func TestProjectService_Create_Happy(t *testing.T) {
 		t.Fatalf("expected 1 Upsert call, got %d", len(mock.UpsertCalls))
 	}
 	got := mock.UpsertCalls[0]
-	if got.Name != "myproject" || got.RepoPath != "/some/path" {
+	if got.Name != "myproject" || got.RepoURL != "https://git.example/myproject.git" || got.RepoRef != "main" {
 		t.Errorf("Upsert called with wrong config: %+v", got)
 	}
 }
 
 func TestProjectService_Update_Happy(t *testing.T) {
 	mock := &mocks.MockProjectStore{
-		GetResult: &domain.ProjectConfig{Name: "myproject", RepoPath: "/old"},
+		GetResult: &domain.ProjectConfig{Name: "myproject", RepoURL: "https://git.example/old.git", RepoRef: "main"},
 	}
 	svc := NewProjectService(mock)
 
-	cfg := &domain.ProjectConfig{Name: "myproject", RepoPath: "/new/path"}
+	cfg := &domain.ProjectConfig{Name: "myproject", RepoURL: "https://git.example/new.git", RepoRef: "release"}
 	err := svc.Update("myproject", cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,29 +93,34 @@ func TestProjectService_Update_NotFound(t *testing.T) {
 	}
 }
 
-func TestProjectService_Update_MergesAllOmittedFields(t *testing.T) {
+func TestProjectService_UpdateIsFullReplacementAndClearsCredential(t *testing.T) {
 	existing := &domain.ProjectConfig{
-		Name: "demo", RepoPath: "/repo", RepoURL: "https://example.test/repo.git",
-		PipelineDir: "ci", PipelineFile: "pipeline.tf", GitLabProjectID: 42,
+		Name: "demo", RepoURL: "https://example.test/repo.git", RepoRef: "main",
+		RepoCredentialRef: "old-credential",
+		PipelineDir:       "ci", PipelineFile: "pipeline.tf", GitLabProjectID: 42,
 		DefaultBranch: "develop", WebhookSecret: "secret", CreatedAt: "yesterday",
-		ExtraRepos: []domain.ExtraRepo{{Name: "docs", Path: "docs"}},
 	}
 	mock := &mocks.MockProjectStore{GetResult: existing}
 	svc := NewProjectService(mock)
-	update := &domain.ProjectConfig{}
+	update := &domain.ProjectConfig{
+		RepoURL: "https://example.test/new.git", RepoRef: "release",
+		PipelineDir: "pipelines", PipelineFile: "main.tf",
+	}
 
 	if err := svc.Update("demo", update); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if update.RepoURL != existing.RepoURL || update.DefaultBranch != existing.DefaultBranch ||
-		update.WebhookSecret != existing.WebhookSecret || update.GitLabProjectID != existing.GitLabProjectID ||
-		len(update.ExtraRepos) != 1 {
-		t.Fatalf("omitted fields were not preserved: %+v", update)
+	if update.RepoURL != "https://example.test/new.git" || update.RepoRef != "release" ||
+		update.RepoCredentialRef != "" || update.GitLabProjectID != 0 || update.WebhookSecret != "" {
+		t.Fatalf("update was not treated as a full replacement: %+v", update)
+	}
+	if update.Name != "demo" || update.CreatedAt != existing.CreatedAt {
+		t.Fatalf("identity fields were not preserved: %+v", update)
 	}
 }
 
 func TestProjectService_Update_ValidatesMergedConfig(t *testing.T) {
-	mock := &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{Name: "demo"}}
+	mock := &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"}}
 	err := NewProjectService(mock).Update("demo", &domain.ProjectConfig{})
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
@@ -172,7 +192,7 @@ func TestProjectService_Create_DefaultsMissingFields(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)
 
-	cfg := &domain.ProjectConfig{Name: "defaults", RepoPath: "/repo"}
+	cfg := &domain.ProjectConfig{Name: "defaults", RepoURL: "https://git.example/defaults.git", RepoRef: "main"}
 	if err := svc.Create(cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

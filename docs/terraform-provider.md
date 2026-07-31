@@ -6,7 +6,7 @@ Kestrix offers a Terraform provider that allows teams to manage projects and pip
 
 | Resource | Purpose |
 |----------|---------|
-| `kestrix_project` | Register a project with its repository path, pipeline directory, and GitLab integration settings |
+| `kestrix_project` | Register a remote project with URL/ref, pipeline directory, optional credential reference, and GitLab integration settings |
 
 ## Example
 
@@ -17,7 +17,9 @@ provider "kestrix" {
 
 resource "kestrix_project" "my_app" {
   name              = "my-app"
-  repo_path         = "./my-app"
+  repo_url          = "https://git.example.test/team/my-app.git"
+  repo_ref          = "main"
+  credential_ref    = "cred_example"
   pipeline_dir      = "ci"
   gitlab_project_id = 12345
   default_branch    = "main"

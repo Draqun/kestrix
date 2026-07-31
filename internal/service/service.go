@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"kestrix/internal/domain"
@@ -24,10 +25,29 @@ func validateProject(cfg *domain.ProjectConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("%w: project name is required", ErrValidation)
 	}
-	if strings.TrimSpace(cfg.RepoPath) == "" && strings.TrimSpace(cfg.RepoURL) == "" {
-		return fmt.Errorf("%w: repo_path or repo_url is required", ErrValidation)
+	url := strings.TrimSpace(cfg.RepoURL)
+	ref := strings.TrimSpace(cfg.RepoRef)
+	if url == "" {
+		return fmt.Errorf("%w: repo_url is required", ErrValidation)
+	}
+	if ref == "" {
+		return fmt.Errorf("%w: repo_ref is required", ErrValidation)
+	}
+	parsed, parseErr := urlpkg(url)
+	if parseErr != nil && url != "" {
+		return fmt.Errorf("%w: repo_url is invalid", ErrValidation)
+	}
+	if parsed != nil && parsed.User != nil {
+		_, hasPassword := parsed.User.Password()
+		if parsed.Scheme != "ssh" || hasPassword {
+			return fmt.Errorf("%w: repo_url must not contain embedded credentials", ErrValidation)
+		}
 	}
 	return nil
+}
+
+func urlpkg(raw string) (*url.URL, error) {
+	return url.Parse(raw)
 }
 
 // NewProjectService creates a ProjectService backed by the given store.
@@ -37,6 +57,11 @@ func NewProjectService(store domain.ProjectStore) *ProjectService {
 
 // Create validates and persists a new project.
 func (s *ProjectService) Create(cfg *domain.ProjectConfig) error {
+	return s.CreateValidated(cfg, nil)
+}
+
+// CreateValidated validates the complete remote source before persistence.
+func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSource func(*domain.ProjectConfig) error) error {
 	if err := validateProject(cfg); err != nil {
 		return err
 	}
@@ -46,11 +71,25 @@ func (s *ProjectService) Create(cfg *domain.ProjectConfig) error {
 	if cfg.PipelineFile == "" {
 		cfg.PipelineFile = "pipeline.tf"
 	}
+	if cfg.PipelineDir == "" {
+		cfg.PipelineDir = "ci"
+	}
+	if validateSource != nil {
+		if err := validateSource(cfg); err != nil {
+			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
+		}
+	}
 	return s.store.Upsert(cfg)
 }
 
 // Update validates and updates an existing project.
 func (s *ProjectService) Update(name string, cfg *domain.ProjectConfig) error {
+	return s.UpdateValidated(name, cfg, nil)
+}
+
+// UpdateValidated replaces a project only after the candidate source and
+// pipeline definition have been validated successfully.
+func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig, validateSource func(*domain.ProjectConfig) error) error {
 	existing, err := s.store.Get(name)
 	if err != nil {
 		return fmt.Errorf("check project: %w", err)
@@ -59,35 +98,25 @@ func (s *ProjectService) Update(name string, cfg *domain.ProjectConfig) error {
 		return fmt.Errorf("project %q not found", name)
 	}
 	cfg.Name = name
-	if cfg.RepoPath == "" {
-		cfg.RepoPath = existing.RepoPath
-	}
-	if cfg.RepoURL == "" {
-		cfg.RepoURL = existing.RepoURL
-	}
-	if cfg.PipelineDir == "" {
-		cfg.PipelineDir = existing.PipelineDir
-	}
 	if cfg.PipelineFile == "" {
-		cfg.PipelineFile = existing.PipelineFile
-	}
-	if cfg.GitLabProjectID == 0 {
-		cfg.GitLabProjectID = existing.GitLabProjectID
+		cfg.PipelineFile = "pipeline.tf"
 	}
 	if cfg.DefaultBranch == "" {
-		cfg.DefaultBranch = existing.DefaultBranch
-	}
-	if cfg.WebhookSecret == "" {
-		cfg.WebhookSecret = existing.WebhookSecret
+		cfg.DefaultBranch = "main"
 	}
 	if cfg.CreatedAt == "" {
 		cfg.CreatedAt = existing.CreatedAt
 	}
-	if cfg.ExtraRepos == nil {
-		cfg.ExtraRepos = existing.ExtraRepos
+	if cfg.PipelineDir == "" {
+		cfg.PipelineDir = "ci"
 	}
 	if err := validateProject(cfg); err != nil {
 		return err
+	}
+	if validateSource != nil {
+		if err := validateSource(cfg); err != nil {
+			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
+		}
 	}
 	return s.store.Upsert(cfg)
 }
@@ -164,6 +193,7 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 }
 
 func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) {
+	previousSourcesAcquired := opts.OnSourcesAcquired
 	opts.Stdout = output
 	opts.Stderr = output
 	opts.OnTaskStart = func(name string) {
@@ -177,12 +207,34 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 			_ = s.runStore.FlushRunOutput(runID, output.String())
 		}
 	}
+	opts.OnSourcesAcquired = func(sources []domain.AcquiredSource) error {
+		allSources := append([]domain.AcquiredSource(nil), opts.InitialSources...)
+		allSources = append(allSources, sources...)
+		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
+			if err := sourceStore.UpdateRunSources(runID, allSources); err != nil {
+				return fmt.Errorf("persist run sources: %w", err)
+			}
+		}
+		if opts.SourceSessions != nil {
+			if err := opts.SourceSessions.Pin(context.Background(), runID, allSources); err != nil {
+				_ = opts.SourceSessions.Release(context.Background(), runID)
+				return fmt.Errorf("pin run sources: %w", err)
+			}
+		}
+		if previousSourcesAcquired != nil {
+			return previousSourcesAcquired(allSources)
+		}
+		return nil
+	}
 }
 
 func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer) {
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
 			_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
+			if opts.SourceSessions != nil {
+				_ = opts.SourceSessions.Release(context.Background(), runID)
+			}
 		}
 	}()
 
@@ -191,13 +243,16 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 		changedSet[c] = true
 	}
 	taskResults, err := s.pipeline.Run(ctx, *proj, changedSet, opts)
-	s.finishRun(runID, output.String(), taskResults, err)
+	s.finishRun(runID, output.String(), taskResults, err, opts.SourceSessions)
 }
 
-func (s *RunService) finishRun(runID int, output string, taskResults []domain.TaskResult, runErr error) {
+func (s *RunService) finishRun(runID int, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager) {
 	status, errMsg := runStatus(taskResults, runErr)
 	if s.runStore != nil {
 		_ = s.runStore.FinishRun(runID, status, output, errMsg, taskResults)
+	}
+	if sourceSessions != nil && !hasExecutableRunState(taskResults) {
+		_ = sourceSessions.Release(context.Background(), runID)
 	}
 }
 
@@ -218,7 +273,19 @@ func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
 		}
 		break
 	}
+	if hasExecutableRunState(taskResults) {
+		status = "running"
+	}
 	return status, errMsg
+}
+
+func hasExecutableRunState(taskResults []domain.TaskResult) bool {
+	for _, tr := range taskResults {
+		if tr.Status == "manual" || tr.Status == "pending" || tr.Status == "running" {
+			return true
+		}
+	}
+	return false
 }
 
 // RunTask executes a single task and appends the result to an existing run.
@@ -230,8 +297,33 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
+	if opts.WorkspaceCleanup != nil {
+		defer opts.WorkspaceCleanup()
+	}
 	if s.runStore != nil {
 		_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running"}, "")
+	}
+	if !opts.SourcesPrepared {
+		previousSourcesAcquired := opts.OnSourcesAcquired
+		opts.OnSourcesAcquired = func(sources []domain.AcquiredSource) error {
+			allSources := append([]domain.AcquiredSource(nil), opts.InitialSources...)
+			allSources = append(allSources, sources...)
+			if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
+				if err := sourceStore.UpdateRunSources(runID, allSources); err != nil {
+					return fmt.Errorf("persist run sources: %w", err)
+				}
+			}
+			if opts.SourceSessions != nil {
+				if err := opts.SourceSessions.Pin(ctx, runID, allSources); err != nil {
+					_ = opts.SourceSessions.Release(context.Background(), runID)
+					return fmt.Errorf("pin run sources: %w", err)
+				}
+			}
+			if previousSourcesAcquired != nil {
+				return previousSourcesAcquired(allSources)
+			}
+			return nil
+		}
 	}
 
 	tr, err := s.taskRunner.RunTask(ctx, *proj, taskName, opts)
@@ -241,6 +333,11 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	}
 	if s.runStore != nil {
 		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
+	}
+	if opts.SourceSessions != nil && s.runStore != nil {
+		if run, getErr := s.runStore.GetRun(runID); getErr == nil && run != nil && !hasExecutableRunState(run.TaskResults) {
+			_ = opts.SourceSessions.Release(context.Background(), runID)
+		}
 	}
 	if err != nil {
 		return tr, fmt.Errorf("task %q failed: %w", taskName, err)

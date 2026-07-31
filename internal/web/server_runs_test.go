@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,7 @@ func setupRunServer(t *testing.T, projectStore domain.ProjectStore, runStore dom
 		taskRunner:     pipeline,
 		projectService: service.NewProjectService(projectStore),
 		runService:     service.NewRunService(runStore, pipeline, pipeline),
+		sourceSessions: &testSourceSessions{},
 	}
 	return srv
 }
@@ -200,6 +202,7 @@ func TestHandleCancelRun_InvalidID(t *testing.T) {
 func TestHandleCancelRun_Happy(t *testing.T) {
 	mock := &mocks.MockRunStore{}
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, mock)
+	manager := srv.sourceSessions.(*testSourceSessions)
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/5/cancel", nil), "name", "demo", "runID", "5")
 	srv.handleCancelRun(w, r)
@@ -212,6 +215,9 @@ func TestHandleCancelRun_Happy(t *testing.T) {
 	}
 	if mock.CancelRunCalls[0] != 5 {
 		t.Errorf("CancelRun called with %d, want 5", mock.CancelRunCalls[0])
+	}
+	if len(manager.released) != 1 || manager.released[0] != 5 {
+		t.Fatalf("released pins = %v, want [5]", manager.released)
 	}
 	var resp map[string]string
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -286,6 +292,7 @@ func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore d
 		taskRunner:     pipeline,
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
 		runService:     service.NewRunService(runStore, pipeline, pipeline),
+		sourceSessions: &testSourceSessions{},
 	}
 	return srv
 }
@@ -325,7 +332,8 @@ func TestHandleRunTask_InvalidJSON(t *testing.T) {
 	}
 	cfg := &domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tempDir,
+		RepoURL:      "file://" + tempDir,
+		RepoRef:      "main",
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}
@@ -366,7 +374,8 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	mock := &mocks.MockRunStore{CreateRunID: 1}
 	cfg := &domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tempDir,
+		RepoURL:      "file://" + tempDir,
+		RepoRef:      "main",
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}
@@ -475,6 +484,48 @@ func TestHandleApproveManualTask_TaskNotWaiting(t *testing.T) {
 	}
 }
 
+func TestHandleApproveManualTaskSnapshotAndSourceErrors(t *testing.T) {
+	baseRun := &domain.Run{
+		ID: 1, ProjectName: "demo",
+		TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+	}
+	store := &mocks.MockRunStore{GetRunResult: baseRun}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "1", "task", "deploy"))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "snapshot") {
+		t.Fatalf("snapshot status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	baseRun.PipelineDef = &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "deploy", Manual: true}}}
+	baseRun.Sources = []domain.AcquiredSource{{RepoName: "demo", URL: "https://git.test/demo.git", RequestedRef: "main", ResolvedRevision: "sha", Primary: true}}
+	srv.sourceSessions = &testSourceSessions{err: errors.New("exact source unavailable")}
+	w = httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "1", "task", "deploy"))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "exact source") {
+		t.Fatalf("source status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleApproveManualTaskRunnerFailure(t *testing.T) {
+	run := &domain.Run{
+		ID: 2, ProjectName: "demo",
+		PipelineDef: &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "deploy", Manual: true}}},
+		TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+		Sources:     []domain.AcquiredSource{{RepoName: "demo", URL: "https://git.test/demo.git", RequestedRef: "main", ResolvedRevision: "sha", Primary: true}},
+	}
+	store := &mocks.MockRunStore{GetRunResult: run}
+	runner := &mocks.MockPipelineRunner{RunErr: errors.New("manual runner failed")}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
+	srv.taskRunner = runner
+	srv.runService = service.NewRunService(store, runner, runner)
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "2", "task", "deploy"))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "manual runner failed") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleApproveManualTask_Happy(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "pipeline.tf"), []byte(`project "test" {
@@ -506,6 +557,18 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 		GetRunResult: &domain.Run{
 			ID:          1,
 			ProjectName: "test",
+			PipelineDef: &domain.Project{
+				Name:  "test",
+				Repos: []domain.Repo{{Name: "app", Path: "."}},
+				Tasks: []domain.Task{
+					{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{{
+				RepoName: "test", URL: "https://git.example.test/test.git", RequestedRef: "main",
+				ResolvedRevision: "0123456789abcdef", Primary: true,
+			}},
 			TaskResults: []domain.TaskResult{
 				{Name: "build", Status: "passed"},
 				{Name: "deploy", Status: "manual"},
@@ -515,12 +578,14 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:         "test",
-			RepoPath:     tmp,
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
 			PipelineDir:  ".",
 			PipelineFile: "pipeline.tf",
 		},
 	}
 	srv := setupRunServer(t, mockProj, mockRun)
+	srv.sourceSessions = &testSourceSessions{root: tmp}
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/test/runs/1/tasks/deploy/approve", nil),
 		"name", "test", "runID", "1", "task", "deploy")
@@ -554,6 +619,50 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 	firstStatus := mockRun.FirstApplyTaskResult().Status
 	if firstStatus != "running" {
 		t.Errorf("first ApplyTaskResult status = %q, want running", firstStatus)
+	}
+}
+
+func TestManualApprovalUsesStoredSnapshotAndExactRecordedSources(t *testing.T) {
+	root := t.TempDir()
+	snapshot := &domain.Project{
+		Name: "demo",
+		Repos: []domain.Repo{
+			{Name: "app", Path: "."},
+			{Name: "docs", URL: "https://git.example.test/docs.git", Ref: "main"},
+		},
+		Tasks: []domain.Task{{Name: "deploy", Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo snapshot"}}},
+	}
+	run := &domain.Run{
+		ID: 73, ProjectName: "demo", PipelineDef: snapshot,
+		TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+		Sources: []domain.AcquiredSource{
+			{RepoName: "demo", URL: "https://git.example.test/demo.git", RequestedRef: "main", ResolvedRevision: "primary-old-sha", Primary: true},
+			{RepoName: "docs", URL: "https://git.example.test/docs.git", RequestedRef: "main", ResolvedRevision: "docs-old-sha"},
+		},
+	}
+	runStore := &mocks.MockRunStore{GetRunResult: run}
+	srv := setupRunServer(t, &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{
+		Name: "demo", RepoURL: "https://git.example.test/demo.git", RepoRef: "moved-branch",
+	}}, runStore)
+	manager := &testSourceSessions{root: root}
+	srv.sourceSessions = manager
+	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed"}}}
+	srv.taskRunner = runner
+	srv.runService = service.NewRunService(runStore, runner, runner)
+
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "73", "task", "deploy"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(manager.requests) != 2 || manager.requests[0].Revision != "primary-old-sha" || manager.requests[1].Revision != "docs-old-sha" {
+		t.Fatalf("source requests = %+v", manager.requests)
+	}
+	if len(runner.TaskRunCalls) != 1 || runner.TaskRunCalls[0].Project.Tasks[0].Execute.Script != "echo snapshot" {
+		t.Fatalf("task calls = %+v", runner.TaskRunCalls)
+	}
+	if manager.cleaned != 2 {
+		t.Fatalf("cleaned sessions = %d, want 2", manager.cleaned)
 	}
 }
 
@@ -593,12 +702,14 @@ func TestHandleRunProject_Happy(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:         "demo",
-			RepoPath:     tmp,
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
 			PipelineDir:  ".",
 			PipelineFile: "pipeline.tf",
 		},
 	}
 	srv := setupRunServer(t, mockProj, mockRun)
+	srv.sourceSessions = &testSourceSessions{root: tmp}
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{"changed":["main"]}`)),
 		"name", "demo")

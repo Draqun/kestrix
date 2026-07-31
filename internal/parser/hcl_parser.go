@@ -8,6 +8,7 @@ package parser
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,9 +121,54 @@ func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
 			r.Path = val
 		case "kind":
 			r.Kind = val
+		case "url":
+			r.URL = val
+		case "ref":
+			r.Ref = val
+		case "credential_ref":
+			r.CredentialRef = val
 		}
 	}
+	if strings.TrimSpace(r.Path) == "" && strings.TrimSpace(r.URL) == "" {
+		return model.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
+	}
+	if strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.URL) != "" {
+		return model.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
+	}
+	if strings.TrimSpace(r.Path) != "" {
+		clean := filepath.Clean(r.Path)
+		if filepath.IsAbs(r.Path) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return model.Repo{}, fmt.Errorf("local repository %q path must be relative and stay within the primary checkout", r.Name)
+		}
+	}
+	if strings.TrimSpace(r.URL) != "" && hasEmbeddedCredentials(r.URL) {
+		return model.Repo{}, fmt.Errorf("repository url must not contain embedded credentials")
+	}
+	if strings.TrimSpace(r.URL) != "" && strings.TrimSpace(r.Ref) == "" {
+		return model.Repo{}, fmt.Errorf("remote repository %q must define a non-empty ref", r.Name)
+	}
+	if strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.Ref) != "" {
+		return model.Repo{}, fmt.Errorf("local repository %q must not define ref", r.Name)
+	}
 	return r, nil
+}
+
+func hasEmbeddedCredentials(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	if parsed.User == nil {
+		return false
+	}
+	// `git@host:path` and `ssh://git@host/path` are normal SSH transport
+	// forms. Passwords and userinfo on HTTPS URLs are credentials and are
+	// rejected so they cannot leak through definitions or diagnostics.
+	if parsed.Scheme == "ssh" && parsed.User.Username() != "" {
+		_, hasPassword := parsed.User.Password()
+		return hasPassword
+	}
+	return true
 }
 
 func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {

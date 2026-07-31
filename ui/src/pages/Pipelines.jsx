@@ -14,7 +14,6 @@ import {
 import {
   PlayArrow as ResolveIcon,
   RocketLaunch as RunIcon,
-  Save as SaveIcon,
   CheckCircle as TriggeredIcon,
   AccountTree as DagIcon,
   ArrowBack as BackIcon,
@@ -28,7 +27,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import DAGViewer from '../components/DAGViewer';
 import CopyButton from '../components/CopyButton';
 import { layoutFromProject } from '../lib/dagLayout';
-import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
+import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 
@@ -202,6 +201,19 @@ export function RunDetail({ projectName, runId, onBack }) {
           {r.finished_at && ` → ${new Date(r.finished_at).toLocaleString()}`}
         </Typography>
       )}
+
+	  {r?.sources?.length > 0 && (
+		<Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+		  {r.sources.map((source, index) => (
+			<Chip
+			  key={`${source.repo_name}-${source.resolved_revision}-${index}`}
+			  size="small"
+			  variant="outlined"
+			  label={`${source.repo_name}${source.primary ? ' (primary)' : ''}: ${source.url} @ ${source.requested_ref} → ${source.resolved_revision}`}
+			/>
+		  ))}
+		</Box>
+	  )}
 
       <Box sx={{ display: 'flex', gap: 2, flex: 1, minHeight: 0 }}>
         <Card sx={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
@@ -541,7 +553,7 @@ export function NewRun({ onSelect, onBack }) {
             <ListItem sx={{ cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' } }}
               onClick={() => onSelect(p.name)}>
               <ListItemIcon><DagIcon /></ListItemIcon>
-              <ListItemText primary={p.name} secondary={p.repo_path || p.pipeline_dir || 'ci'} />
+			  <ListItemText primary={p.name} secondary={`${p.repo_url || 'No remote configured'}${p.repo_ref ? ` @ ${p.repo_ref}` : ''}`} />
             </ListItem>
           </Box>
         ))}
@@ -562,8 +574,6 @@ export function RunProject({ projectName, onBack, onStarted }) {
   const [error, setError] = useState(null);
   const [showPipeline, setShowPipeline] = useState(false);
   const [hclText, setHclText] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -621,19 +631,6 @@ export function RunProject({ projectName, onBack, onStarted }) {
     setRunning(false);
   };
 
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveMsg(null);
-    setError(null);
-    try {
-      const res = await saveProjectPipeline(projectName, hclText);
-      setSaveMsg(`Saved to ${res.path}`);
-    } catch (e) {
-      setError(e.message);
-    }
-    setSaving(false);
-  };
-
   return (
     <Box sx={{ height: 'calc(100vh - 100px)' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 2 }}>
@@ -686,18 +683,16 @@ export function RunProject({ projectName, onBack, onStarted }) {
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           pipeline.tf
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            {saveMsg && <Typography variant="caption" color="success.main">{saveMsg}</Typography>}
-            <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave} disabled={saving} size="small">
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
+			<Typography variant="caption" color="text.secondary">Read-only · edit and push in Git</Typography>
             <IconButton onClick={() => setShowPipeline(false)} size="small"><CloseIcon /></IconButton>
           </Box>
         </DialogTitle>
-        <DialogContent sx={{ p: 0 }}>
+		<DialogContent sx={{ p: 0 }}>
+		  <Alert severity="info" sx={{ m: 1 }}>This definition comes from the selected remote revision and cannot be edited here.</Alert>
           <Box sx={{ height: 500 }}>
             <CodeMirror
               value={hclText}
-              onChange={(val) => setHclText(val)}
+			  editable={false}
               theme={oneDark}
               height="100%"
               basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true }}

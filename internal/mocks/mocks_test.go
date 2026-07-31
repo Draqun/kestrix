@@ -10,7 +10,7 @@ import (
 
 func TestMockProjectStore_UpsertRecordsCall(t *testing.T) {
 	m := &MockProjectStore{}
-	cfg := &domain.ProjectConfig{Name: "demo", RepoPath: "/x"}
+	cfg := &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"}
 	if err := m.Upsert(cfg); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}

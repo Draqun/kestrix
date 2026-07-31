@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import { RunList, NewRun, RunProject, RunDetail } from './pages/Pipelines';
 import Projects from './pages/Projects';
+import Settings from './pages/Settings';
 import WebhookLogs from './pages/WebhookLogs';
 
 function ProjectsRoutes() {
@@ -64,6 +65,7 @@ function AppRoutes() {
         <Route path="/projects" element={<Projects selectedName={null} onSelect={(n) => n ? navigate(`/projects/${encodeURIComponent(n)}`) : navigate('/projects')} onOpenPipeline={(n) => navigate(`/pipelines/new-run/${encodeURIComponent(n)}`)} />} />
         <Route path="/projects/:name" element={<ProjectsRoutes />} />
         <Route path="/webhooks" element={<WebhookLogs />} />
+        <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>
   );

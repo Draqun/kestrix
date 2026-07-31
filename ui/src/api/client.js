@@ -1,7 +1,7 @@
 // Kestrix API client
 import { normalizeProject } from './normalizers.js';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const API_BASE = import.meta.env?.VITE_API_URL || '';
 
 export { normalizeProject };
 
@@ -221,4 +221,33 @@ export async function approveManualTask(name, runID, task) {
     throw new Error(err.error || `Approve failed: ${res.statusText}`);
   }
   return res.json();
+}
+
+export async function listCredentials() {
+  const res = await fetch(`${API_BASE}/api/credentials`);
+  if (!res.ok) throw new Error(`List credentials failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createCredential(input) {
+  const res = await fetch(`${API_BASE}/api/credentials`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Create credential failed: ${res.statusText}`);
+  return data;
+}
+
+export async function rotateCredential(ref, input) {
+  const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Rotate credential failed: ${res.statusText}`);
+  return data;
+}
+
+export async function revokeCredential(ref) {
+  const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}/revoke`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Revoke credential failed: ${res.statusText}`);
 }

@@ -8,7 +8,6 @@ import {
 import {
   PlayArrow as ResolveIcon,
   RocketLaunch as RunIcon,
-  Save as SaveIcon,
   CheckCircle as TriggeredIcon,
   AccountTree as DagIcon,
   ArrowBack as BackIcon,
@@ -22,7 +21,7 @@ import { useNodesState, useEdgesState } from 'reactflow';
 import DAGViewer from '../components/DAGViewer';
 import CopyButton from '../components/CopyButton';
 import { layoutFromProject } from '../lib/dagLayout';
-import { getProjectPipeline, getProjectDefinition, saveProjectPipeline, resolveProject, runProject, listProjects, listRuns } from '../api/client';
+import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listRuns } from '../api/client';
 
 const EMPTY_TEMPLATE = `project "new-project" {
   default_image = "golang:1.26"
@@ -60,9 +59,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
   const [runResult, setRunResult] = useState(null);
   const [includeManual, setIncludeManual] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [saveMsg, setSaveMsg] = useState(null);
   const [view, setView] = useState('graph');
 
   const [projectOptions, setProjectOptions] = useState([]);
@@ -106,20 +103,6 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
       loadRuns();
     }
   }, [projectName, loadPipeline, loadRuns]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveMsg(null);
-    setError(null);
-    try {
-      const res = await saveProjectPipeline(projectName, hclText);
-      setSaveMsg(`Saved to ${res.path}`);
-      await loadPipeline();
-    } catch (e) {
-      setError(e.message);
-    }
-    setSaving(false);
-  };
 
   const handleResolve = async () => {
     if (!projectName) return;
@@ -301,19 +284,17 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           pipeline.tf
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave} disabled={saving} size="small">
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
+			<Typography variant="caption" color="text.secondary">Read-only · edit and push in Git</Typography>
             <IconButton onClick={() => setShowPipeline(false)} size="small"><CloseIcon /></IconButton>
           </Box>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>
           {error && <Alert severity="error" sx={{ m: 1 }}>{error}</Alert>}
-          {saveMsg && <Alert severity="success" sx={{ m: 1 }}>{saveMsg}</Alert>}
+		  <Alert severity="info" sx={{ m: 1 }}>This definition comes from the selected remote revision and cannot be edited here.</Alert>
           <Box sx={{ height: 500 }}>
             <CodeMirror
               value={hclText}
-              onChange={(val) => setHclText(val)}
+			  editable={false}
               theme={oneDark}
               height="100%"
               basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true }}

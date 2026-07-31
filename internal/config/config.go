@@ -8,28 +8,91 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 var (
-	marshalYAML = yaml.Marshal
-	userHomeDir = os.UserHomeDir
-	mkdirAll    = os.MkdirAll
-	readFile    = os.ReadFile
-	writeFile   = os.WriteFile
+	marshalYAML   = yaml.Marshal
+	unmarshalYAML = yaml.Unmarshal
+	userHomeDir   = os.UserHomeDir
+	mkdirAll      = os.MkdirAll
+	readFile      = os.ReadFile
+	writeFile     = os.WriteFile
+	statPath      = os.Stat
+	chmodPath     = os.Chmod
 )
 
 // Config is the top-level configuration.
 type Config struct {
-	ListenAddr  string         `yaml:"listen_addr"`
-	DatabaseURL string         `yaml:"database_url"`
-	Branch      string         `yaml:"default_branch"`
-	Pipeline    PipelineConfig `yaml:"pipeline"`
-	Webhook     WebhookConfig  `yaml:"webhook"`
-	Dispatch    DispatchConfig `yaml:"dispatch"`
-	Docker      DockerConfig   `yaml:"docker"`
-	Runner      RunnerConfig   `yaml:"runner"`
+	ListenAddr    string            `yaml:"listen_addr"`
+	DatabaseURL   string            `yaml:"database_url"`
+	MasterKeyPath string            `yaml:"master_key_path"`
+	Branch        string            `yaml:"default_branch"`
+	Pipeline      PipelineConfig    `yaml:"pipeline"`
+	Webhook       WebhookConfig     `yaml:"webhook"`
+	Dispatch      DispatchConfig    `yaml:"dispatch"`
+	Docker        DockerConfig      `yaml:"docker"`
+	Runner        RunnerConfig      `yaml:"runner"`
+	SourceCache   SourceCacheConfig `yaml:"source_cache"`
+
+	sourceCacheDirectorySet bool
+	sourceCacheMaxAgeSet    bool
+	sourceCacheMaxBytesSet  bool
+}
+
+// Duration is a YAML duration encoded with Go duration syntax, for example
+// "24h". It keeps runtime configuration typed after parsing.
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	parsed, err := time.ParseDuration(node.Value)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", node.Value, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
+// SourceCacheConfig controls persistent Git object caching. Session workspaces
+// remain temporary and are not stored below this directory.
+type SourceCacheConfig struct {
+	Directory string   `yaml:"directory"`
+	MaxAge    Duration `yaml:"max_age"`
+	MaxBytes  int64    `yaml:"max_bytes"`
+}
+
+// Validate ensures the cache has bounded positive retention and a private
+// service-account directory.
+func (c SourceCacheConfig) Validate() error {
+	if c.Directory == "" {
+		return fmt.Errorf("source cache directory is required")
+	}
+	if time.Duration(c.MaxAge) <= 0 {
+		return fmt.Errorf("source cache max_age must be positive")
+	}
+	if c.MaxBytes <= 0 {
+		return fmt.Errorf("source cache max_bytes must be positive")
+	}
+	if err := mkdirAll(c.Directory, 0o700); err != nil {
+		return fmt.Errorf("create source cache directory: %w", err)
+	}
+	info, err := statPath(c.Directory)
+	if err != nil {
+		return fmt.Errorf("inspect source cache directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("source cache path is not a directory")
+	}
+	if err := chmodPath(c.Directory, 0o700); err != nil {
+		return fmt.Errorf("secure source cache directory: %w", err)
+	}
+	return nil
 }
 
 // RunnerConfig controls how pipeline jobs are executed.
@@ -81,6 +144,11 @@ func DefaultConfig() *Config {
 			Mode:     "local",
 			Executor: "shell",
 		},
+		SourceCache: SourceCacheConfig{
+			Directory: filepath.Join(filepath.Dir(DefaultPath()), "cache", "git"),
+			MaxAge:    Duration(30 * 24 * time.Hour),
+			MaxBytes:  10 << 30,
+		},
 	}
 }
 
@@ -118,11 +186,60 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	if err := unmarshalYAML(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	var presence struct {
+		SourceCache *struct {
+			Directory *string   `yaml:"directory"`
+			MaxAge    *Duration `yaml:"max_age"`
+			MaxBytes  *int64    `yaml:"max_bytes"`
+		} `yaml:"source_cache"`
+	}
+	if err := unmarshalYAML(data, &presence); err != nil {
+		return nil, fmt.Errorf("parse config presence: %w", err)
+	}
+	if presence.SourceCache != nil {
+		cfg.sourceCacheDirectorySet = presence.SourceCache.Directory != nil
+		cfg.sourceCacheMaxAgeSet = presence.SourceCache.MaxAge != nil
+		cfg.sourceCacheMaxBytesSet = presence.SourceCache.MaxBytes != nil
 	}
 
 	return cfg, nil
+}
+
+// ApplySourceCacheEnvironment applies canonical environment values only where
+// the config file did not explicitly provide the corresponding setting.
+func (c *Config) ApplySourceCacheEnvironment(env *Environment) error {
+	if env == nil {
+		return nil
+	}
+	if err := env.ValidationError(); err != nil {
+		return err
+	}
+	if !c.sourceCacheDirectorySet && env.SourceCache.Directory != "" {
+		c.SourceCache.Directory = env.SourceCache.Directory
+	}
+	if !c.sourceCacheMaxAgeSet && env.SourceCache.MaxAge > 0 {
+		c.SourceCache.MaxAge = Duration(env.SourceCache.MaxAge)
+	}
+	if !c.sourceCacheMaxBytesSet && env.SourceCache.MaxBytes > 0 {
+		c.SourceCache.MaxBytes = env.SourceCache.MaxBytes
+	}
+	return nil
+}
+
+// ApplySourceCacheFlags applies non-zero explicit CLI values last.
+func (c *Config) ApplySourceCacheFlags(directory string, maxAge time.Duration, maxBytes int64) {
+	if directory != "" {
+		c.SourceCache.Directory = directory
+	}
+	if maxAge != 0 {
+		c.SourceCache.MaxAge = Duration(maxAge)
+	}
+	if maxBytes != 0 {
+		c.SourceCache.MaxBytes = maxBytes
+	}
 }
 
 // Save writes the config to the given path.

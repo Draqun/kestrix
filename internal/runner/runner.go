@@ -49,6 +49,18 @@ type Options struct {
 	OnTaskStart func(name string)
 	// OnTaskComplete is called after each task finishes (pass or fail).
 	OnTaskComplete func(TaskResult)
+	// SourceAcquirer obtains remote repositories before the DAG starts. When
+	// nil, local execution keeps the historical checkout behavior.
+	SourceSessions        domain.SourceSessionManager
+	SourceAcquirer        domain.SourceAcquirer
+	CredentialResolver    domain.CredentialResolver
+	SourceTimeout         time.Duration
+	SourceRetries         int
+	RetainSourceWorkspace bool
+	RepoPaths             map[string]string
+	SourcesPrepared       bool
+	OnSourcesAcquired     func([]domain.AcquiredSource) error
+	WorkspaceCleanup      func()
 }
 
 func synchronizeOutput(opts *Options) {
@@ -96,7 +108,7 @@ type DockerExecutor struct {
 
 func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
 	repo := e.Repos[task.Execute.Repo]
-	taskDir, err := repoDir(e.WorkDir, repo)
+	taskDir, err := repoDirFor(e.WorkDir, repo, opts.RepoPaths)
 	if err != nil {
 		return "", taskFatal{err: fmt.Errorf("task %q: %w", task.Name, err)}
 	}
@@ -107,6 +119,11 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	}
 
 	relDir, _ := filepath.Rel(e.WorkDir, taskDir)
+	external := ""
+	if candidate, ok := opts.RepoPaths[repo.Name]; ok && !pathWithin(e.WorkDir, candidate) {
+		external = candidate
+		relDir = filepath.Join("..", "sources", repo.Name)
+	}
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
 
@@ -116,6 +133,9 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 		"-v", e.WorkDir + ":/workspace",
 		"-w", "/workspace/" + relDir,
 		"-e", "CI_PROJECT_DIR=/workspace/" + relDir,
+	}
+	if external != "" {
+		args = append(args, "-v", external+":/sources/"+repo.Name)
 	}
 
 	if opts.Variables != nil {
@@ -146,7 +166,7 @@ type LocalExecutor struct {
 
 func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
 	repo := e.Repos[task.Execute.Repo]
-	taskDir, err := repoDir(e.WorkDir, repo)
+	taskDir, err := repoDirFor(e.WorkDir, repo, opts.RepoPaths)
 	if err != nil {
 		return "", taskFatal{err: fmt.Errorf("task %q: %w", task.Name, err)}
 	}
@@ -281,6 +301,12 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 // in its own Docker container. Tasks run in dependency order.
 func Run(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
+	defer cleanupWorkspace(&opts)
+	project, cleanup, err := prepareSources(ctx, project, &opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	if err := dag.New(project).Validate(); err != nil {
 		return nil, fmt.Errorf("validate pipeline: %w", err)
 	}
@@ -328,6 +354,12 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 // Each task runs via `bash -c` in the repo directory.
 func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
+	defer cleanupWorkspace(&opts)
+	project, cleanup, err := prepareSources(ctx, project, &opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	if err := dag.New(project).Validate(); err != nil {
 		return nil, fmt.Errorf("validate pipeline: %w", err)
 	}
@@ -377,6 +409,12 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 // RunGitLabRunner executes tasks via `gitlab-runner exec`.
 func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
+	defer cleanupWorkspace(&opts)
+	project, cleanup, err := prepareSources(ctx, project, &opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
@@ -418,6 +456,12 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 // RunOne executes a single named task (used for manual job approval).
 func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
 	synchronizeOutput(&opts)
+	defer cleanupWorkspace(&opts)
+	project, cleanup, err := prepareSources(ctx, project, &opts)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	defer cleanup()
 	if opts.WorkDir == "" {
 		opts.WorkDir = "."
 	}
@@ -444,7 +488,7 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		repos[repo.Name] = repo
 	}
 	repo := repos[task.Execute.Repo]
-	taskDir, err := repoDir(workDir, repo)
+	taskDir, err := repoDirFor(workDir, repo, opts.RepoPaths)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("task %q: %w", task.Name, err)
 	}

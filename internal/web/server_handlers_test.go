@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -145,7 +144,8 @@ func TestHandleSaveProjectPipeline_BadBody(t *testing.T) {
 	srv := systemHandlerServer(t)
 	if err := srv.projectStore.Upsert(&domain.ProjectConfig{
 		Name:         "demo",
-		RepoPath:     tmpDir,
+		RepoURL:      "file://" + tmpDir,
+		RepoRef:      "main",
 		PipelineDir:  ".",
 		PipelineFile: "pipeline.tf",
 	}); err != nil {
@@ -157,23 +157,8 @@ func TestHandleSaveProjectPipeline_BadBody(t *testing.T) {
 		strings.NewReader(""))
 	srv.router.ServeHTTP(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-	var resp map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp["status"] != "saved" {
-		t.Errorf("status = %v, want saved", resp["status"])
-	}
-	path, _ := resp["path"].(string)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read pipeline file: %v", err)
-	}
-	if len(data) != 0 {
-		t.Errorf("file content = %q, want empty string for empty body", data)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -186,7 +171,8 @@ func TestHandleResolveProject_Happy(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{
 		GetResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    tmpDir,
+			RepoURL:     "file://" + tmpDir,
+			RepoRef:     "main",
 			PipelineDir: ".",
 		},
 	}
@@ -194,6 +180,7 @@ func TestHandleResolveProject_Happy(t *testing.T) {
 		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
+		sourceSessions: &testSourceSessions{},
 	}
 	srv.router = srv.buildRouter()
 
@@ -298,7 +285,8 @@ func TestHandleWebhook_Happy(t *testing.T) {
 		MockProjectStore: &mocks.MockProjectStore{},
 		findResult: &domain.ProjectConfig{
 			Name:        "demo",
-			RepoPath:    tmpDir,
+			RepoURL:     "file://" + tmpDir,
+			RepoRef:     "main",
 			PipelineDir: ".",
 		},
 	}
@@ -306,6 +294,7 @@ func TestHandleWebhook_Happy(t *testing.T) {
 		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
+		sourceSessions: &testSourceSessions{},
 	}
 
 	// "svc/main.go" matches the "svc" subpath repo (path="src") only if

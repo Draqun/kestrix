@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,7 +10,14 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
+	"kestrix/internal/source"
 )
+
+type failingMaintenanceSessions struct{ *testSourceSessions }
+
+func (f *failingMaintenanceSessions) Maintain(context.Context) error {
+	return errors.New("maintenance failed")
+}
 
 func TestNewServerERequiresDatabaseURL(t *testing.T) {
 	server, err := NewServerE(Config{})
@@ -40,6 +48,12 @@ func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 	}
 }
 
+func TestNewPGStoresRedactsUnavailableDatabase(t *testing.T) {
+	if _, _, err := newPGStores("postgres://127.0.0.1:1/nope?connect_timeout=1"); err == nil {
+		t.Fatal("expected database connection error")
+	}
+}
+
 func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
@@ -61,6 +75,30 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 	if server.webhookService == nil {
 		t.Fatal("webhook service was not wired")
+	}
+}
+
+func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{}
+	oldStores, oldSource := newPGStores, newSourceSessionManager
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return projectStore, runStore, nil }
+	t.Cleanup(func() {
+		newPGStores, newSourceSessionManager = oldStores, oldSource
+	})
+
+	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) {
+		return nil, errors.New("cache failed")
+	}
+	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid"}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
+		t.Fatalf("server=%v error=%v", server, err)
+	}
+
+	manager := &failingMaintenanceSessions{testSourceSessions: &testSourceSessions{}}
+	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) { return manager, nil }
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid"})
+	if err != nil || server.sourceSessions != manager {
+		t.Fatalf("server=%v error=%v", server, err)
 	}
 }
 

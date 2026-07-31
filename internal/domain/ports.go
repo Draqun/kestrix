@@ -6,6 +6,114 @@ import (
 	"time"
 )
 
+// SourceAcquirer obtains a repository in an isolated workspace before task
+// execution starts. Implementations may use a local checkout or Git CLI.
+type SourceAcquirer interface {
+	Acquire(ctx context.Context, repo Repo, opts AcquisitionOptions) (AcquiredSource, error)
+}
+
+// SourceSessionManager refreshes a remote source through the shared Git object
+// cache and returns an isolated checkout owned by one operation.
+type SourceSessionManager interface {
+	Open(ctx context.Context, request SourceRequest) (SourceSession, error)
+	Pin(ctx context.Context, runID int, sources []AcquiredSource) error
+	Release(ctx context.Context, runID int) error
+	Maintain(ctx context.Context) error
+}
+
+// SourceRequest identifies one remote source without carrying secret values.
+// Revision, when set, is an exact historical commit to materialize while
+// RequestedRef remains the user-facing branch/tag/commit expression.
+type SourceRequest struct {
+	RepoName      string
+	URL           string
+	RequestedRef  string
+	Revision      string
+	CredentialRef string
+	Purpose       string
+	Primary       bool
+}
+
+// SourceSession owns one private checkout. Cleanup is idempotent.
+type SourceSession struct {
+	Source  AcquiredSource
+	Cleanup func()
+}
+
+// CredentialResolver resolves a named credential without exposing its value
+// to pipeline definitions or persisted run metadata.
+type CredentialResolver interface {
+	Resolve(ctx context.Context, ref string) (Credential, error)
+}
+
+// Credential contains process-scoped authentication material. Implementations
+// must never serialize or log this value.
+type Credential struct {
+	Type       string
+	Username   string
+	Password   string
+	Token      string
+	PrivateKey string
+	KnownHosts string
+}
+
+// CredentialInput is accepted only by secret-bearing create/rotate operations.
+// It must never be serialized in a response or persisted in plaintext.
+type CredentialInput struct {
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	Provider   string `json:"provider,omitempty"`
+	Host       string `json:"host,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Password   string `json:"password,omitempty"`
+	Token      string `json:"token,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+	KnownHosts string `json:"known_hosts,omitempty"`
+}
+
+// CredentialMetadata is safe to return to callers.
+type CredentialMetadata struct {
+	Ref       string    `json:"ref"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Provider  string    `json:"provider,omitempty"`
+	Host      string    `json:"host,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Revoked   bool      `json:"revoked"`
+}
+
+// CredentialStore owns secret lifecycle and runtime resolution.
+type CredentialStore interface {
+	CreateCredential(input CredentialInput) (CredentialMetadata, error)
+	RotateCredential(ref string, input CredentialInput) (CredentialMetadata, error)
+	GetCredentialMetadata(ref string) (CredentialMetadata, error)
+	ListCredentialMetadata() ([]CredentialMetadata, error)
+	RevokeCredential(ref string) error
+	ResolveCredential(ctx context.Context, ref string) (Credential, error)
+}
+
+// AcquisitionOptions controls one source acquisition.
+type AcquisitionOptions struct {
+	Workspace    string
+	BaseDir      string
+	Timeout      time.Duration
+	Retries      int
+	RetainOnFail bool
+	Resolver     CredentialResolver
+}
+
+// AcquiredSource is the non-secret result of source acquisition.
+type AcquiredSource struct {
+	RepoName         string `json:"repo_name"`
+	URL              string `json:"url,omitempty"`
+	Path             string `json:"-"`
+	RequestedRef     string `json:"requested_ref,omitempty"`
+	ResolvedRevision string `json:"resolved_revision,omitempty"`
+	CredentialRef    string `json:"credential_ref,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
+}
+
 // ProjectStore is the port for PostgreSQL-backed project configuration
 // persistence.
 type ProjectStore interface {
@@ -34,6 +142,13 @@ type RunStore interface {
 	CountRunsByStatus() (map[string]int, error)
 }
 
+// RunSourceStore persists non-secret source metadata after acquisition.
+// It is optional so lightweight test stores and alternative backends remain
+// compatible with the core run lifecycle port.
+type RunSourceStore interface {
+	UpdateRunSources(runID int, sources []AcquiredSource) error
+}
+
 // PipelineRunner is the port for pipeline execution.
 // Implemented by runner.PipelineExecutor.
 type PipelineRunner interface {
@@ -55,13 +170,24 @@ type VariableResolver interface {
 // It mirrors the runner.Options struct but lives in domain so the
 // service layer can construct it without importing runner.
 type RunnerOptions struct {
-	WorkDir        string
-	IncludeManual  bool
-	Variables      VariableResolver
-	Stdout         io.Writer
-	Stderr         io.Writer
-	OnTaskStart    func(name string)
-	OnTaskComplete func(TaskResult)
+	WorkDir               string
+	IncludeManual         bool
+	Variables             VariableResolver
+	Stdout                io.Writer
+	Stderr                io.Writer
+	OnTaskStart           func(name string)
+	OnTaskComplete        func(TaskResult)
+	OnSourcesAcquired     func([]AcquiredSource) error
+	InitialSources        []AcquiredSource
+	SourceSessions        SourceSessionManager
+	SourceAcquirer        SourceAcquirer
+	CredentialResolver    CredentialResolver
+	SourceTimeout         time.Duration
+	SourceRetries         int
+	RetainSourceWorkspace bool
+	WorkspaceCleanup      func()
+	RepoPaths             map[string]string
+	SourcesPrepared       bool
 }
 
 // WebhookLogSink is the port for webhook event logging.
@@ -74,37 +200,30 @@ type WebhookLogSink interface {
 // It lives in domain so both ProjectStore and ProjectService can use it
 // without importing store.
 type ProjectConfig struct {
-	Name            string      `json:"name"`
-	RepoPath        string      `json:"repo_path"`
-	RepoURL         string      `json:"repo_url,omitempty"`
-	PipelineDir     string      `json:"pipeline_dir,omitempty"`
-	PipelineFile    string      `json:"pipeline_file"`
-	GitLabProjectID int         `json:"gitlab_project_id,omitempty"`
-	DefaultBranch   string      `json:"default_branch,omitempty"`
-	WebhookSecret   string      `json:"webhook_secret,omitempty"`
-	CreatedAt       string      `json:"created_at"`
-	ExtraRepos      []ExtraRepo `json:"extra_repos,omitempty"`
-}
-
-// ExtraRepo is an additional repository participating in a project.
-type ExtraRepo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	URL  string `json:"url,omitempty"`
-	Kind string `json:"kind,omitempty"`
+	Name              string `json:"name"`
+	RepoURL           string `json:"repo_url"`
+	RepoRef           string `json:"repo_ref"`
+	RepoCredentialRef string `json:"repo_credential_ref,omitempty"`
+	PipelineDir       string `json:"pipeline_dir,omitempty"`
+	PipelineFile      string `json:"pipeline_file"`
+	GitLabProjectID   int    `json:"gitlab_project_id,omitempty"`
+	DefaultBranch     string `json:"default_branch,omitempty"`
+	WebhookSecret     string `json:"webhook_secret,omitempty"`
+	CreatedAt         string `json:"created_at"`
 }
 
 // Run is a stored run record.
 type Run struct {
-	ID            int          `json:"id"`
-	ProjectName   string       `json:"project_name"`
-	Status        string       `json:"status"`
-	Changed       []string     `json:"changed"`
-	IncludeManual bool         `json:"include_manual"`
-	PipelineDef   *Project     `json:"pipeline_def,omitempty"`
-	Output        string       `json:"output"`
-	Error         string       `json:"error,omitempty"`
-	TaskResults   []TaskResult `json:"task_results,omitempty"`
-	StartedAt     time.Time    `json:"started_at"`
-	FinishedAt    *time.Time   `json:"finished_at,omitempty"`
+	ID            int              `json:"id"`
+	ProjectName   string           `json:"project_name"`
+	Status        string           `json:"status"`
+	Changed       []string         `json:"changed"`
+	IncludeManual bool             `json:"include_manual"`
+	PipelineDef   *Project         `json:"pipeline_def,omitempty"`
+	Output        string           `json:"output"`
+	Error         string           `json:"error,omitempty"`
+	TaskResults   []TaskResult     `json:"task_results,omitempty"`
+	Sources       []AcquiredSource `json:"sources,omitempty"`
+	StartedAt     time.Time        `json:"started_at"`
+	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
 }
