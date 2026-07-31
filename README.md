@@ -40,7 +40,7 @@ make build
 ### 2. Run
 
 ```bash
-# Serve with examples (default: :8080)
+# Start the server (default: :8080); projects are registered through the API/UI
 ./bin/kestrix serve --dir ./examples/demo-mono
 
 # With dispatch to GitLab
@@ -52,6 +52,11 @@ make build
 
 # From config file (~/.kestrix/config.yaml)
 ./bin/kestrix serve --config ~/.kestrix/config.yaml
+
+# Register a project explicitly
+curl -X POST http://localhost:8080/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name":"demo-mono","repo_path":"./examples/demo-mono","pipeline_dir":".","pipeline_file":"pipeline.tf"}'
 ```
 
 ### 3. Use
@@ -91,6 +96,7 @@ listen_addr: ":8080"
 default_branch: "main"
 
 pipeline:
+  # Used by legacy pipeline endpoints; it does not auto-register a project.
   dir: "./examples/demo-mono"
 
 webhook:
@@ -107,9 +113,12 @@ dispatch:
 
 | Env Variable | CLI Flag | Description |
 |---|---|---|
-| `METACI_WEBHOOK_SECRET` | `--secret` | Webhook HMAC secret |
-| `METACI_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
-| `METACI_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
+| `KESTRIX_WEBHOOK_SECRET` | `--secret` | Webhook HMAC secret |
+| `KESTRIX_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
+| `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
+
+`KESTRIX_*` is the only supported prefix for Kestrix-owned settings. Generic
+variables such as `DATABASE_URL` and `DOCKER_*` keep their existing names.
 
 ## Project identity and repository location
 
@@ -154,7 +163,7 @@ project identity.
 ## Project Structure
 
 ```
-metaci/
+kestrix/
 ├── cmd/kestrix/          # CLI entry point
 ├── internal/
 │   ├── config/          # YAML config loading (~/.kestrix/config.yaml)

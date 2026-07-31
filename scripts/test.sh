@@ -18,8 +18,8 @@ fi
 
 # PostgreSQL integration tests require an explicitly configured test database.
 # On a clean local checkout, exclude that adapter from the denominator; CI sets
-# METACI_TEST_DATABASE_URL and therefore gates the complete store package.
-if [ "$MODE" = "unit" ] || [ -z "${METACI_TEST_DATABASE_URL:-}" ]; then
+# KESTRIX_TEST_DATABASE_URL and therefore gates the complete store package.
+if [ "$MODE" = "unit" ] || [ -z "${KESTRIX_TEST_DATABASE_URL:-}" ]; then
   grep -vF '/internal/store/pgstore' coverage.out > coverage.local.out
   mv coverage.local.out coverage.out
 fi

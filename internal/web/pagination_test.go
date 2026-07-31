@@ -4,29 +4,32 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
-	"kestrix/internal/store"
+	"kestrix/internal/domain"
 	"kestrix/internal/web/pagination"
 )
 
 func seedProjects(t *testing.T, path string, names []string) {
 	t.Helper()
 	storePath := filepath.Join(path, "projects.json")
-	st, err := store.New(storePath)
-	if err != nil {
-		t.Fatalf("store.New: %v", err)
-	}
+	projects := make(map[string]*domain.ProjectConfig, len(names))
 	for _, name := range names {
-		if err := st.Upsert(&store.ProjectConfig{
+		projects[name] = &domain.ProjectConfig{
 			Name:      name,
 			RepoPath:  "/tmp/repo",
 			CreatedAt: "2025-01-01T00:00:00Z",
-		}); err != nil {
-			t.Fatalf("Upsert %s: %v", name, err)
 		}
+	}
+	data, err := json.Marshal(projects)
+	if err != nil {
+		t.Fatalf("marshal projects: %v", err)
+	}
+	if err := os.WriteFile(storePath, data, 0o644); err != nil {
+		t.Fatalf("write projects: %v", err)
 	}
 }
 
@@ -225,8 +228,7 @@ func TestPaginationEmptyList(t *testing.T) {
 	}
 }
 
-func TestPaginationRunsFallback(t *testing.T) {
-	// handleListRuns returns empty array for file store (no PG)
+func TestPaginationRunsEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := NewServer(Config{
 		ListenAddr: ":0",
@@ -238,12 +240,13 @@ func TestPaginationRunsFallback(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	var body []interface{}
+	var body map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	if len(body) != 0 {
-		t.Errorf("body length = %d, want 0", len(body))
+	items, ok := body["items"].([]interface{})
+	if !ok || len(items) != 0 {
+		t.Errorf("items = %#v, want empty list", body["items"])
 	}
 }
 

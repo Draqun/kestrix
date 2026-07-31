@@ -28,20 +28,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"pg_available":  false,
 	}
 
-	if s.runStore != nil {
-		stats, err := s.runStore.CountRunsByStatus()
-		if err == nil {
-			resp["run_stats"] = stats
-		}
-		runs, err := s.runStore.ListAllRuns(10)
-		if err == nil {
-			if runs == nil {
-				runs = []domain.Run{}
-			}
-			resp["recent_runs"] = runs
-		}
-		resp["pg_available"] = true
+	stats, err := s.runStore.CountRunsByStatus()
+	if err == nil {
+		resp["run_stats"] = stats
 	}
+	runs, err := s.runStore.ListAllRuns(10)
+	if err == nil {
+		if runs == nil {
+			runs = []domain.Run{}
+		}
+		resp["recent_runs"] = runs
+	}
+	resp["pg_available"] = true
 
 	json.NewEncoder(w).Encode(resp)
 }

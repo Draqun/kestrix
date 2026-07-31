@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/parser"
-	"kestrix/internal/store"
 )
 
 // dockerAvailable mirrors the helper in internal/runner/runner_test.go and lets
@@ -303,7 +303,7 @@ func TestRunProject(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.projectStore.Upsert(&store.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "run-demo", RepoPath: repoDir, PipelineDir: ".ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", "/api/projects/run-demo/run", bytes.NewBufferString(`{"changed":["app"]}`))
@@ -375,7 +375,7 @@ func TestResolveProjectManual(t *testing.T) {
 		ListenAddr: ":0",
 		StorePath:  filepath.Join(t.TempDir(), "projects.json"),
 	})
-	if err := srv.projectStore.Upsert(&store.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
+	if err := srv.projectStore.Upsert(&domain.ProjectConfig{Name: "manual-demo", RepoPath: repoDir, PipelineDir: "ci", PipelineFile: "pipeline.tf"}); err != nil {
 		t.Fatal(err)
 	}
 

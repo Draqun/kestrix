@@ -11,9 +11,10 @@ package variables
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
+
+	"kestrix/internal/config"
 )
 
 // Variable represents a single named value with metadata.
@@ -198,11 +199,21 @@ func Expand(value string, vars map[string]string) string {
 	return result
 }
 
-// FromEnv builds a Store from environment variables matching a prefix.
-// E.g. with prefix "METACI_", METACI_FOO=bar becomes key "FOO"="bar".
+// FromEnv builds a Store from the initialized environment snapshot matching a
+// prefix.
 func FromEnv(prefix string) *Store {
+	return FromEntries(config.Current().Prefixed(prefix), prefix)
+}
+
+// FromKestrix builds a Store from the canonical Kestrix environment snapshot.
+func FromKestrix() *Store {
+	return FromEntries(config.Current().Prefixed(config.Prefix), config.Prefix)
+}
+
+// FromEntries builds a Store from normalized NAME=value entries.
+func FromEntries(entries []string, prefix string) *Store {
 	s := New()
-	for _, e := range os.Environ() {
+	for _, e := range entries {
 		if !strings.HasPrefix(e, prefix) {
 			continue
 		}

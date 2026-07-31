@@ -23,7 +23,7 @@ import (
 
 var absPath = filepath.Abs
 
-// ─── Project Handlers (use FileStore) ─────────────────────────
+// ─── Project Handlers (use PostgreSQL) ─────────────────────────
 
 // handleListProjects godoc
 // @Summary List configured projects

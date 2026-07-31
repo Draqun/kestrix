@@ -9,35 +9,35 @@
 #   docker compose logs -f     # follow logs
 #   docker compose rebuild     # rebuild images
 #
+name: kestrix-dev
+
 services:
   # ─── Kestrix server ───────────────────────────────────────
   kestrix:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dev
-    container_name: kestrix-dev
+    container_name: kestrix-dev-app
     ports:
-      - "${METACI_PORT:-8080}:8080"
+      - "${KESTRIX_PORT:-8080}:8080"
     volumes:
-      # Mount source for hot reload
-      - ../cmd:/app/cmd
-      - ../internal:/app/internal
-      - ../examples:/app/examples
-      - ../docs:/app/docs
-      - ../go.mod:/app/go.mod
-      - ../go.sum:/app/go.sum
+      # Mount the complete checkout so local pipeline definitions and task
+      # scripts are available to the runner as well as to the hot reloader.
+      - ..:/app
+      # Allow the local pipeline's docker_build task to build sibling images.
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - METACI_WEBHOOK_SECRET=${METACI_WEBHOOK_SECRET:-dev-secret}
-      - METACI_GITLAB_URL=${METACI_GITLAB_URL:-https://gitlab.com}
-      - METACI_GITLAB_TOKEN=${METACI_GITLAB_TOKEN:-}
-      - METACI_DISPATCH_PROJECT=${METACI_DISPATCH_PROJECT:-}
-      - DATABASE_URL=postgres://metaci:metaci@postgres:5432/metaci?sslmode=disable
+      - KESTRIX_WEBHOOK_SECRET=${KESTRIX_WEBHOOK_SECRET:-dev-secret}
+      - KESTRIX_GITLAB_URL=${KESTRIX_GITLAB_URL:-https://gitlab.com}
+      - KESTRIX_GITLAB_TOKEN=${KESTRIX_GITLAB_TOKEN:-}
+      - KESTRIX_DISPATCH_PROJECT=${KESTRIX_DISPATCH_PROJECT:-}
+      - DATABASE_URL=postgres://kestrix:kestrix@postgres:5432/kestrix_local?sslmode=disable
       - DOCKER_REGISTRY=${DOCKER_REGISTRY:-}
       - DOCKER_IMAGE=${DOCKER_IMAGE:-kestrix}
       - DOCKER_USERNAME=${DOCKER_USERNAME:-}
       - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -49,19 +49,19 @@ services:
   # ─── PostgreSQL (for future webhook log storage) ──────────
   postgres:
     image: postgres:16-alpine
-    container_name: kestrix-postgres
+    container_name: kestrix-dev-postgres
     environment:
-      POSTGRES_DB: metaci
-      POSTGRES_USER: metaci
-      POSTGRES_PASSWORD: metaci
+      POSTGRES_DB: kestrix_local
+      POSTGRES_USER: kestrix
+      POSTGRES_PASSWORD: kestrix
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      # Create the compatibility metaci_test database on first init (runs only when volume is empty)
+      - local_postgres_data:/var/lib/postgresql/data
+      # Create the test database on first init (runs only when volume is empty)
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U metaci"]
+      test: ["CMD-SHELL", "pg_isready -U kestrix"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -70,9 +70,9 @@ services:
   # ─── Redis (for future rate limiting / caching) ───────────
   redis:
     image: redis:7-alpine
-    container_name: kestrix-redis
+    container_name: kestrix-dev-redis
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -83,5 +83,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  local_postgres_data:
+    name: kestrix_local_postgres_data
   redis_data:

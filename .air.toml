@@ -6,13 +6,15 @@ tmp_dir = ".air"
 
 [build]
   # Binary to run
-  cmd = "go build -o .air/kestrix ./cmd/kestrix"
+  # The checkout is bind-mounted in Docker and may be owned by a different
+  # host user; VCS stamping would make the build fail on Git safety checks.
+  cmd = "go build -buildvcs=false -o .air/kestrix ./cmd/kestrix"
   # Binary path
   bin = ".air/kestrix"
   # Watch these directories
   include_ext = ["go", "tf"]
   # Exclude these directories
-  exclude_dir = ["bin", "docs", "coverage", ".air", "vendor"]
+  exclude_dir = ["bin", "docs", "coverage", ".air", "vendor", ".git", "ui/node_modules"]
   # Delay after file change (ms)
   delay = 1000
 

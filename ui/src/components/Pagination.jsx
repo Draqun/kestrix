@@ -1,6 +1,6 @@
 import {
   Box, Button, FormControl, InputLabel, MenuItem, Select,
-  Typography, Chip, Popover, IconButton, useMediaQuery,
+  Typography, Chip, Popover, useMediaQuery,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import { ChevronLeft, ChevronRight, Settings as SettingsIcon } from '@mui/icons-material';
@@ -8,14 +8,14 @@ import { useState } from 'react';
 import { clampOffset, parseOffsetFromUrl, getPaginationInfo } from '../lib/paginationUtils.js';
 
 export default function Pagination({ pagination, onPageChange, onLimitChange }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [anchorEl, setAnchorEl] = useState(null);
+
   if (!pagination) return null;
 
   const { total, limit, offset, next, prev } = pagination;
   const { currentPage, totalPages } = getPaginationInfo(pagination);
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-
-  const [anchorEl, setAnchorEl] = useState(null);
 
   const handlePrev = () => {
     const urlOffset = parseOffsetFromUrl(prev);

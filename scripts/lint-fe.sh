@@ -10,10 +10,12 @@ if [ ! -d node_modules ]; then
   npm install --silent
 fi
 
-echo "--- ESLint ---"
-npx eslint src/ --max-warnings 0 || echo "ESLint: warnings found (non-blocking)"
+echo "--- Oxlint ---"
+npm run lint
 
 echo "--- Build check ---"
-npx vite build --mode development 2>&1 | tail -5
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+npx vite build --mode development --outDir "$BUILD_DIR"
 
 echo "=== Frontend lint passed ==="

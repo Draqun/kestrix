@@ -51,10 +51,10 @@ test:
     - name: postgres:16-alpine
       alias: postgres
   variables:
-    POSTGRES_USER: metaci
-    POSTGRES_PASSWORD: metaci
-    POSTGRES_DB: metaci_test
-    METACI_TEST_DATABASE_URL: postgres://metaci:metaci@postgres:5432/metaci_test?sslmode=disable
+    POSTGRES_USER: kestrix
+    POSTGRES_PASSWORD: kestrix
+    POSTGRES_DB: kestrix_test
+    KESTRIX_TEST_DATABASE_URL: postgres://kestrix:kestrix@postgres:5432/kestrix_test?sslmode=disable
   # bash is needed for internal/runner tests that shell out via `bash -c`.
   # golang:1.25-alpine ships busybox sh only — install explicit bash
   # because the runner tests skip when bash is unavailable.

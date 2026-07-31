@@ -24,21 +24,20 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
-	"kestrix/internal/domain"
 	"kestrix/internal/parser"
 	"kestrix/internal/runner"
-	"kestrix/internal/service"
-	"kestrix/internal/store"
 	"kestrix/internal/variables"
 	"kestrix/internal/web"
 )
 
+const defaultLocalDatabaseURL = "postgres://kestrix:kestrix@localhost:5433/kestrix_local?sslmode=disable"
+
 func main() {
+	config.Initialize()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
@@ -124,11 +123,11 @@ func cmdServe(args []string) {
 	configPath := fs.String("config", config.DefaultPath(), "config file path")
 	addr := fs.String("addr", "", "listen address (overrides config)")
 	dir := fs.String("dir", "", "pipeline directory (overrides config)")
-	secret := fs.String("secret", "", "webhook verification secret (env: METACI_WEBHOOK_SECRET)")
+	secret := fs.String("secret", "", "webhook verification secret (env: KESTRIX_WEBHOOK_SECRET)")
 	method := fs.String("method", "", "verification method: gitlab or hmac")
-	dispatchFlag := fs.String("dispatch", "", "GitLab project ID to dispatch pipelines to (env: METACI_DISPATCH_PROJECT)")
+	dispatchFlag := fs.String("dispatch", "", "GitLab project ID to dispatch pipelines to (env: KESTRIX_DISPATCH_PROJECT)")
 	gitlabURL := fs.String("gitlab-url", "", "GitLab instance URL (overrides config)")
-	gitlabToken := fs.String("gitlab-token", "", "GitLab API token (env: METACI_GITLAB_TOKEN)")
+	gitlabToken := fs.String("gitlab-token", "", "GitLab API token (env: KESTRIX_GITLAB_TOKEN)")
 	branchFlag := fs.String("branch", "", "default branch (overrides config)")
 	staticDir := fs.String("static", "", "directory to serve as static files (e.g. ../ui/dist)")
 	dbURL := fs.String("database-url", "", "PostgreSQL connection URL (env: DATABASE_URL)")
@@ -139,6 +138,7 @@ func cmdServe(args []string) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	env := config.Current()
 
 	// Load config from file (defaults if missing).
 	cfg, err := config.Load(*configPath)
@@ -149,31 +149,31 @@ func cmdServe(args []string) {
 
 	// Resolve secrets from env.
 	if *secret == "" {
-		*secret = os.Getenv("METACI_WEBHOOK_SECRET")
+		*secret = env.WebhookSecret
 	}
 	if *dispatchFlag == "" {
-		*dispatchFlag = os.Getenv("METACI_DISPATCH_PROJECT")
+		*dispatchFlag = env.DispatchProject
 	}
 	if *gitlabToken == "" {
-		*gitlabToken = os.Getenv("METACI_GITLAB_TOKEN")
+		*gitlabToken = env.GitLabToken
 	}
 	if *dbURL == "" {
-		*dbURL = os.Getenv("DATABASE_URL")
+		*dbURL = env.DatabaseURL
 	}
 	if *dbURL == "" {
-		*dbURL = "postgres://metaci:metaci@localhost:5432/metaci?sslmode=disable"
+		*dbURL = defaultLocalDatabaseURL
 	}
 	if *dockerRegistry == "" {
-		*dockerRegistry = os.Getenv("DOCKER_REGISTRY")
+		*dockerRegistry = env.Docker.Registry
 	}
 	if *dockerImage == "" {
-		*dockerImage = os.Getenv("DOCKER_IMAGE")
+		*dockerImage = env.Docker.Image
 	}
 	if *dockerUsername == "" {
-		*dockerUsername = os.Getenv("DOCKER_USERNAME")
+		*dockerUsername = env.Docker.Username
 	}
 	if *dockerPassword == "" {
-		*dockerPassword = os.Getenv("DOCKER_PASSWORD")
+		*dockerPassword = env.Docker.Password
 	}
 
 	// Apply env secrets to config.
@@ -253,44 +253,19 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "config: no config file found, using defaults + CLI flags\n")
 	}
 
-	server := buildServer(webCfg)
+	server, err := buildServer(webCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
+		os.Exit(1)
+	}
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func buildServer(cfg web.Config) *web.Server {
-	var projectStore domain.ProjectStore
-	var runStore domain.RunStore
-	if cfg.DatabaseURL != "" {
-		pg, err := store.NewPG(cfg.DatabaseURL)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not connect to database: %v, falling back to file store\n", err)
-		} else {
-			projectStore = pg
-			runStore = pg
-		}
-	}
-	if projectStore == nil {
-		storePath := cfg.StorePath
-		if storePath == "" {
-			storePath = store.DefaultPath()
-		}
-		fs, err := store.New(storePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not init project store at %s: %v\n", storePath, err)
-			fallback := filepath.Join(os.TempDir(), "metaci-fallback-projects.json")
-			fs, _ = store.New(fallback)
-		}
-		projectStore = fs
-	}
-	projectService := service.NewProjectService(projectStore)
-	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: web.GenerateGitLabCI}
-	taskRunner := pipelineRunner
-	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
-	webhookService := service.NewWebhookService(nil)
-	return web.NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
+func buildServer(cfg web.Config) (*web.Server, error) {
+	return web.NewServerE(cfg)
 }
 
 func cmdResolve(args []string) {

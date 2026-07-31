@@ -163,8 +163,8 @@ func TestDispatchSuccess(t *testing.T) {
 		ProjectID: 12345,
 		Ref:       "main",
 		Variables: map[string]string{
-			"METACI_TRIGGERED_TASKS": "build,test",
-			"METACI_CHANGED_REPOS":   "auth_service",
+			"KESTRIX_TRIGGERED_TASKS": "build,test",
+			"KESTRIX_CHANGED_REPOS":   "auth_service",
 		},
 	})
 	if err != nil {
@@ -184,11 +184,11 @@ func TestDispatchSuccess(t *testing.T) {
 	mock.mu.Lock()
 	vars := mock.vars[resp.PipelineID]
 	mock.mu.Unlock()
-	if vars["METACI_TRIGGERED_TASKS"] != "build,test" {
-		t.Errorf("triggered tasks = %q, want %q", vars["METACI_TRIGGERED_TASKS"], "build,test")
+	if vars["KESTRIX_TRIGGERED_TASKS"] != "build,test" {
+		t.Errorf("triggered tasks = %q, want %q", vars["KESTRIX_TRIGGERED_TASKS"], "build,test")
 	}
-	if vars["METACI_CHANGED_REPOS"] != "auth_service" {
-		t.Errorf("changed repos = %q, want %q", vars["METACI_CHANGED_REPOS"], "auth_service")
+	if vars["KESTRIX_CHANGED_REPOS"] != "auth_service" {
+		t.Errorf("changed repos = %q, want %q", vars["KESTRIX_CHANGED_REPOS"], "auth_service")
 	}
 }
 

@@ -241,3 +241,10 @@ func TestCLI_ChangedSummary_Empty(t *testing.T) {
 		t.Errorf("empty changed-set should print '(none)', got: %s", stdout)
 	}
 }
+
+func TestDefaultLocalDatabaseURLIsIsolated(t *testing.T) {
+	const expected = "postgres://kestrix:kestrix@localhost:5433/kestrix_local?sslmode=disable"
+	if defaultLocalDatabaseURL != expected {
+		t.Fatalf("default local database URL = %q, want %q", defaultLocalDatabaseURL, expected)
+	}
+}

@@ -113,12 +113,12 @@ func TestHandleDashboard_WithRunStore(t *testing.T) {
 	}
 }
 
-func TestHandleDashboard_NoRunStore(t *testing.T) {
+func TestHandleDashboard_EmptyRunStore(t *testing.T) {
 	mockProj := &mocks.MockProjectStore{ListResult: []string{"a"}}
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   mockProj,
-		runStore:       nil,
+		runStore:       &mocks.MockRunStore{},
 		projectService: service.NewProjectService(mockProj),
 	}
 
@@ -133,8 +133,8 @@ func TestHandleDashboard_NoRunStore(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body["pg_available"] != false {
-		t.Errorf("pg_available = %v, want false when runStore is nil", body["pg_available"])
+	if body["pg_available"] != true {
+		t.Errorf("pg_available = %v, want true for PostgreSQL store", body["pg_available"])
 	}
 }
 

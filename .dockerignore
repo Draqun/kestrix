@@ -1,0 +1,15 @@
+.git
+.gomodcache
+.gocache
+.gopath
+.jj
+.opencode
+.codex
+ui/node_modules
+ui/dist
+bin
+coverage
+.air
+openspec
+meta.txt
+*.log

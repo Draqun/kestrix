@@ -13,10 +13,6 @@ import (
 	"kestrix/internal/store"
 )
 
-func TestCompileTime_ProjectStore_FileStore(t *testing.T) {
-	var _ domain.ProjectStore = (*store.FileStore)(nil)
-}
-
 func TestDomainHasNoInternalImports(t *testing.T) {
 	modulePath, err := exec.Command("go", "list", "-m").Output()
 	if err != nil {

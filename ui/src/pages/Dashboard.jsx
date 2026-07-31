@@ -6,8 +6,6 @@ import {
   TableContainer, TableHead, TableRow, Chip,
 } from '@mui/material';
 import {
-  CheckCircle as OkIcon,
-  Error as ErrIcon,
   Refresh as RefreshIcon,
   Folder as FolderIcon,
   PlayArrow as RunIcon,

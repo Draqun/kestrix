@@ -4,7 +4,8 @@
 
 FROM golang:1.25-alpine
 
-RUN apk add --no-cache git curl
+RUN apk add --no-cache bash git curl nodejs npm docker-cli build-base \
+    && git config --global --add safe.directory /app
 
 # Install air for hot reload (pin to compatible version)
 RUN go install github.com/air-verse/air@v1.61.7
@@ -23,4 +24,4 @@ COPY .air.toml .air.toml
 
 EXPOSE 8080
 
-CMD ["air", "-c", ".air.toml", "--", "serve", "--addr", ":8080", "--dir", "./examples/demo-mono"]
+CMD ["air", "-c", ".air.toml", "--", "serve", "--addr", ":8080"]

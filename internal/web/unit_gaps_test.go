@@ -344,12 +344,12 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 		t.Fatalf("backend status=%d", w.Code)
 	}
 
-	// Populate environment and Docker variables.
-	t.Setenv("METACI_TEST_KEY", "value")
+	// Docker variables are read from the startup environment snapshot.
 	srv.cfg.Docker = DockerConfig{Registry: "r", Image: "i", Username: "u", Password: "p"}
 	vs := srv.buildVarStore(nil)
-	if got := vs.Get("", "", "")["TEST_KEY"]; got != "value" {
-		t.Fatalf("env variable=%q", got)
+	vars := vs.Get("", "", "")
+	if vars["DOCKER_IMAGE"] != "i" || vars["DOCKER_USERNAME"] != "u" {
+		t.Fatalf("docker variables=%#v", vars)
 	}
 }
 
@@ -466,7 +466,10 @@ func TestStaticRouterAndStoreFallback(t *testing.T) {
 	oldPG := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return ps, rs, nil }
 	t.Cleanup(func() { newPGStores = oldPG })
-	gotPS, gotRS := initStores(Config{DatabaseURL: "fake"})
+	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake"})
+	if err != nil {
+		t.Fatalf("initStores: %v", err)
+	}
 	if gotPS != ps || gotRS != rs {
 		t.Fatalf("fake PG stores not returned")
 	}

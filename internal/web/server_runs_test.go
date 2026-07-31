@@ -49,8 +49,8 @@ func runCtx(r *http.Request, params ...string) *http.Request {
 
 // ── handleListRuns ──────────────────────────────────────────────
 
-func TestHandleListRuns_NoRunStore(t *testing.T) {
-	srv := setupRunServer(t, &mocks.MockProjectStore{}, nil)
+func TestHandleListRuns_EmptyStore(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs", nil), "name", "demo")
 	srv.handleListRuns(w, r)
@@ -58,12 +58,13 @@ func TestHandleListRuns_NoRunStore(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	var body []interface{}
+	var body map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body) != 0 {
-		t.Errorf("expected empty array, got %d items", len(body))
+	items, ok := body["items"].([]interface{})
+	if !ok || len(items) != 0 {
+		t.Errorf("expected empty items, got %#v", body["items"])
 	}
 }
 
@@ -105,14 +106,14 @@ func TestHandleListRuns_WithRuns(t *testing.T) {
 
 // ── handleGetRun ────────────────────────────────────────────────
 
-func TestHandleGetRun_NoRunStore(t *testing.T) {
-	srv := setupRunServer(t, &mocks.MockProjectStore{}, nil)
+func TestHandleGetRun_UnknownRun(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/1", nil), "name", "demo", "runID", "1")
 	srv.handleGetRun(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }
 
@@ -174,14 +175,14 @@ func TestHandleGetRun_Happy(t *testing.T) {
 
 // ── handleCancelRun ─────────────────────────────────────────────
 
-func TestHandleCancelRun_NoRunStore(t *testing.T) {
-	srv := setupRunServer(t, &mocks.MockProjectStore{}, nil)
+func TestHandleCancelRun_EmptyStore(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/1/cancel", nil), "name", "demo", "runID", "1")
 	srv.handleCancelRun(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 }
 
@@ -223,8 +224,8 @@ func TestHandleCancelRun_Happy(t *testing.T) {
 
 // ── handleListAllRuns ───────────────────────────────────────────
 
-func TestHandleListAllRuns_NoRunStore(t *testing.T) {
-	srv := setupRunServer(t, &mocks.MockProjectStore{}, nil)
+func TestHandleListAllRuns_EmptyStore(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/runs", nil)
 	srv.handleListAllRuns(w, r)
@@ -232,7 +233,7 @@ func TestHandleListAllRuns_NoRunStore(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	var body []interface{}
+	var body []domain.Run
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestHandleRunTask_InvalidJSON(t *testing.T) {
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}
-	srv := runTaskServer(t, cfg, nil)
+	srv := runTaskServer(t, cfg, &mocks.MockRunStore{CreateRunID: 1})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader("not json"))
 	r = runCtx(r, "name", "demo", "task", "test")
@@ -395,15 +396,15 @@ func TestHandleRunTask_Happy(t *testing.T) {
 
 // ── handleApproveManualTask ──────────────────────────────────────
 
-func TestHandleApproveManualTask_NoRunStore(t *testing.T) {
-	srv := setupRunServer(t, &mocks.MockProjectStore{}, nil)
+func TestHandleApproveManualTask_UnknownRun(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/1/tasks/deploy/approve", nil),
 		"name", "demo", "runID", "1", "task", "deploy")
 	srv.handleApproveManualTask(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }
 

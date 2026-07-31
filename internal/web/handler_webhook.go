@@ -144,9 +144,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				Token:   s.cfg.Dispatch.GitLabToken,
 			}
 			vars := map[string]string{
-				"METACI_TRIGGERED_TASKS": strings.Join(triggeredTasks, ","),
-				"METACI_CHANGED_REPOS":   strings.Join(changedRepos, ","),
-				"METACI_DISPATCH_TIME":   time.Now().UTC().Format(time.RFC3339),
+				"KESTRIX_TRIGGERED_TASKS": strings.Join(triggeredTasks, ","),
+				"KESTRIX_CHANGED_REPOS":   strings.Join(changedRepos, ","),
+				"KESTRIX_DISPATCH_TIME":   time.Now().UTC().Format(time.RFC3339),
 			}
 			ref := s.cfg.Branch
 			if ref == "" {

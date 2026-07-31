@@ -12,7 +12,7 @@ The Kestrix backend is a Go HTTP server that serves as the CI/CD control plane. 
 | `internal/dispatch` | GitLab CI pipeline dispatch |
 | `internal/runner` | Local/Docker/GitLab‑Runner task execution |
 | `internal/web` | HTTP API (Chi router), webhook handler |
-| `internal/store` | PostgreSQL (production) / JSON file (dev) persistence |
+| `internal/store` | PostgreSQL project and run persistence |
 | `internal/model` | Shared data types |
 
 ## API Endpoints
@@ -28,4 +28,4 @@ The Kestrix backend is a Go HTTP server that serves as the CI/CD control plane. 
 
 ## Configuration
 
-Environment variables (`METACI_*`) control runner mode, database URL, listen address, and more.
+Environment variables (`KESTRIX_*`) control runner mode, database URL, listen address, and more. Kestrix-owned settings use only this canonical prefix.

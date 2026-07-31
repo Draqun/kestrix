@@ -151,7 +151,7 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 		return 0, fmt.Errorf("project not loaded")
 	}
 	if s.runStore == nil {
-		return 0, nil
+		return 0, fmt.Errorf("run store is not configured")
 	}
 	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj)
 	if err != nil {

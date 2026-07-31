@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// ProjectStore is the port for project configuration persistence.
-// Implemented by FileStore and PGProjectStore.
+// ProjectStore is the port for PostgreSQL-backed project configuration
+// persistence.
 type ProjectStore interface {
 	Load() (map[string]*ProjectConfig, error)
 	Save(projects map[string]*ProjectConfig) error
