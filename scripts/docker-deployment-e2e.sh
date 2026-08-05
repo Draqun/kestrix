@@ -52,7 +52,6 @@ OVERRIDE_FILE="${TEMP_DIR}/docker-compose.override.yml"
 REMOTE_BARE="${TEMP_DIR}/remote.git"
 REMOTE_WORK="${TEMP_DIR}/remote-work"
 MASTER_KEY_FILE="${TEMP_DIR}/master.key"
-CONFIG_FILE="${TEMP_DIR}/config.yaml"
 
 mkdir -p "${REMOTE_WORK}/ci"
 git init --quiet --bare --initial-branch=main "${REMOTE_BARE}"
@@ -74,21 +73,19 @@ git -C "${REMOTE_WORK}" add .
 git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
 git -C "${REMOTE_WORK}" push --quiet -u origin main
 
-printf '%s' '01234567890123456789012345678901' > "${MASTER_KEY_FILE}"
+dd if=/dev/urandom of="${MASTER_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${MASTER_KEY_FILE}"
-printf '%s\n' 'master_key_path: /run/secrets/kestrix_master_key' > "${CONFIG_FILE}"
 printf '%s\n' \
   'services:' \
   '  kestrix:' \
   '    entrypoint: ["/bin/sh", "-c"]' \
-  '    command: ["git config --global --add safe.directory /e2e/remote.git && exec /kestrix serve --addr :8080 --config /e2e/config.yaml --static ./ui/dist"]' \
+  '    command: ["git config --global --add safe.directory /e2e/remote.git && exec /kestrix serve --addr :8080 --static ./ui/dist"]' \
   '    volumes:' \
   '      - source_cache:/var/lib/kestrix/cache/git' \
-  "      - ${REMOTE_BARE}:/e2e/remote.git:ro" \
-  "      - ${MASTER_KEY_FILE}:/run/secrets/kestrix_master_key:ro" \
-  "      - ${CONFIG_FILE}:/e2e/config.yaml:ro" > "${OVERRIDE_FILE}"
+  "      - ${REMOTE_BARE}:/e2e/remote.git:ro" > "${OVERRIDE_FILE}"
 
 export KESTRIX_IMAGE="${IMAGE_OVERRIDE:-${IMAGE_TAG}}"
+export KESTRIX_MASTER_KEY_PATH="${MASTER_KEY_FILE}"
 export KESTRIX_PORT="${BASE_PORT}"
 export BUSINESS_PORT
 export BUSINESS_BIND_HOST=127.0.0.1
@@ -98,6 +95,11 @@ export REDIS_PORT
 compose() {
   "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" "$@"
 }
+
+if env -u KESTRIX_MASTER_KEY_PATH "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" config >/dev/null 2>&1; then
+  echo "Production Compose unexpectedly accepts a missing KESTRIX_MASTER_KEY_PATH." >&2
+  exit 1
+fi
 
 diagnose() {
   echo "--- Docker Compose status (${PROJECT_NAME}) ---" >&2

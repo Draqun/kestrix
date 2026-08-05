@@ -43,10 +43,9 @@ mv coverage.testable.out coverage.out
 grep -vF '/internal/mocks/' coverage.out > coverage.testable.out
 mv coverage.testable.out coverage.out
 
-# Git acquisition and credential custody wrap external process/keyring
-# facilities. Their deterministic unit suites still run above, while the
-# aggregate unit gate measures the application adapters independently of
-# host-specific failures such as an unavailable secret-tool or Git binary.
+# Git acquisition and credential custody wrap external process facilities.
+# Their deterministic unit suites still run above, while the aggregate unit
+# gate measures the application adapters independently of Git binary access.
 grep -vF '/internal/source/' coverage.out | grep -vF '/internal/credentials/' > coverage.testable.out
 mv coverage.testable.out coverage.out
 

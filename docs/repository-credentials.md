@@ -18,17 +18,43 @@ application-wide setting; it is intentionally not a separate navigation item
 and is not embedded in the Projects page.
 
 The **Type** field is a controlled selector that supports both pointer and
-keyboard selection. Choose one of these options to reveal only the matching
-secret inputs:
+keyboard selection. Every field also has visible required/optional guidance
+and a focusable information control with more detail.
 
-- **Token** shows the token field;
-- **Username / app password** shows username and password fields;
-- **SSH private key** shows private key and optional known-hosts fields.
+| Field | Required | Purpose |
+|-------|----------|---------|
+| Display name | Yes | A recognizable, non-secret name shown in Settings and project selectors. |
+| Type | Yes | Selects HTTPS token, username/app password, or SSH private-key authentication. |
+| Provider | No | Searchable descriptive metadata, such as GitHub, GitLab, or Bitbucket. It does not select an authentication implementation. |
+| Host | No | Searchable descriptive hostname. It does not validate or restrict use to that remote. |
+
+The selected type adds these fields:
+
+| Type | Field | Required | Purpose and example |
+|------|-------|----------|---------------------|
+| HTTPS token | HTTPS username | No | Conventional username expected by some hosts, for example `x-access-token` for GitHub or `oauth2` for GitLab. |
+| HTTPS token | Token | Yes | Personal, deploy, or app token with repository read access. |
+| Username / app password | Username | Yes | HTTPS account or deploy-token username. |
+| Username / app password | Password | Yes | Password or app password with repository read access. |
+| SSH private key | Private key | Yes | Complete PEM or OpenSSH private key with repository read access. |
+| SSH private key | Known hosts | No | Recommended pinned `known_hosts` entries, for example `git.example.com ssh-ed25519 AAAA…`. |
+
+For SSH, supplied known-hosts content enables strict verification against the
+pinned keys. If it is omitted, Kestrix uses
+`StrictHostKeyChecking=accept-new`: the first key is trusted and a later
+changed key is rejected. Pinning is recommended over this trust-on-first-use
+fallback.
 
 Changing the type clears incompatible secret fields. Secret values are
 write-only: after create or rotate, the UI refreshes and displays metadata
 only. Revocation requires confirmation and prevents the credential from being
 selected for new project configuration.
+
+Repository credentials are exclusively for Git source acquisition: clone,
+fetch, and ref resolution. They are never injected into task processes or
+deployment environments. Runtime or deployment secrets need a separate secure
+configuration mechanism; do not reuse repository credentials or place secrets
+in repository URLs, pipeline HCL, or committed configuration.
 
 Project create and edit dialogs contain a compact credential selector. Use
 **Add credential** there to create a credential without losing entered project
@@ -42,17 +68,19 @@ Create a credential with `POST /api/credentials`, use the returned `ref` in a
 repository declaration, and rotate with `PUT /api/credentials/{ref}`. Revoke
 with `POST /api/credentials/{ref}/revoke`.
 
-The encryption master key is not stored in PostgreSQL. Local installations use
-the OS keyring (`secret-tool`); deployments may set `master_key_path` to a
-mounted raw 32-byte or 64-character hex key file with mode `0600`, for example:
+The encryption master key is not stored in PostgreSQL. Every Kestrix process
+requires `KESTRIX_MASTER_KEY_PATH` to name a mounted or otherwise provisioned
+raw 32-byte or 64-character hex key file with mode `0600`; there is no OS
+keyring or `secret-tool` fallback. For a host-run server, for example:
 
-```yaml
-master_key_path: /run/secrets/kestrix_master_key
+```bash
+export KESTRIX_MASTER_KEY_PATH=/run/secrets/kestrix_master_key
 ```
 
-Back up the master key securely before creating credentials. Losing it makes
-the ciphertext unrecoverable. Rotate the key using a versioned key provider;
-credential data is rewrapped without returning plaintext through the API.
+For Compose deployments, set the same `KESTRIX_MASTER_KEY_PATH` to an absolute
+host path. Compose mounts that file read-only at the same path inside the
+container. Back up the master key securely before creating credentials. Losing
+or replacing it makes existing ciphertext unrecoverable.
 
 ## Providers
 

@@ -62,9 +62,10 @@ clear an optional credential explicitly. Do not place userinfo, tokens, or
 passwords in `repo_url`.
 
 The encryption master key is separate from PostgreSQL. Mount a mode-`0600`
-32-byte raw or 64-character hex key and set `master_key_path` in the Kestrix
-configuration. Back it up separately; losing it makes encrypted credentials
-unrecoverable.
+32-byte raw or 64-character hex key and set `KESTRIX_MASTER_KEY_PATH` to that
+file. Compose deployments use the same absolute path as the bind-mount source
+and the path visible to Kestrix inside the container. Back it up separately;
+losing it makes encrypted credentials unrecoverable.
 
 ## Pipeline repository semantics
 
@@ -138,8 +139,8 @@ run becomes terminal or is canceled.
 - **Credential revoked or unavailable:** rotate/reactivate the credential and
   retry. A cache hit still performs current credential resolution and a remote
   refresh.
-- **Master key unavailable:** restore the separately backed-up key at
-  `master_key_path`; ciphertext cannot be recovered from PostgreSQL alone.
+- **Master key unavailable:** set `KESTRIX_MASTER_KEY_PATH` to the separately
+  backed-up key file; ciphertext cannot be recovered from PostgreSQL alone.
 - **Cache directory rejected:** ensure it is a writable directory for the
   service account. Kestrix enforces private permissions and positive age/size
   limits.

@@ -9,6 +9,20 @@ make ui-dev   # starts the frontend dev server (http://localhost:3000)
 Projects are managed explicitly through the project API or UI. Starting the
 server with a pipeline directory does not create a project automatically.
 
+Before starting a host-run server, provide its separately managed credential
+master-key file (mode `0600`):
+
+```bash
+export KESTRIX_MASTER_KEY_PATH=/home/you/.kestrix/master.key
+make dev
+```
+
+Alternatively, put that path in `.env`; `make dev` and `make dev-all` load the
+file automatically.
+
+For Compose, use the same absolute `KESTRIX_MASTER_KEY_PATH`; the service
+mounts it read-only at that path inside the container.
+
 ## Database profiles
 
 Local development uses PostgreSQL database `kestrix_local` on host port `5433`
