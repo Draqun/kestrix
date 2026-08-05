@@ -23,7 +23,12 @@ AND the project name SHALL be used as the pipeline identifier
 
 ### Requirement: Repository Declaration (implemented)
 
-A project SHALL declare one or more **ci_repo** blocks, each representing a source repository (or subdirectory in a monorepo). Each repo SHALL have a name (label) and a path.
+A project SHALL declare one or more **ci_repo** blocks, each representing a
+source repository or subdirectory in a monorepo. A local repository SHALL
+define exactly one `path`. A remote repository SHALL define exactly one `url`
+and SHALL define a non-empty `ref` identifying a branch, tag, or commit. A
+repository MAY define `credential_ref` for private Git transport. Credential
+values SHALL NOT be embedded in URLs or stored in HCL.
 
 #### Scenario: Declare a monorepo subpath
 
@@ -31,6 +36,50 @@ A project SHALL declare one or more **ci_repo** blocks, each representing a sour
 WHEN a user writes ci_repo "auth" { path = "src/auth" type = "subpath" }
 THEN the system SHALL register "auth" as a repository with path "src/auth"
 AND the type "subpath" SHALL indicate a local directory within a monorepo
+```
+
+#### Scenario: Local monorepo subdirectory
+
+- **WHEN** a `ci_repo` declaration contains `path = "services/api"`
+- **THEN** Kestrix SHALL resolve the repository from the local project checkout
+- **AND** SHALL use `services/api` as the repository working directory
+
+#### Scenario: Remote repository declaration
+
+- **WHEN** a `ci_repo` declaration contains `url = "ssh://git@example.test/team/auth.git"`, `ref = "v2.1.0"`, and `credential_ref = "build-auth"`
+- **THEN** Kestrix SHALL acquire that Git source before executing dependent tasks
+- **AND** SHALL use the requested tag
+- **AND** SHALL expose only the logical repository name and non-secret source metadata to the run
+
+#### Scenario: Invalid repository declaration
+
+- **WHEN** a `ci_repo` declaration contains neither `path` nor `url`, or contains both
+- **THEN** validation SHALL fail with an actionable declaration error
+- **AND** Kestrix SHALL not start the pipeline
+
+#### Scenario: Declare a remote repository
+
+```
+WHEN a user writes ci_repo "auth" { url = "ssh://git@example.test/team/auth.git" ref = "v2.1.0" }
+THEN the system SHALL accept the declaration
+AND the source acquisition SHALL use the requested ref
+AND the run SHALL record the resolved commit SHA
+```
+
+#### Scenario: Missing remote ref
+
+```
+WHEN a remote ci_repo defines url but omits ref or sets it to an empty value
+THEN validation SHALL fail with an actionable error
+AND Kestrix SHALL not start the pipeline
+```
+
+#### Scenario: Embedded credentials
+
+```
+WHEN a repository URL contains a password, token, or unsupported userinfo
+THEN validation SHALL reject the declaration
+AND the error SHALL redact sensitive URL components
 ```
 
 ### Requirement: Task Declaration (implemented)
