@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,19 @@ import (
 )
 
 type failingMaintenanceSessions struct{ *testSourceSessions }
+
+func validMasterKeyPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master.key")
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func (f *failingMaintenanceSessions) Maintain(context.Context) error {
 	return errors.New("maintenance failed")
@@ -29,6 +43,36 @@ func TestNewServerERequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestNewServerERequiresExplicitMasterKeyPath(t *testing.T) {
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid"})
+	if err == nil || server != nil || !strings.Contains(err.Error(), "KESTRIX_MASTER_KEY_PATH") {
+		t.Fatalf("server=%v error=%v, want missing master-key path error", server, err)
+	}
+}
+
+func TestNewServerERejectsInvalidMasterKeyBeforeDatabase(t *testing.T) {
+	called := false
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		called = true
+		return nil, nil, errors.New("should not connect")
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	path := filepath.Join(t.TempDir(), "master.key")
+	secret := "not-a-master-key"
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: path})
+	if err == nil || server != nil || called {
+		t.Fatalf("server=%v error=%v database called=%t", server, err, called)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("startup error leaked key material: %v", err)
+	}
+}
+
 func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 	old := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
@@ -36,7 +80,7 @@ func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 	}
 	t.Cleanup(func() { newPGStores = old })
 
-	server, err := NewServerE(Config{DatabaseURL: "postgres://user:secret@example.invalid/db?sslmode=disable"})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://user:secret@example.invalid/db?sslmode=disable", MasterKeyPath: validMasterKeyPath(t)})
 	if err == nil || server != nil {
 		t.Fatalf("server=%v error=%v, want startup failure", server, err)
 	}
@@ -63,7 +107,7 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 	t.Cleanup(func() { newPGStores = old })
 
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid"})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil {
 		t.Fatalf("NewServerE: %v", err)
 	}
@@ -90,13 +134,13 @@ func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
 	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) {
 		return nil, errors.New("cache failed")
 	}
-	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid"}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
+	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
 		t.Fatalf("server=%v error=%v", server, err)
 	}
 
 	manager := &failingMaintenanceSessions{testSourceSessions: &testSourceSessions{}}
 	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) { return manager, nil }
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid"})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil || server.sourceSessions != manager {
 		t.Fatalf("server=%v error=%v", server, err)
 	}

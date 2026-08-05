@@ -26,16 +26,15 @@ var (
 
 // Config is the top-level configuration.
 type Config struct {
-	ListenAddr    string            `yaml:"listen_addr"`
-	DatabaseURL   string            `yaml:"database_url"`
-	MasterKeyPath string            `yaml:"master_key_path"`
-	Branch        string            `yaml:"default_branch"`
-	Pipeline      PipelineConfig    `yaml:"pipeline"`
-	Webhook       WebhookConfig     `yaml:"webhook"`
-	Dispatch      DispatchConfig    `yaml:"dispatch"`
-	Docker        DockerConfig      `yaml:"docker"`
-	Runner        RunnerConfig      `yaml:"runner"`
-	SourceCache   SourceCacheConfig `yaml:"source_cache"`
+	ListenAddr  string            `yaml:"listen_addr"`
+	DatabaseURL string            `yaml:"database_url"`
+	Branch      string            `yaml:"default_branch"`
+	Pipeline    PipelineConfig    `yaml:"pipeline"`
+	Webhook     WebhookConfig     `yaml:"webhook"`
+	Dispatch    DispatchConfig    `yaml:"dispatch"`
+	Docker      DockerConfig      `yaml:"docker"`
+	Runner      RunnerConfig      `yaml:"runner"`
+	SourceCache SourceCacheConfig `yaml:"source_cache"`
 
 	sourceCacheDirectorySet bool
 	sourceCacheMaxAgeSet    bool

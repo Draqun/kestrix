@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -55,7 +56,11 @@ func testPG(t *testing.T) *PGStore {
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	pg.SetCredentialMasterKeyProvider(credentials.StaticMasterKeyProvider{Version: 1, Keys: map[int][]byte{1: key}})
+	keyPath := filepath.Join(t.TempDir(), "master.key")
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pg.SetCredentialMasterKeyProvider(credentials.FileMasterKeyProvider{Path: keyPath, Version: 1})
 	return pg
 }
 

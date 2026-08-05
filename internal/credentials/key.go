@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -63,45 +62,6 @@ func (p FileMasterKeyProvider) Key(_ int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: read master key: %v", ErrMasterKeyUnavailable, err)
 	}
 	return parseKey(data)
-}
-
-// OSKeyringProvider uses the standard secret-tool CLI when available. The
-// provider can be injected with Lookup in tests or by another OS integration.
-type OSKeyringProvider struct {
-	Service string
-	Account string
-	Version int
-	Lookup  func(service, account string) ([]byte, error)
-}
-
-func (p OSKeyringProvider) Current() (int, []byte, error) {
-	key, err := p.Key(p.Version)
-	return p.Version, key, err
-}
-
-func (p OSKeyringProvider) Key(_ int) ([]byte, error) {
-	service, account := p.Service, p.Account
-	if service == "" {
-		service = "kestrix"
-	}
-	if account == "" {
-		account = "master-key"
-	}
-	if p.Lookup != nil {
-		key, err := p.Lookup(service, account)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrMasterKeyUnavailable, err)
-		}
-		return parseKey(key)
-	}
-	if _, err := exec.LookPath("secret-tool"); err != nil {
-		return nil, fmt.Errorf("%w: OS keyring secret-tool is unavailable", ErrMasterKeyUnavailable)
-	}
-	out, err := exec.Command("secret-tool", "lookup", "service", service, "account", account).Output()
-	if err != nil {
-		return nil, fmt.Errorf("%w: lookup OS keyring: %v", ErrMasterKeyUnavailable, err)
-	}
-	return parseKey(out)
 }
 
 func parseKey(data []byte) ([]byte, error) {

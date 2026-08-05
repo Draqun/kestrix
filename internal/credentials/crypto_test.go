@@ -99,22 +99,23 @@ func TestKeyProvidersAndUnavailableKeys(t *testing.T) {
 	if _, err := file.Key(1); err != nil {
 		t.Fatal(err)
 	}
-	keyring := OSKeyringProvider{Lookup: func(string, string) ([]byte, error) { return key, nil }}
-	if _, _, err := keyring.Current(); err != nil {
-		t.Fatal(err)
-	}
 	if _, _, err := (StaticMasterKeyProvider{Version: 1, Keys: map[int][]byte{}}).Current(); err == nil {
 		t.Fatal("expected unavailable key")
 	}
 	if _, err := (FileMasterKeyProvider{Path: dir + "/missing", Version: 1}).Key(1); err == nil {
 		t.Fatal("expected missing file error")
 	}
-	badRing := OSKeyringProvider{Lookup: func(string, string) ([]byte, error) { return nil, os.ErrNotExist }}
-	if _, err := badRing.Key(1); err == nil {
-		t.Fatal("expected keyring lookup error")
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := (OSKeyringProvider{}).Key(1); err == nil {
-		t.Fatal("expected unavailable default keyring")
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Key(1); err == nil {
+		t.Fatal("expected unreadable file error")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := parseKey([]byte("not-a-key")); err == nil {
 		t.Fatal("expected invalid key error")

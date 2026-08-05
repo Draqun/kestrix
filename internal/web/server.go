@@ -177,17 +177,22 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, nil, fmt.Errorf("database URL is required")
 	}
+	if cfg.MasterKeyPath == "" {
+		return nil, nil, fmt.Errorf("credential master key unavailable: KESTRIX_MASTER_KEY_PATH is required")
+	}
+	provider := credentials.FileMasterKeyProvider{Path: cfg.MasterKeyPath, Version: 1}
+	if _, _, err := provider.Current(); err != nil {
+		return nil, nil, fmt.Errorf("validate KESTRIX_MASTER_KEY_PATH: %w", err)
+	}
 	projectStore, runStore, err := newPGStores(cfg.DatabaseURL)
 	if err != nil {
 		message := strings.ReplaceAll(err.Error(), cfg.DatabaseURL, "[redacted database URL]")
 		return nil, nil, fmt.Errorf("initialize PostgreSQL: %s", message)
 	}
-	if cfg.MasterKeyPath != "" {
-		if setter, ok := projectStore.(interface {
-			SetCredentialMasterKeyProvider(credentials.MasterKeyProvider)
-		}); ok {
-			setter.SetCredentialMasterKeyProvider(credentials.FileMasterKeyProvider{Path: cfg.MasterKeyPath, Version: 1})
-		}
+	if setter, ok := projectStore.(interface {
+		SetCredentialMasterKeyProvider(credentials.MasterKeyProvider)
+	}); ok {
+		setter.SetCredentialMasterKeyProvider(provider)
 	}
 	log.Printf("connected to PostgreSQL")
 	return projectStore, runStore, nil

@@ -71,6 +71,9 @@ func currentKeyVersion(provider credentials.MasterKeyProvider) ([]byte, int, err
 }
 
 func (s *PGStore) RotateCredential(ref string, input domain.CredentialInput) (domain.CredentialMetadata, error) {
+	if s.masterKeys == nil {
+		return domain.CredentialMetadata{}, credentials.ErrMasterKeyUnavailable
+	}
 	old, err := s.GetCredentialMetadata(ref)
 	if err != nil {
 		return domain.CredentialMetadata{}, err

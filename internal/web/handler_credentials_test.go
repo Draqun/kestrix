@@ -184,20 +184,26 @@ type combinedCredentialStore struct {
 	*mocks.MockProjectStore
 	*mocks.MockRunStore
 	*fakeCredentialStore
+	provider credentials.MasterKeyProvider
 }
 
-func (c *combinedCredentialStore) SetCredentialMasterKeyProvider(credentials.MasterKeyProvider) {}
+func (c *combinedCredentialStore) SetCredentialMasterKeyProvider(provider credentials.MasterKeyProvider) {
+	c.provider = provider
+}
 
 func TestServerWiresCredentialStoreAndMasterKeyPath(t *testing.T) {
 	combined := &combinedCredentialStore{MockProjectStore: &mocks.MockProjectStore{}, MockRunStore: &mocks.MockRunStore{}, fakeCredentialStore: &fakeCredentialStore{items: map[string]domain.CredentialMetadata{}}}
 	old := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
 	t.Cleanup(func() { newPGStores = old })
-	s, err := NewServerE(Config{DatabaseURL: "postgres://test", MasterKeyPath: "/run/secrets/key"})
+	s, err := NewServerE(Config{DatabaseURL: "postgres://test", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.credentialResolver() == nil {
 		t.Fatal("credential resolver not wired")
+	}
+	if combined.provider == nil {
+		t.Fatal("master-key provider was not wired")
 	}
 }

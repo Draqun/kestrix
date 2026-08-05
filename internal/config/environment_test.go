@@ -9,6 +9,7 @@ import (
 func TestLoadEnvironmentUsesCanonicalNamesOnly(t *testing.T) {
 	env := LoadEnvironment([]string{
 		"KESTRIX_WEBHOOK_SECRET=canonical-secret",
+		"KESTRIX_MASTER_KEY_PATH=/run/secrets/kestrix_master_key",
 		"DATABASE_URL=postgres://example",
 		"UNRELATED=value",
 	})
@@ -16,11 +17,21 @@ func TestLoadEnvironmentUsesCanonicalNamesOnly(t *testing.T) {
 	if env.WebhookSecret != "canonical-secret" {
 		t.Fatalf("typed webhook secret = %q", env.WebhookSecret)
 	}
+	if env.MasterKeyPath != "/run/secrets/kestrix_master_key" {
+		t.Fatalf("typed master-key path = %q", env.MasterKeyPath)
+	}
 	if env.ListenAddr != "" {
 		t.Fatalf("unexpected address from legacy environment: %q", env.ListenAddr)
 	}
-	if got := env.Prefixed(Prefix); !reflect.DeepEqual(got, []string{"KESTRIX_WEBHOOK_SECRET=canonical-secret"}) {
+	if got := env.Prefixed(Prefix); !reflect.DeepEqual(got, []string{"KESTRIX_MASTER_KEY_PATH=/run/secrets/kestrix_master_key", "KESTRIX_WEBHOOK_SECRET=canonical-secret"}) {
 		t.Fatalf("prefixed values = %#v", got)
+	}
+}
+
+func TestLoadEnvironmentAllowsEmptyMasterKeyPathForStartupValidation(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_MASTER_KEY_PATH="})
+	if env.MasterKeyPath != "" {
+		t.Fatalf("master-key path = %q, want empty", env.MasterKeyPath)
 	}
 }
 

@@ -253,7 +253,7 @@ func cmdServe(args []string) {
 		PipelineDir:   cfg.Pipeline.Dir,
 		StaticDir:     *staticDir,
 		DatabaseURL:   *dbURL,
-		MasterKeyPath: cfg.MasterKeyPath,
+		MasterKeyPath: env.MasterKeyPath,
 		Branch:        cfg.Branch,
 		SourceCache: web.SourceCacheConfig{
 			Directory: cfg.SourceCache.Directory,

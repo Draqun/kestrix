@@ -39,7 +39,7 @@ func NewPG(databaseURL string) (*PGStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &PGStore{db: db, masterKeys: credentials.OSKeyringProvider{}}, nil
+	return &PGStore{db: db}, nil
 }
 
 func migrate(db *sql.DB) error {

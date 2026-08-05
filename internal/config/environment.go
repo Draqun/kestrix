@@ -29,6 +29,7 @@ type Environment struct {
 	GitLabToken     string
 	TestDatabaseURL string
 	DatabaseURL     string
+	MasterKeyPath   string
 	Docker          DockerEnvironment
 	SourceCache     SourceCacheEnvironment
 
@@ -115,6 +116,7 @@ func LoadEnvironment(environ []string) *Environment {
 		GitLabToken:     values[Prefix+"GITLAB_TOKEN"],
 		TestDatabaseURL: values[Prefix+"TEST_DATABASE_URL"],
 		DatabaseURL:     values["DATABASE_URL"],
+		MasterKeyPath:   values[Prefix+"MASTER_KEY_PATH"],
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],

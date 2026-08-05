@@ -135,6 +135,24 @@ func TestLoadMissing(t *testing.T) {
 	}
 }
 
+func TestMasterKeyPathIsNotReadFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("master_key_path: /legacy/key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := marshalYAML(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "master_key_path") {
+		t.Fatalf("YAML still persisted master_key_path: %s", data)
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
