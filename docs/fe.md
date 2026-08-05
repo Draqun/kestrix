@@ -24,6 +24,12 @@ inline creation without resetting project fields, and links to Settings for
 rotation and revocation. Credential type selection uses MUI `Select` and
 `MenuItem`, so it works with pointer and keyboard input.
 
+The shared credential dialog shows required/optional state and concise helper
+text for every field. Focusable information controls add detailed pointer,
+keyboard, touch, and assistive-technology guidance. The dialog also makes the
+security boundary explicit: encrypted, write-only repository credentials are
+used only for Git source acquisition and are not task or deployment secrets.
+
 ## Tech Stack
 
 | Layer | Choice |

@@ -6,27 +6,27 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControl,
-  InputLabel,
   MenuItem,
-  Select,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material';
 import { createCredential, rotateCredential } from '../../api/client.js';
 import {
   CREDENTIAL_TYPES,
   changeCredentialType,
+  credentialFieldDescriptors,
   credentialFormDefaults,
   credentialPayload,
+  redactCredentialError,
 } from '../../lib/credentialForm.js';
+import CredentialField from './CredentialField.jsx';
 
 export default function CredentialFormDialog({ open, credential, onClose, onSuccess }) {
   const [form, setForm] = useState(() => credentialFormDefaults(credential));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const editing = Boolean(credential?.ref);
+  const descriptors = credentialFieldDescriptors(form.type, { editing });
 
   useEffect(() => {
     if (open) {
@@ -59,64 +59,52 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
       setForm(credentialFormDefaults());
       onClose?.();
     } catch (cause) {
-      setError(cause.message || 'Credential operation failed');
+      setError(redactCredentialError(cause.message, form));
     } finally {
       setBusy(false);
     }
   };
 
-  const field = (key, label, props = {}) => (
-    <TextField
-      label={label}
-      value={form[key]}
-      onChange={update(key)}
-      size="small"
-      fullWidth
-      {...props}
-    />
-  );
-
   return (
-    <Dialog open={Boolean(open)} onClose={close} maxWidth="sm" fullWidth>
+    <Dialog
+      open={Boolean(open)}
+      onClose={close}
+      maxWidth="sm"
+      fullWidth
+      slotProps={{
+        paper: {
+          sx: {
+            m: { xs: 2, sm: 4 },
+            maxHeight: { xs: 'calc(100% - 32px)', sm: 'calc(100% - 64px)' },
+          },
+        },
+      }}
+    >
       <DialogTitle>{editing ? `Rotate ${credential.name}` : 'New credential'}</DialogTitle>
-      <DialogContent>
+      <DialogContent sx={{ px: { xs: 2, sm: 3 } }}>
         <form id="credential-form" onSubmit={submit}>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <TypographyHint />
+            <CredentialScopeNotice />
             {error && <Alert severity="error">{error}</Alert>}
-            {field('name', 'Display name', { required: true, autoFocus: true })}
-            <FormControl size="small" fullWidth>
-              <InputLabel id="credential-type-label">Type</InputLabel>
-              <Select
-                labelId="credential-type-label"
-                label="Type"
-                value={form.type}
-                onChange={(event) => setForm(current => changeCredentialType(current, event.target.value))}
+            {descriptors.map(descriptor => (
+              <CredentialField
+                key={descriptor.key}
+                descriptor={descriptor}
+                value={form[descriptor.key]}
+                onChange={descriptor.key === 'type'
+                  ? (event) => setForm(current => changeCredentialType(current, event.target.value))
+                  : update(descriptor.key)}
+                autoFocus={descriptor.key === 'name'}
               >
-                {CREDENTIAL_TYPES.map(type => (
+                {descriptor.key === 'type' && CREDENTIAL_TYPES.map(type => (
                   <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>
                 ))}
-              </Select>
-            </FormControl>
-            {field('provider', 'Provider (optional)', { placeholder: 'github, gitlab, bitbucket' })}
-            {field('host', 'Host (optional)', { placeholder: 'git.example.com' })}
-            {form.type === 'token' && field('token', editing ? 'Replacement token' : 'Token', { type: 'password', required: true })}
-            {form.type === 'basic' && (
-              <>
-                {field('username', 'Username', { required: true })}
-                {field('password', editing ? 'Replacement password' : 'Password', { type: 'password', required: true })}
-              </>
-            )}
-            {form.type === 'ssh' && (
-              <>
-                {field('private_key', editing ? 'Replacement private key' : 'Private key', { multiline: true, minRows: 3, required: true })}
-                {field('known_hosts', 'Known hosts (optional)', { multiline: true, minRows: 2 })}
-              </>
-            )}
+              </CredentialField>
+            ))}
           </Stack>
         </form>
       </DialogContent>
-      <DialogActions>
+      <DialogActions sx={{ flexWrap: 'wrap', gap: 0.5, px: { xs: 2, sm: 3 } }}>
         <Button onClick={close} disabled={busy}>Cancel</Button>
         <Button type="submit" form="credential-form" variant="contained" disabled={busy || !form.name.trim()}>
           {busy ? 'Saving…' : editing ? 'Rotate credential' : 'Create credential'}
@@ -126,10 +114,19 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
   );
 }
 
-function TypographyHint() {
+function CredentialScopeNotice() {
   return (
-    <Typography variant="body2" color="text.secondary">
-      Secrets are write-only. Kestrix stores them encrypted and returns metadata only.
-    </Typography>
+    <Alert severity="info" sx={{ '& .MuiAlert-message': { minWidth: 0 } }}>
+      <Stack spacing={0.75}>
+        <Typography variant="body2">
+          Credential secrets are encrypted and write-only. Kestrix returns metadata only.
+        </Typography>
+        <Typography variant="body2">
+          Repository credentials authenticate Git source acquisition (clone, fetch, and ref
+          resolution) only. They are not exposed to tasks or deployments; configure deployment
+          secrets separately.
+        </Typography>
+      </Stack>
+    </Alert>
   );
 }

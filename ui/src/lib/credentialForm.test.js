@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   changeCredentialType,
+  credentialFieldDescriptors,
   credentialFormDefaults,
   credentialPayload,
   normalizeCredentialType,
+  redactCredentialError,
 } from './credentialForm.js';
 
 test('credential form defaults normalize unsupported types and omit stored secrets', () => {
@@ -45,4 +47,29 @@ test('credential payload includes common metadata and only selected type fields'
     name: 'Bitbucket', provider: 'bitbucket', host: 'bitbucket.org', type: 'ssh',
     private_key: 'key', known_hosts: 'hosts',
   });
+  assert.deepEqual(credentialPayload({ ...common, type: 'token', token: 'token' }), {
+    name: 'Bitbucket', provider: 'bitbucket', host: 'bitbucket.org', type: 'token',
+    username: 'git-user', token: 'token',
+  });
+});
+
+test('field descriptors track type-specific requiredness and rotation labels', () => {
+  const fields = credentialFieldDescriptors('basic', { editing: true });
+  assert.deepEqual(fields.map(field => [field.key, field.required]), [
+    ['name', true], ['type', true], ['provider', false], ['host', false],
+    ['username', true], ['password', true],
+  ]);
+  assert.equal(fields.find(field => field.key === 'password').label, 'Replacement password');
+  assert.ok(fields.every(field => field.helperText && field.tooltip));
+});
+
+test('credential errors redact every submitted secret value', () => {
+  const form = {
+    token: 'token-secret', password: 'password-secret', private_key: 'private-key-secret',
+  };
+  const message = redactCredentialError(
+    'Rejected token-secret, password-secret, and private-key-secret',
+    form,
+  );
+  assert.equal(message, 'Rejected [REDACTED], [REDACTED], and [REDACTED]');
 });
