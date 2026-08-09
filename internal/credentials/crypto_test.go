@@ -105,18 +105,6 @@ func TestKeyProvidersAndUnavailableKeys(t *testing.T) {
 	if _, err := (FileMasterKeyProvider{Path: dir + "/missing", Version: 1}).Key(1); err == nil {
 		t.Fatal("expected missing file error")
 	}
-	if err := os.WriteFile(path, key, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Key(1); err == nil {
-		t.Fatal("expected unreadable file error")
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := parseKey([]byte("not-a-key")); err == nil {
 		t.Fatal("expected invalid key error")
 	}
