@@ -13,6 +13,12 @@ import (
 	"kestrix/internal/source"
 )
 
+var (
+	sourceAbsPath   = filepath.Abs
+	sourceMkdirTemp = os.MkdirTemp
+	sourceChmod     = os.Chmod
+)
+
 // prepareSources acquires all repositories before DAG resolution. Remote
 // sources share a private per-run root; local sources retain their existing
 // checkout paths and are only validated.
@@ -27,7 +33,7 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 	if baseDir == "" {
 		baseDir = "."
 	}
-	baseDir, err := filepath.Abs(baseDir)
+	baseDir, err := sourceAbsPath(baseDir)
 	if err != nil {
 		return model.Project{}, func() {}, fmt.Errorf("resolve source base directory: %w", err)
 	}
@@ -42,11 +48,11 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 			if repo.URL == "" {
 				continue
 			}
-			workspace, err = os.MkdirTemp("", "kestrix-source-")
+			workspace, err = sourceMkdirTemp("", "kestrix-source-")
 			if err != nil {
 				return model.Project{}, func() {}, fmt.Errorf("create source workspace: %w", err)
 			}
-			if err := os.Chmod(workspace, 0o700); err != nil {
+			if err := sourceChmod(workspace, 0o700); err != nil {
 				_ = os.RemoveAll(workspace)
 				return model.Project{}, func() {}, fmt.Errorf("secure source workspace: %w", err)
 			}
@@ -128,11 +134,11 @@ func repoDirFor(workDir string, repo model.Repo, paths map[string]string) (strin
 }
 
 func pathWithin(root, path string) bool {
-	root, err := filepath.Abs(root)
+	root, err := sourceAbsPath(root)
 	if err != nil {
 		return false
 	}
-	path, err = filepath.Abs(path)
+	path, err = sourceAbsPath(path)
 	if err != nil {
 		return false
 	}

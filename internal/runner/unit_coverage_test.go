@@ -142,6 +142,36 @@ func TestConcreteExecutorsWithFakeCommand(t *testing.T) {
 	}
 }
 
+func TestRunnerRemotePreparationAndExternalDockerBranches(t *testing.T) {
+	installFakeCommands(t, false)
+	project := remoteProject()
+	changed := map[string]bool{"app": true}
+	failedSources := Options{SourceAcquirer: &recordingAcquirer{fail: true}}
+	if _, err := Run(context.Background(), project, changed, failedSources); err == nil {
+		t.Fatal("Run should surface source preparation error")
+	}
+	if _, err := RunGitLabRunner(context.Background(), project, nil, failedSources, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
+		t.Fatal("RunGitLabRunner should surface source preparation error")
+	}
+	if _, err := RunOne(context.Background(), project, "build", failedSources); err == nil {
+		t.Fatal("RunOne should surface source preparation error")
+	}
+	executor := &PipelineExecutor{Mode: "gitlab-runner", GenerateYAML: func(model.Project, []dag.Node) string { return "yaml" }}
+	if _, err := executor.Run(context.Background(), project, changed, domain.RunnerOptions{SourceAcquirer: &recordingAcquirer{fail: true}}); err == nil {
+		t.Fatal("PipelineExecutor should surface source preparation error")
+	}
+
+	root := t.TempDir()
+	external := t.TempDir()
+	docker := &DockerExecutor{WorkDir: root, Repos: map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}}
+	_, err := docker.RunTask(context.Background(), model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "app", Script: "true"}}, Options{
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, RepoPaths: map[string]string{"app": external},
+	})
+	if err != nil {
+		t.Fatalf("external Docker source branch: %v", err)
+	}
+}
+
 func TestConcreteExecutorsErrors(t *testing.T) {
 	root := t.TempDir()
 	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
@@ -174,23 +204,23 @@ func TestConcreteExecutorsErrors(t *testing.T) {
 func TestRunDockerUnitBranches(t *testing.T) {
 	installFakeCommands(t, false)
 	changed := map[string]bool{"repo": true}
-	results, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: t.TempDir()})
+	results, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true})
 	if err != nil || len(results) != 1 || results[0].Status != "passed" {
 		t.Fatalf("Run results=%+v err=%v", results, err)
 	}
 	badProject := runnerProject("run")
 	badProject.Tasks[0].Trigger = "repo.missing.changed"
-	if _, err := Run(context.Background(), badProject, nil, Options{}); err == nil {
+	if _, err := Run(context.Background(), badProject, nil, Options{SourcesPrepared: true}); err == nil {
 		t.Fatal("expected validation error")
 	}
-	if _, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: filepath.Join(t.TempDir(), "missing")}); err == nil {
+	if _, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: filepath.Join(t.TempDir(), "missing"), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected missing workdir error")
 	}
 	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: file}); err == nil {
+	if _, err := Run(context.Background(), runnerProject("run"), changed, Options{WorkDir: file, SourcesPrepared: true}); err == nil {
 		t.Fatal("expected non-directory workdir error")
 	}
 	project := runnerProject("run")
@@ -198,7 +228,7 @@ func TestRunDockerUnitBranches(t *testing.T) {
 		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo"}},
 		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: model.ExecuteSpec{Repo: "repo"}},
 	}
-	if _, err := Run(context.Background(), project, changed, Options{WorkDir: t.TempDir()}); err == nil {
+	if _, err := Run(context.Background(), project, changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected dependency validation/order error")
 	}
 }
@@ -207,23 +237,23 @@ func TestRunLocalUnitBranches(t *testing.T) {
 	installFakeCommands(t, false)
 	changed := map[string]bool{"repo": true}
 	project := runnerProject("run")
-	results, err := RunLocal(context.Background(), project, changed, Options{})
+	results, err := RunLocal(context.Background(), project, changed, Options{SourcesPrepared: true})
 	if err != nil || len(results) != 1 || results[0].Status != "passed" {
 		t.Fatalf("default workdir results=%+v err=%v", results, err)
 	}
 	bad := runnerProject("run")
 	bad.Tasks[0].Trigger = "repo.missing.changed"
-	if _, err := RunLocal(context.Background(), bad, changed, Options{}); err == nil {
+	if _, err := RunLocal(context.Background(), bad, changed, Options{SourcesPrepared: true}); err == nil {
 		t.Fatal("expected validation error")
 	}
-	if _, err := RunLocal(context.Background(), project, changed, Options{WorkDir: filepath.Join(t.TempDir(), "missing")}); err == nil {
+	if _, err := RunLocal(context.Background(), project, changed, Options{WorkDir: filepath.Join(t.TempDir(), "missing"), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected missing workdir error")
 	}
 	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RunLocal(context.Background(), project, changed, Options{WorkDir: file}); err == nil {
+	if _, err := RunLocal(context.Background(), project, changed, Options{WorkDir: file, SourcesPrepared: true}); err == nil {
 		t.Fatal("expected non-directory workdir error")
 	}
 	untriggered := runnerProject("run")
@@ -231,12 +261,12 @@ func TestRunLocalUnitBranches(t *testing.T) {
 		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo"}},
 		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: model.ExecuteSpec{Repo: "repo"}},
 	}
-	if _, err := RunLocal(context.Background(), untriggered, changed, Options{WorkDir: t.TempDir()}); err == nil {
+	if _, err := RunLocal(context.Background(), untriggered, changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected ordering error")
 	}
 	gitRepo := runnerProject("run")
 	gitRepo.Repos[0].Kind = "git"
-	if _, err := RunLocal(context.Background(), gitRepo, changed, Options{WorkDir: t.TempDir()}); err == nil {
+	if _, err := RunLocal(context.Background(), gitRepo, changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected repository setup error")
 	}
 }
@@ -244,17 +274,17 @@ func TestRunLocalUnitBranches(t *testing.T) {
 func TestRunOneUnitBranches(t *testing.T) {
 	installFakeCommands(t, false)
 	project := runnerProject("run")
-	if _, err := RunOne(context.Background(), project, "missing", Options{}); err == nil {
+	if _, err := RunOne(context.Background(), project, "missing", Options{SourcesPrepared: true}); err == nil {
 		t.Fatal("expected task-not-found error")
 	}
 	gitRepo := runnerProject("run")
 	gitRepo.Repos[0].Kind = "git"
-	if _, err := RunOne(context.Background(), gitRepo, "task", Options{WorkDir: t.TempDir()}); err == nil {
+	if _, err := RunOne(context.Background(), gitRepo, "task", Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected repository setup error")
 	}
 	started, completed := false, false
 	result, err := RunOne(context.Background(), project, "task", Options{
-		WorkDir: t.TempDir(), OnTaskStart: func(string) { started = true }, OnTaskComplete: func(TaskResult) { completed = true },
+		WorkDir: t.TempDir(), SourcesPrepared: true, OnTaskStart: func(string) { started = true }, OnTaskComplete: func(TaskResult) { completed = true },
 	})
 	if err != nil || result.Status != "passed" || !started || !completed {
 		t.Fatalf("result=%+v started=%v completed=%v err=%v", result, started, completed, err)
@@ -262,7 +292,7 @@ func TestRunOneUnitBranches(t *testing.T) {
 
 	old := commandContext
 	installFakeCommands(t, true)
-	result, err = RunOne(context.Background(), project, "task", Options{WorkDir: t.TempDir()})
+	result, err = RunOne(context.Background(), project, "task", Options{WorkDir: t.TempDir(), SourcesPrepared: true})
 	if err == nil || result.Status != "failed" {
 		t.Fatalf("failed result=%+v err=%v", result, err)
 	}
@@ -333,12 +363,12 @@ func TestRunGitLabRunnerUnitBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := RunGitLabRunner(context.Background(), project, nodes, Options{}, func(model.Project, []dag.Node) string { return "yaml" })
+	results, err := RunGitLabRunner(context.Background(), project, nodes, Options{SourcesPrepared: true}, func(model.Project, []dag.Node) string { return "yaml" })
 	if err != nil || len(results) != 1 || results[0].Status != "passed" {
 		t.Fatalf("results=%+v err=%v", results, err)
 	}
 	bad := append(nodes, dag.Node{Task: model.Task{Name: "bad", DependsOn: []string{"missing"}}})
-	if _, err := RunGitLabRunner(context.Background(), project, bad, Options{WorkDir: t.TempDir()}, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
+	if _, err := RunGitLabRunner(context.Background(), project, bad, Options{WorkDir: t.TempDir(), SourcesPrepared: true}, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
 		t.Fatal("expected ordering error")
 	}
 }

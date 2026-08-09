@@ -474,7 +474,7 @@ func TestStaticRouterAndStoreFallback(t *testing.T) {
 	oldPG := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return ps, rs, nil }
 	t.Cleanup(func() { newPGStores = oldPG })
-	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake"})
+	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil {
 		t.Fatalf("initStores: %v", err)
 	}

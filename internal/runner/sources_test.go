@@ -233,3 +233,113 @@ func TestSourceSessionsUseIsolatedPathsAndPersistResolvedMetadata(t *testing.T) 
 		t.Fatalf("source session was not cleaned: %v", statErr)
 	}
 }
+
+func TestPrepareSourcesAlreadyPreparedAndCallbackFailure(t *testing.T) {
+	project := remoteProject()
+	opts := Options{SourcesPrepared: true}
+	got, cleanup, err := prepareSources(context.Background(), project, &opts)
+	if err != nil || got.Name != project.Name {
+		t.Fatalf("already prepared: project=%+v err=%v", got, err)
+	}
+	cleanup()
+
+	opts = Options{
+		SourceAcquirer: &recordingAcquirer{},
+		OnSourcesAcquired: func([]domain.AcquiredSource) error {
+			return errors.New("callback failed")
+		},
+		WorkDir: t.TempDir(),
+	}
+	_, cleanup, err = prepareSources(context.Background(), project, &opts)
+	if err == nil || err.Error() != "callback failed" {
+		t.Fatalf("callback error=%v", err)
+	}
+	cleanup()
+}
+
+func TestSourcePathHelpers(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "repo")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if !pathWithin(root, inside) || pathWithin(root, filepath.Join(root, "..", "outside")) {
+		t.Fatal("pathWithin returned unexpected result")
+	}
+	if got, err := repoDirFor(root, model.Repo{Name: "repo"}, map[string]string{"repo": inside}); err != nil || got != inside {
+		t.Fatalf("repoDirFor mapped path=%q err=%v", got, err)
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repoDirFor(root, model.Repo{Name: "repo"}, map[string]string{"repo": file}); err == nil {
+		t.Fatal("repoDirFor should reject a file")
+	}
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repoDirFor(root, model.Repo{Name: "repo", Path: "sub"}, nil); err != nil || got != filepath.Join(root, "sub") {
+		t.Fatalf("repoDirFor fallback=%q err=%v", got, err)
+	}
+
+	cleaned := false
+	cleanupWorkspace(&Options{WorkspaceCleanup: func() { cleaned = true }})
+	if !cleaned {
+		t.Fatal("workspace cleanup callback was not called")
+	}
+}
+
+func TestSourcePreparationErrorSeams(t *testing.T) {
+	oldAbs, oldTemp, oldChmod := sourceAbsPath, sourceMkdirTemp, sourceChmod
+	t.Cleanup(func() { sourceAbsPath, sourceMkdirTemp, sourceChmod = oldAbs, oldTemp, oldChmod })
+	sourceAbsPath = func(string) (string, error) { return "", errors.New("abs") }
+	if _, _, err := prepareSources(context.Background(), remoteProject(), &Options{WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("expected source base directory error")
+	}
+
+	sourceAbsPath = oldAbs
+	sourceMkdirTemp = func(string, string) (string, error) { return "", errors.New("temp") }
+	if _, _, err := prepareSources(context.Background(), remoteProject(), &Options{WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("expected source workspace error")
+	}
+
+	sourceMkdirTemp = oldTemp
+	sourceChmod = func(string, os.FileMode) error { return errors.New("chmod") }
+	if _, _, err := prepareSources(context.Background(), remoteProject(), &Options{WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("expected source workspace permissions error")
+	}
+
+	sourceChmod = oldChmod
+	manager := &recordingSessions{failAt: 1}
+	if _, _, err := prepareSources(context.Background(), remoteProject(), &Options{WorkDir: t.TempDir(), SourceSessions: manager}); err == nil {
+		t.Fatal("expected source session error")
+	}
+	if _, _, err := prepareSources(context.Background(), remoteProject(), &Options{WorkDir: t.TempDir(), SourceAcquirer: &recordingAcquirer{fail: true}}); err == nil {
+		t.Fatal("expected source acquisition error")
+	}
+}
+
+func TestSourcePathHelperErrors(t *testing.T) {
+	oldAbs := sourceAbsPath
+	t.Cleanup(func() { sourceAbsPath = oldAbs })
+	sourceAbsPath = func(string) (string, error) { return "", errors.New("abs") }
+	if pathWithin(".", ".") {
+		t.Fatal("pathWithin should reject root abs resolution errors")
+	}
+	calls := 0
+	sourceAbsPath = func(path string) (string, error) {
+		calls++
+		if calls == 2 {
+			return "", errors.New("abs")
+		}
+		return filepath.Abs(path)
+	}
+	if _, err := repoDirFor(".", model.Repo{Name: "repo"}, map[string]string{"repo": "any"}); err == nil {
+		t.Fatal("expected mapped repo stat error")
+	}
+	if pathWithin(".", ".") {
+		t.Fatal("pathWithin should reject abs resolution errors")
+	}
+}
