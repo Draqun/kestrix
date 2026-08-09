@@ -4,7 +4,7 @@ import { useColorMode } from '../context/ColorModeContext';
 import useKeyboardNav from '../hooks/useKeyboardNav';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon,
-  ListItemText, Box, Divider, IconButton, Chip, Tooltip, useMediaQuery,
+  ListItemText, Box, IconButton, Chip, Tooltip, useMediaQuery,
   BottomNavigation, BottomNavigationAction, Paper,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -22,12 +22,14 @@ import {
 import { getVersion } from '../api/client';
 
 const DRAWER_WIDTH = 260;
+const MINI_DRAWER_WIDTH = 72;
 
 const NAV_ITEMS = [
   { path: '/', label: 'Dashboard', icon: <DashboardIcon />, shortcut: 'g+d' },
   { path: '/projects', label: 'Projects', icon: <ProjectsIcon />, shortcut: 'g+r' },
   { path: '/pipelines', label: 'Pipelines', icon: <DagIcon />, shortcut: 'g+p' },
-  { path: '/webhooks', label: 'Webhook Logs', icon: <WebhookIcon />, shortcut: 'g+w' },
+  { path: '/webhooks', label: 'Webhook Logs', mobileLabel: 'Webhooks', icon: <WebhookIcon />, shortcut: 'g+w' },
+  { path: '/settings', label: 'Settings', icon: <SettingsIcon />, shortcut: 'g+s' },
 ];
 
 function isActive(location, path) {
@@ -63,6 +65,7 @@ export default function Layout({ children }) {
         <Tooltip key={item.path} title={`${item.label} (${item.shortcut})`} placement="right">
           <ListItem
             onClick={() => navigate(item.path)}
+            aria-current={isActive(location, item.path) ? 'page' : undefined}
             sx={{
               cursor: 'pointer',
               backgroundColor: isActive(location, item.path)
@@ -96,6 +99,7 @@ export default function Layout({ children }) {
             <IconButton
               color="inherit"
               edge="start"
+              aria-label="Toggle navigation drawer"
               onClick={() => setDrawerOpen(!drawerOpen)}
               sx={{ mr: 2 }}
             >
@@ -106,7 +110,12 @@ export default function Layout({ children }) {
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             Kestrix
           </Typography>
-          <IconButton color="inherit" onClick={toggleColorMode} sx={{ mr: 1 }}>
+          <IconButton
+            color="inherit"
+            aria-label={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}
+            onClick={toggleColorMode}
+            sx={{ mr: 1 }}
+          >
             {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
           </IconButton>
           <Chip
@@ -146,17 +155,6 @@ export default function Layout({ children }) {
                 <Box>{navList}</Box>
               </Tooltip>
             ) : navList}
-            {drawerOpen && (
-              <>
-                <Divider />
-                <List>
-                  <ListItem disabled>
-                    <ListItemIcon><SettingsIcon /></ListItemIcon>
-                    <ListItemText primary="Settings (coming soon)" />
-                  </ListItem>
-                </List>
-              </>
-            )}
           </Box>
         </Drawer>
       )}
@@ -190,8 +188,9 @@ export default function Layout({ children }) {
             {NAV_ITEMS.map((item) => (
               <BottomNavigationAction
                 key={item.path}
-                label={item.label}
+                label={item.mobileLabel || item.label}
                 icon={item.icon}
+                sx={{ minWidth: 0, px: 0.5 }}
               />
             ))}
           </BottomNavigation>

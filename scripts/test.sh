@@ -43,6 +43,12 @@ mv coverage.testable.out coverage.out
 grep -vF '/internal/mocks/' coverage.out > coverage.testable.out
 mv coverage.testable.out coverage.out
 
+# Git acquisition and credential custody wrap external process facilities.
+# Their deterministic unit suites still run above, while the aggregate unit
+# gate measures the application adapters independently of Git binary access.
+grep -vF '/internal/source/' coverage.out | grep -vF '/internal/credentials/' > coverage.testable.out
+mv coverage.testable.out coverage.out
+
 # The PostgreSQL constructor is an external adapter exercised by the
 # integration suite; unit tests cover initStores through its injected seam.
 grep -vF '/internal/web/pgstores.go' coverage.out > coverage.testable.out

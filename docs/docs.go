@@ -19,6 +19,26 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/dashboard": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Dashboard metrics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/generate": {
             "post": {
                 "consumes": [
@@ -161,18 +181,16 @@ const docTemplate = `{
                 "summary": "List configured projects",
                 "parameters": [
                     {
+                        "type": "integer",
                         "description": "Items per page (10, 25, 50, 100; default 25)",
                         "name": "limit",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer"
+                        "in": "query"
                     },
                     {
+                        "type": "integer",
                         "description": "Offset for pagination (default 0)",
                         "name": "offset",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer"
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -180,36 +198,7 @@ const docTemplate = `{
                         "description": "paginated project list",
                         "schema": {
                             "type": "object",
-                            "properties": {
-                                "items": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/store.ProjectConfig"
-                                    }
-                                },
-                                "pagination": {
-                                    "type": "object",
-                                    "properties": {
-                                        "total": {
-                                            "type": "integer"
-                                        },
-                                        "limit": {
-                                            "type": "integer"
-                                        },
-                                        "offset": {
-                                            "type": "integer"
-                                        },
-                                        "next": {
-                                            "type": "string",
-                                            "x-nullable": true
-                                        },
-                                        "prev": {
-                                            "type": "string",
-                                            "x-nullable": true
-                                        }
-                                    }
-                                }
-                            }
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -232,7 +221,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/store.ProjectConfig"
+                            "$ref": "#/definitions/domain.ProjectConfig"
                         }
                     }
                 ],
@@ -240,7 +229,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/store.ProjectConfig"
+                            "$ref": "#/definitions/domain.ProjectConfig"
                         }
                     }
                 }
@@ -268,7 +257,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/store.ProjectConfig"
+                            "$ref": "#/definitions/domain.ProjectConfig"
                         }
                     }
                 }
@@ -298,7 +287,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/store.ProjectConfig"
+                            "$ref": "#/definitions/domain.ProjectConfig"
                         }
                     }
                 ],
@@ -306,7 +295,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/store.ProjectConfig"
+                            "$ref": "#/definitions/domain.ProjectConfig"
                         }
                     }
                 }
@@ -376,7 +365,7 @@ const docTemplate = `{
                 "tags": [
                     "projects"
                 ],
-                "summary": "Save the editor pipeline file inside a project's pipeline directory",
+                "summary": "Reject writes to Git-owned registered pipeline content",
                 "parameters": [
                     {
                         "type": "string",
@@ -387,8 +376,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "405": {
+                        "description": "Method Not Allowed",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -456,18 +445,16 @@ const docTemplate = `{
                         "required": true
                     },
                     {
+                        "type": "integer",
                         "description": "Items per page (10, 25, 50, 100; default 25)",
                         "name": "limit",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer"
+                        "in": "query"
                     },
                     {
+                        "type": "integer",
                         "description": "Offset for pagination (default 0)",
                         "name": "offset",
-                        "in": "query",
-                        "required": false,
-                        "type": "integer"
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -475,36 +462,7 @@ const docTemplate = `{
                         "description": "paginated run list",
                         "schema": {
                             "type": "object",
-                            "properties": {
-                                "items": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/store.Run"
-                                    }
-                                },
-                                "pagination": {
-                                    "type": "object",
-                                    "properties": {
-                                        "total": {
-                                            "type": "integer"
-                                        },
-                                        "limit": {
-                                            "type": "integer"
-                                        },
-                                        "offset": {
-                                            "type": "integer"
-                                        },
-                                        "next": {
-                                            "type": "string",
-                                            "x-nullable": true
-                                        },
-                                        "prev": {
-                                            "type": "string",
-                                            "x-nullable": true
-                                        }
-                                    }
-                                }
-                            }
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -654,114 +612,184 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "model.ExecuteSpec": {
+        "domain.AcquiredSource": {
+            "type": "object",
+            "properties": {
+                "credential_ref": {
+                    "type": "string"
+                },
+                "primary": {
+                    "type": "boolean"
+                },
+                "repo_name": {
+                    "type": "string"
+                },
+                "requested_ref": {
+                    "type": "string"
+                },
+                "resolved_revision": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "domain.ExecuteSpec": {
             "type": "object",
             "properties": {
                 "image": {
-                    "description": "Image is the container image to pull for this job (per-job dynamic image).\nIf empty, the project-level default image is used.",
                     "type": "string"
                 },
                 "repo": {
-                    "description": "Repo is the name of the ci_repo whose scripts should be executed.\nThis is a reference, not an inline definition. It must resolve to a Repo\ndeclared in the same project.",
                     "type": "string"
                 },
                 "script": {
-                    "description": "Script is the command to run inside the repo's working directory.",
                     "type": "string"
                 }
             }
         },
-        "model.Project": {
+        "domain.Project": {
             "type": "object",
             "properties": {
-                "defaultImage": {
-                    "description": "DefaultImage is the fallback container image for tasks without an explicit\nimage.",
+                "default_image": {
                     "type": "string"
                 },
                 "name": {
-                    "description": "Name is the HCL label: project \"system-bankowy\" { ... }",
                     "type": "string"
                 },
                 "repos": {
-                    "description": "Repos is the set of repositories tracked by this project.",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Repo"
+                        "$ref": "#/definitions/domain.Repo"
                     }
                 },
                 "tasks": {
-                    "description": "Tasks is the set of tasks that form the pipeline.",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Task"
+                        "$ref": "#/definitions/domain.Task"
                     }
                 },
                 "variables": {
-                    "description": "Variables declared at project level, with scoped visibility.",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Variable"
+                        "$ref": "#/definitions/domain.Variable"
                     }
                 }
             }
         },
-        "model.Repo": {
+        "domain.ProjectConfig": {
             "type": "object",
             "properties": {
-                "kind": {
-                    "description": "Kind indicates how this repo is resolved.\n\"git\"     — remote clone URL (multi-repo)\n\"subpath\" — local subdirectory within a monorepo workspace",
+                "created_at": {
                     "type": "string"
+                },
+                "default_branch": {
+                    "type": "string"
+                },
+                "gitlab_project_id": {
+                    "type": "integer"
                 },
                 "name": {
-                    "description": "Name is the local identifier used in trigger expressions, e.g. \"auth_service\".\nIt corresponds to the HCL label: ci_repo \"auth_service\" { ... }",
                     "type": "string"
                 },
-                "path": {
-                    "description": "Path is the clone URL (multi-repo) or the subdirectory within a monorepo.\nExamples:\n  multi-repo: \"https://gitlab.com/org/auth.git\"\n  monorepo:   \"src/auth\"",
+                "pipeline_dir": {
+                    "type": "string"
+                },
+                "pipeline_file": {
+                    "type": "string"
+                },
+                "repo_credential_ref": {
+                    "type": "string"
+                },
+                "repo_ref": {
+                    "type": "string"
+                },
+                "repo_url": {
+                    "type": "string"
+                },
+                "webhook_secret": {
                     "type": "string"
                 }
             }
         },
-        "model.Task": {
+        "domain.Repo": {
             "type": "object",
             "properties": {
-                "dependsOn": {
-                    "description": "DependsOn lists tasks that must complete before this one starts.\nThis is separate from the trigger — trigger decides *whether* to run,\nDependsOn decides *ordering* within the DAG.",
+                "credential_ref": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "domain.Task": {
+            "type": "object",
+            "properties": {
+                "depends_on": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
                 "execute": {
-                    "description": "Execute defines what to run and in which repo context.",
-                    "$ref": "#/definitions/model.ExecuteSpec"
+                    "$ref": "#/definitions/domain.ExecuteSpec"
                 },
                 "manual": {
-                    "description": "Manual, when true, requires a human to click \"Run\" in the UI before the\ntask executes, even if its trigger condition is met.",
                     "type": "boolean"
                 },
                 "name": {
-                    "description": "Name is the HCL label: ci_task \"test_integration\" { ... }",
                     "type": "string"
                 },
                 "trigger": {
-                    "description": "Trigger is a boolean expression string evaluated by the DAG engine.\nSyntax examples:\n  \"repo.auth_service.changed \u0026\u0026 !repo.docs.changed\"\n  \"repo.a.changed || repo.b.changed\"",
                     "type": "string"
                 }
             }
         },
-        "model.Variable": {
+        "domain.TaskResult": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "output": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "passed, failed, skipped, running, pending, manual",
+                    "type": "string"
+                }
+            }
+        },
+        "domain.Variable": {
             "type": "object",
             "properties": {
                 "default": {
                     "type": "string"
                 },
                 "env": {
-                    "description": "environment filter",
                     "type": "string"
                 },
                 "job": {
-                    "description": "required if scope=job",
                     "type": "string"
                 },
                 "key": {
@@ -774,11 +802,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "repo": {
-                    "description": "required if scope=repo",
                     "type": "string"
                 },
                 "scope": {
-                    "description": "project, repo, job",
                     "type": "string"
                 },
                 "value": {
@@ -786,25 +812,7 @@ const docTemplate = `{
                 }
             }
         },
-        "store.ExtraRepo": {
-            "type": "object",
-            "properties": {
-                "kind": {
-                    "description": "\"subpath\" or \"git\"",
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "path": {
-                    "type": "string"
-                },
-                "url": {
-                    "type": "string"
-                }
-            }
-        },
-        "store.PipelineSnapshot": {
+        "model.Project": {
             "type": "object",
             "properties": {
                 "default_image": {
@@ -816,61 +824,20 @@ const docTemplate = `{
                 "repos": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/store.SnapshotRepo"
+                        "$ref": "#/definitions/domain.Repo"
                     }
                 },
                 "tasks": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/store.SnapshotTask"
+                        "$ref": "#/definitions/domain.Task"
                     }
                 },
                 "variables": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/store.SnapshotVar"
+                        "$ref": "#/definitions/domain.Variable"
                     }
-                }
-            }
-        },
-        "store.ProjectConfig": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "default_branch": {
-                    "type": "string"
-                },
-                "extra_repos": {
-                    "description": "ExtraRepos lists additional repositories beyond the primary one.",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/store.ExtraRepo"
-                    }
-                },
-                "gitlab_project_id": {
-                    "type": "integer"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "pipeline_dir": {
-                    "description": "PipelineDir is relative to RepoPath and contains all .tf files that\ntogether define the pipeline.",
-                    "type": "string"
-                },
-                "pipeline_file": {
-                    "description": "PipelineFile is the optional file opened by the editor. It is not used to\nselect which definitions are executed; all .tf files in PipelineDir load.",
-                    "type": "string"
-                },
-                "repo_path": {
-                    "type": "string"
-                },
-                "repo_url": {
-                    "type": "string"
-                },
-                "webhook_secret": {
-                    "type": "string"
                 }
             }
         },
@@ -899,126 +866,28 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "pipeline_def": {
-                    "$ref": "#/definitions/store.PipelineSnapshot"
+                    "$ref": "#/definitions/domain.Project"
                 },
                 "project_name": {
                     "type": "string"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.AcquiredSource"
+                    }
                 },
                 "started_at": {
                     "type": "string"
                 },
                 "status": {
-                    "description": "running, passed, failed",
                     "type": "string"
                 },
                 "task_results": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/store.TaskResult"
+                        "$ref": "#/definitions/domain.TaskResult"
                     }
-                }
-            }
-        },
-        "store.SnapshotExec": {
-            "type": "object",
-            "properties": {
-                "image": {
-                    "type": "string"
-                },
-                "repo": {
-                    "type": "string"
-                },
-                "script": {
-                    "type": "string"
-                }
-            }
-        },
-        "store.SnapshotRepo": {
-            "type": "object",
-            "properties": {
-                "kind": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "path": {
-                    "type": "string"
-                }
-            }
-        },
-        "store.SnapshotTask": {
-            "type": "object",
-            "properties": {
-                "depends_on": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "execute": {
-                    "$ref": "#/definitions/store.SnapshotExec"
-                },
-                "manual": {
-                    "type": "boolean"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "trigger": {
-                    "type": "string"
-                }
-            }
-        },
-        "store.SnapshotVar": {
-            "type": "object",
-            "properties": {
-                "default": {
-                    "type": "string"
-                },
-                "env": {
-                    "type": "string"
-                },
-                "job": {
-                    "type": "string"
-                },
-                "key": {
-                    "type": "string"
-                },
-                "masked": {
-                    "type": "boolean"
-                },
-                "protected": {
-                    "type": "boolean"
-                },
-                "repo": {
-                    "type": "string"
-                },
-                "scope": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "string"
-                }
-            }
-        },
-        "store.TaskResult": {
-            "type": "object",
-            "properties": {
-                "duration": {
-                    "type": "integer"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "output": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
                 }
             }
         }

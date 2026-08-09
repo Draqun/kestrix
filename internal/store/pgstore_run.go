@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/model"
 )
 
@@ -36,10 +37,19 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 		b, _ := json.Marshal(taskResults)
 		taskResultsJSON = string(b)
 	}
-	_, err := s.db.Exec(
-		`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5`,
-		status, output, errMsg, taskResultsJSON, id,
-	)
+	finished := status == "passed" || status == "failed" || status == "canceled"
+	var err error
+	if finished {
+		_, err = s.db.Exec(
+			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5`,
+			status, output, errMsg, taskResultsJSON, id,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = NULL WHERE id = $5`,
+			status, output, errMsg, taskResultsJSON, id,
+		)
+	}
 	return err
 }
 
@@ -50,6 +60,14 @@ func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
 		`UPDATE runs SET task_results = task_results::jsonb || $1::jsonb WHERE id = $2`,
 		string(b), runID,
 	)
+	return err
+}
+
+// UpdateRunSources stores only non-secret source declarations and resolved
+// revisions. Credential values are never part of AcquiredSource.
+func (s *PGStore) UpdateRunSources(runID int, sources []domain.AcquiredSource) error {
+	b, _ := json.Marshal(sources)
+	_, err := s.db.Exec(`UPDATE runs SET sources = $1 WHERE id = $2`, string(b), runID)
 	return err
 }
 
@@ -157,28 +175,31 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 	}
 	results := append(run.TaskResults, tr)
 	// Latest status per task name.
-	latest := make(map[string]string)
+	latest := make(map[string]TaskResult)
 	for _, r := range results {
-		latest[r.Name] = r.Status
+		latest[r.Name] = r
 	}
 	status := "passed"
 	errMsg := ""
-	for _, st := range latest {
-		if st == "failed" {
-			status = "failed"
-			errMsg = tr.Error
-			break
-		}
-	}
-	if status != "failed" {
-		for _, st := range latest {
-			if st == "running" || st == "pending" {
-				status = "running"
-				break
+	canExecute := false
+	failed := false
+	for _, result := range latest {
+		switch result.Status {
+		case "manual", "pending", "running":
+			canExecute = true
+		case "failed":
+			failed = true
+			if errMsg == "" {
+				errMsg = result.Error
 			}
 		}
 	}
-	if status == "failed" && errMsg == "" {
+	if canExecute {
+		status = "running"
+	} else if failed {
+		status = "failed"
+	}
+	if failed && errMsg == "" {
 		errMsg = "task failed"
 	}
 	out := run.Output
@@ -207,12 +228,12 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 // GetRun returns a run by ID.
 func (s *PGStore) GetRun(id int) (*Run, error) {
 	var r Run
-	var changedJSON, taskResultsJSON string
+	var changedJSON, taskResultsJSON, sourcesJSON string
 	var pipelineDefJSON sql.NullString
 	var finishedAt sql.NullTime
 	err := s.db.QueryRow(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, started_at, finished_at FROM runs WHERE id = $1`, id,
-	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt)
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs WHERE id = $1`, id,
+	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -221,6 +242,7 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 	}
 	json.Unmarshal([]byte(changedJSON), &r.Changed)
 	json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
+	json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 	if pipelineDefJSON.Valid {
 		var snap model.Project
 		if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
@@ -252,7 +274,7 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 		offset = 0
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
 		projectName, limit, offset,
 	)
 	if err != nil {
@@ -263,14 +285,15 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 	var runs []Run
 	for rows.Next() {
 		var r Run
-		var changedJSON, taskResultsJSON string
+		var changedJSON, taskResultsJSON, sourcesJSON string
 		var pipelineDefJSON sql.NullString
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
+		json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 		if pipelineDefJSON.Valid {
 			var snap model.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
@@ -291,7 +314,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT $1`,
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT $1`,
 		limit,
 	)
 	if err != nil {
@@ -302,14 +325,15 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 	var runs []Run
 	for rows.Next() {
 		var r Run
-		var changedJSON, taskResultsJSON string
+		var changedJSON, taskResultsJSON, sourcesJSON string
 		var pipelineDefJSON sql.NullString
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
+		json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 		if pipelineDefJSON.Valid {
 			var snap model.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {

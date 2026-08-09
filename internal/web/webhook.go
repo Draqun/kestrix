@@ -17,10 +17,12 @@ import (
 // GitLabPushEvent represents the JSON payload sent by GitLab on a push event.
 // Only the fields we need are extracted; unknown fields are silently ignored.
 type GitLabPushEvent struct {
-	ObjectKind string         `json:"object_kind"`
-	Ref        string         `json:"ref"`
-	Project    GitLabProject  `json:"project"`
-	Commits    []GitLabCommit `json:"commits"`
+	ObjectKind  string         `json:"object_kind"`
+	Ref         string         `json:"ref"`
+	After       string         `json:"after"`
+	CheckoutSHA string         `json:"checkout_sha"`
+	Project     GitLabProject  `json:"project"`
+	Commits     []GitLabCommit `json:"commits"`
 }
 
 // GitLabProject holds the project metadata from the webhook.
@@ -60,6 +62,9 @@ type PushEvent struct {
 
 	// GitLabProjectID is the numeric GitLab project ID from the webhook payload.
 	GitLabProjectID int
+
+	// CheckoutSHA is the immutable commit selected by the provider for this push.
+	CheckoutSHA string
 }
 
 // IsEmpty returns true if the event contains no file changes.
@@ -145,7 +150,7 @@ func (fc *FileClassifier) ChangedRepos(repoFiles map[string]map[string]bool) map
 func (fc *FileClassifier) MatchRepos(files map[string]bool, repos []model.Repo) []string {
 	var matched []string
 	for _, repo := range repos {
-		if repo.Kind == "subpath" || repo.Path != "" {
+		if (repo.Kind == "subpath" || repo.Path != "") && repo.Path != "." && repo.Path != "./" {
 			// subpath: match files under repo.Path prefix
 			prefix := strings.TrimSuffix(repo.Path, "/") + "/"
 			for f := range files {
@@ -198,11 +203,19 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 		}
 	}
 
+	checkoutSHA := strings.TrimSpace(raw.CheckoutSHA)
+	if checkoutSHA == "" {
+		checkoutSHA = strings.TrimSpace(raw.After)
+	}
+	if checkoutSHA == "" && len(raw.Commits) > 0 {
+		checkoutSHA = strings.TrimSpace(raw.Commits[len(raw.Commits)-1].ID)
+	}
 	return &PushEvent{
 		Repo:            raw.Project.PathWithNamespace,
 		Branch:          branch,
 		FilesChanged:    files,
 		CommitCount:     len(raw.Commits),
 		GitLabProjectID: raw.Project.ID,
+		CheckoutSHA:     checkoutSHA,
 	}, nil
 }

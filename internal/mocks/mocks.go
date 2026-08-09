@@ -129,6 +129,8 @@ type MockRunStore struct {
 	ListAllRunsErr      error
 	CountByStatusResult map[string]int
 	CountByStatusErr    error
+	UpdateSourcesCalls  [][]domain.AcquiredSource
+	UpdateSourcesErr    error
 }
 
 type createRunCall struct {
@@ -178,6 +180,13 @@ func (m *MockRunStore) FlushRunOutput(runID int, output string) error {
 	m.FlushRunCalls = append(m.FlushRunCalls, output)
 	m.mu.Unlock()
 	return nil
+}
+func (m *MockRunStore) UpdateRunSources(_ int, sources []domain.AcquiredSource) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copySources := append([]domain.AcquiredSource(nil), sources...)
+	m.UpdateSourcesCalls = append(m.UpdateSourcesCalls, copySources)
+	return m.UpdateSourcesErr
 }
 func (m *MockRunStore) CancelRun(id int) error {
 	m.mu.Lock()
@@ -264,12 +273,13 @@ func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 
 // MockPipelineRunner returns configurable task results.
 type MockPipelineRunner struct {
-	mu             sync.Mutex
-	RunCalls       []runCall
-	TaskRunCalls   []taskRunCall
-	TaskResultList []domain.TaskResult
-	RunErr         error
-	PanicMsg       interface{}
+	mu              sync.Mutex
+	RunCalls        []runCall
+	TaskRunCalls    []taskRunCall
+	TaskResultList  []domain.TaskResult
+	RunErr          error
+	PanicMsg        interface{}
+	AcquiredSources []domain.AcquiredSource
 }
 
 type runCall struct {
@@ -289,6 +299,11 @@ func (m *MockPipelineRunner) Run(ctx context.Context, project domain.Project, ch
 	if m.PanicMsg != nil {
 		panic(m.PanicMsg)
 	}
+	if opts.OnSourcesAcquired != nil {
+		if err := opts.OnSourcesAcquired(m.AcquiredSources); err != nil {
+			return nil, err
+		}
+	}
 	return m.TaskResultList, m.RunErr
 }
 
@@ -298,6 +313,11 @@ func (m *MockPipelineRunner) RunTask(ctx context.Context, project domain.Project
 	m.mu.Unlock()
 	if m.PanicMsg != nil {
 		panic(m.PanicMsg)
+	}
+	if opts.OnSourcesAcquired != nil && !opts.SourcesPrepared {
+		if err := opts.OnSourcesAcquired(m.AcquiredSources); err != nil {
+			return domain.TaskResult{}, err
+		}
 	}
 	if len(m.TaskResultList) > 0 {
 		return m.TaskResultList[0], m.RunErr

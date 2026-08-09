@@ -8,7 +8,8 @@ When a push event arrives at `POST /webhook`, the receiver:
 
 1. Validates the request (optional `X-Gitlab-Token` check).
 2. Parses the GitLab push event JSON into a normalized `PushEvent`.
-3. Loads the pipeline definition from the configured pipeline directory.
+3. Acquires the registered remote project at the push event's immutable
+   `checkout_sha` and loads the pipeline definition from that checkout.
 4. Classifies changed files as "code" or "non-code" using configurable patterns.
 5. Matches changed files to declared `ci_repo` blocks.
 6. Resolves the DAG to determine which tasks are triggered.
@@ -78,7 +79,12 @@ The classifier maps changed files to declared `ci_repo` blocks:
 
 ## Pipeline Loading
 
-On each webhook request, the receiver loads the pipeline definition from the configured directory. All `.tf` files in the directory are parsed and merged into a single project (see [Pipeline Definition](pipeline-definition.md)).
+On each registered-project webhook request, the receiver refreshes the remote
+through the source-session manager and requests the exact immutable event SHA.
+All `.tf` files in the project's relative pipeline directory are parsed and
+merged into one project (see [Pipeline Definition](pipeline-definition.md)). If
+the event revision cannot be acquired, the request fails without resolving or
+dispatching tasks from a different revision.
 
 ## Dispatch Integration
 

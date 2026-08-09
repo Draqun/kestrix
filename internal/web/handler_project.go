@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,19 @@ import (
 )
 
 var absPath = filepath.Abs
+
+func decodeProjectConfig(body io.Reader, cfg *domain.ProjectConfig) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(cfg); err != nil {
+		return err
+	}
+	return nil
+}
 
 // ─── Project Handlers (use PostgreSQL) ─────────────────────────
 
@@ -82,12 +97,18 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects [post]
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProjectConfig
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if err := decodeProjectConfig(r.Body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 
-	if err := s.projectService.Create(&req); err != nil {
+	if err := s.projectService.CreateValidated(&req, func(candidate *domain.ProjectConfig) error {
+		_, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-create-validation")
+		if err == nil {
+			session.Cleanup()
+		}
+		return err
+	}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -131,11 +152,17 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	var update domain.ProjectConfig
-	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if err := decodeProjectConfig(r.Body, &update); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := s.projectService.Update(name, &update); err != nil {
+	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) error {
+		_, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-update-validation")
+		if err == nil {
+			session.Cleanup()
+		}
+		return err
+	}); err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -169,13 +196,14 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // projectPipelineDir resolves the directory containing a project's pipeline
-// definitions and prevents a relative configuration from escaping RepoPath.
-func (s *Server) projectPipelineDir(p *domain.ProjectConfig) (string, error) {
+// definitions and prevents a relative configuration from escaping the
+// operation's private primary checkout.
+func (s *Server) projectPipelineDir(p *domain.ProjectConfig, repoRoot string) (string, error) {
 	pipelineDir := p.PipelineDir
 	if pipelineDir == "" {
 		pipelineDir = filepath.Dir(p.PipelineFile)
 	}
-	repoPath, err := absPath(p.RepoPath)
+	repoPath, err := absPath(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo path: %w", err)
 	}
@@ -188,7 +216,7 @@ func (s *Server) projectPipelineDir(p *domain.ProjectConfig) (string, error) {
 }
 
 // projectPipelinePath resolves the editor's file inside the pipeline directory.
-func (s *Server) projectPipelinePath(p *domain.ProjectConfig) (string, error) {
+func (s *Server) projectPipelinePath(p *domain.ProjectConfig, repoRoot string) (string, error) {
 	if p.PipelineFile == "" {
 		p.PipelineFile = "pipeline.tf"
 	}
@@ -196,7 +224,7 @@ func (s *Server) projectPipelinePath(p *domain.ProjectConfig) (string, error) {
 	if p.PipelineDir == "" {
 		fileName = filepath.Base(fileName)
 	}
-	dir, err := s.projectPipelineDir(p)
+	dir, err := s.projectPipelineDir(p, repoRoot)
 	if err != nil {
 		return "", err
 	}
@@ -211,15 +239,30 @@ func (s *Server) projectPipelinePath(p *domain.ProjectConfig) (string, error) {
 // parseProjectPipeline merges all .tf definitions from the configured pipeline
 // directory. Other .tf files in the repository are intentionally ignored.
 func (s *Server) parseProjectPipeline(p *domain.ProjectConfig) (model.Project, error) {
-	dir, err := s.projectPipelineDir(p)
+	proj, session, err := s.loadProjectPipeline(context.Background(), p, "", "project-definition")
 	if err != nil {
 		return model.Project{}, err
 	}
+	defer session.Cleanup()
+	return proj, nil
+}
+
+func (s *Server) loadProjectPipeline(ctx context.Context, p *domain.ProjectConfig, revision, purpose string) (model.Project, projectSourceSession, error) {
+	session, err := s.openProjectSource(ctx, p, revision, purpose)
+	if err != nil {
+		return model.Project{}, projectSourceSession{}, err
+	}
+	dir, err := s.projectPipelineDir(p, session.Root)
+	if err != nil {
+		session.Cleanup()
+		return model.Project{}, projectSourceSession{}, err
+	}
 	proj, err := parser.ParseDir(dir)
 	if err != nil {
-		return model.Project{}, fmt.Errorf("parse pipeline directory %s: %w", dir, err)
+		session.Cleanup()
+		return model.Project{}, projectSourceSession{}, fmt.Errorf("parse pipeline directory: %w", err)
 	}
-	return proj, nil
+	return proj, session, nil
 }
 
 // handleGetProjectPipeline godoc
@@ -236,7 +279,13 @@ func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	path, err := s.projectPipelinePath(p)
+	session, err := s.openProjectSource(r.Context(), p, "", "project-pipeline-read")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer session.Cleanup()
+	path, err := s.projectPipelinePath(p, session.Root)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -258,22 +307,23 @@ func (s *Server) handleGetProjectDefinition(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	proj, err := s.parseProjectPipeline(p)
+	proj, session, err := s.loadProjectPipeline(r.Context(), p, "", "project-definition-read")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	defer session.Cleanup()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(proj)
 }
 
 // handleSaveProjectPipeline godoc
-// @Summary Save the editor pipeline file inside a project's pipeline directory
+// @Summary Reject writes to Git-owned registered pipeline content
 // @Tags projects
 // @Accept plain
 // @Produce json
 // @Param name path string true "Project name"
-// @Success 200 {object} map[string]interface{}
+// @Failure 405 {object} map[string]interface{}
 // @Router /api/projects/{name}/pipeline [post]
 func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
@@ -282,34 +332,7 @@ func (s *Server) handleSaveProjectPipeline(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "read body")
-		return
-	}
-	pipelineDir, err := s.projectPipelineDir(p)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	path, err := s.projectPipelinePath(p)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "saved",
-		"path":   path,
-	})
+	writeError(w, http.StatusMethodNotAllowed, "registered pipeline content is read-only; update it in the remote Git repository")
 }
 
 // handleResolveProject godoc
@@ -335,11 +358,12 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	proj, err := s.parseProjectPipeline(p)
+	proj, session, err := s.loadProjectPipeline(r.Context(), p, "", "project-resolve")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	defer session.Cleanup()
 	changedSet := make(map[string]bool)
 	for _, c := range req.Changed {
 		changedSet[c] = true

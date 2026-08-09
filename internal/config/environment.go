@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Prefix is the canonical prefix for Kestrix-owned environment variables.
@@ -26,10 +29,20 @@ type Environment struct {
 	GitLabToken     string
 	TestDatabaseURL string
 	DatabaseURL     string
+	MasterKeyPath   string
 	Docker          DockerEnvironment
+	SourceCache     SourceCacheEnvironment
 
-	values       map[string]string
-	originalEnvs []string
+	values        map[string]string
+	originalEnvs  []string
+	validationErr error
+}
+
+// SourceCacheEnvironment is the typed canonical environment representation.
+type SourceCacheEnvironment struct {
+	Directory string
+	MaxAge    time.Duration
+	MaxBytes  int64
 }
 
 // DockerEnvironment contains Docker settings read from the process
@@ -71,6 +84,28 @@ func LoadEnvironment(environ []string) *Environment {
 	}
 	sort.Strings(normalized)
 
+	var validationErr error
+	var maxAge time.Duration
+	if raw := values[Prefix+"SOURCE_CACHE_MAX_AGE"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			validationErr = fmt.Errorf("KESTRIX_SOURCE_CACHE_MAX_AGE must be a positive duration")
+		} else {
+			maxAge = parsed
+		}
+	}
+	var maxBytes int64
+	if raw := values[Prefix+"SOURCE_CACHE_MAX_BYTES"]; raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_SOURCE_CACHE_MAX_BYTES must be a positive integer")
+			}
+		} else {
+			maxBytes = parsed
+		}
+	}
+
 	return &Environment{
 		ListenAddr:      values[Prefix+"ADDR"],
 		PipelineDir:     values[Prefix+"DIR"],
@@ -81,15 +116,31 @@ func LoadEnvironment(environ []string) *Environment {
 		GitLabToken:     values[Prefix+"GITLAB_TOKEN"],
 		TestDatabaseURL: values[Prefix+"TEST_DATABASE_URL"],
 		DatabaseURL:     values["DATABASE_URL"],
+		MasterKeyPath:   values[Prefix+"MASTER_KEY_PATH"],
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],
 			Username: values["DOCKER_USERNAME"],
 			Password: values["DOCKER_PASSWORD"],
 		},
-		values:       values,
-		originalEnvs: normalized,
+		SourceCache: SourceCacheEnvironment{
+			Directory: values[Prefix+"SOURCE_CACHE_DIR"],
+			MaxAge:    maxAge,
+			MaxBytes:  maxBytes,
+		},
+		values:        values,
+		originalEnvs:  normalized,
+		validationErr: validationErr,
 	}
+}
+
+// ValidationError returns malformed canonical runtime settings without
+// exposing their values.
+func (e *Environment) ValidationError() error {
+	if e == nil {
+		return nil
+	}
+	return e.validationErr
 }
 
 // Initialize loads the process environment once and returns the live snapshot.
@@ -122,4 +173,10 @@ func (e *Environment) Prefixed(prefix string) []string {
 // Environ returns a normalized copy suitable for child processes.
 func (e *Environment) Environ() []string {
 	return append([]string(nil), e.originalEnvs...)
+}
+
+// Lookup returns a value from the immutable environment snapshot.
+func (e *Environment) Lookup(name string) (string, bool) {
+	value, ok := e.values[name]
+	return value, ok
 }

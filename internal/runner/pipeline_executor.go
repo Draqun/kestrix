@@ -24,13 +24,23 @@ var _ domain.PipelineRunner = (*PipelineExecutor)(nil)
 // Run selects the configured execution backend and translates domain options.
 func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	runnerOpts := Options{
-		WorkDir:        opts.WorkDir,
-		IncludeManual:  opts.IncludeManual,
-		Variables:      opts.Variables,
-		Stdout:         opts.Stdout,
-		Stderr:         opts.Stderr,
-		OnTaskStart:    opts.OnTaskStart,
-		OnTaskComplete: opts.OnTaskComplete,
+		WorkDir:               opts.WorkDir,
+		IncludeManual:         opts.IncludeManual,
+		Variables:             opts.Variables,
+		Stdout:                opts.Stdout,
+		Stderr:                opts.Stderr,
+		OnTaskStart:           opts.OnTaskStart,
+		OnTaskComplete:        opts.OnTaskComplete,
+		SourceSessions:        opts.SourceSessions,
+		SourceAcquirer:        opts.SourceAcquirer,
+		CredentialResolver:    opts.CredentialResolver,
+		SourceTimeout:         opts.SourceTimeout,
+		SourceRetries:         opts.SourceRetries,
+		RetainSourceWorkspace: opts.RetainSourceWorkspace,
+		OnSourcesAcquired:     opts.OnSourcesAcquired,
+		WorkspaceCleanup:      opts.WorkspaceCleanup,
+		RepoPaths:             opts.RepoPaths,
+		SourcesPrepared:       opts.SourcesPrepared,
 	}
 	switch e.Mode {
 	case "local", "":
@@ -47,6 +57,13 @@ func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, chan
 		if e.GenerateYAML == nil {
 			return nil, fmt.Errorf("gitlab-runner mode requires a YAML generator")
 		}
+		prepared, cleanup, err := prepareSources(ctx, project, &runnerOpts)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+		project = prepared
+		runnerOpts.SourcesPrepared = true
 		nodes, err := resolveNodes(project, changed)
 		if err != nil {
 			return nil, err
@@ -63,13 +80,23 @@ func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, chan
 // RunTask executes a single named task using the configured backend.
 func (e *PipelineExecutor) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	runnerOpts := Options{
-		WorkDir:        opts.WorkDir,
-		IncludeManual:  true,
-		Variables:      opts.Variables,
-		Stdout:         opts.Stdout,
-		Stderr:         opts.Stderr,
-		OnTaskStart:    opts.OnTaskStart,
-		OnTaskComplete: opts.OnTaskComplete,
+		WorkDir:               opts.WorkDir,
+		IncludeManual:         true,
+		Variables:             opts.Variables,
+		Stdout:                opts.Stdout,
+		Stderr:                opts.Stderr,
+		OnTaskStart:           opts.OnTaskStart,
+		OnTaskComplete:        opts.OnTaskComplete,
+		SourceSessions:        opts.SourceSessions,
+		SourceAcquirer:        opts.SourceAcquirer,
+		CredentialResolver:    opts.CredentialResolver,
+		SourceTimeout:         opts.SourceTimeout,
+		SourceRetries:         opts.SourceRetries,
+		RetainSourceWorkspace: opts.RetainSourceWorkspace,
+		OnSourcesAcquired:     opts.OnSourcesAcquired,
+		WorkspaceCleanup:      opts.WorkspaceCleanup,
+		RepoPaths:             opts.RepoPaths,
+		SourcesPrepared:       opts.SourcesPrepared,
 	}
 	if e.runOne != nil {
 		return e.runOne(ctx, project, taskName, runnerOpts)

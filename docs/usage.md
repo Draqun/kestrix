@@ -9,6 +9,20 @@ make ui-dev   # starts the frontend dev server (http://localhost:3000)
 Projects are managed explicitly through the project API or UI. Starting the
 server with a pipeline directory does not create a project automatically.
 
+Before starting a host-run server, provide its separately managed credential
+master-key file (mode `0600`):
+
+```bash
+export KESTRIX_MASTER_KEY_PATH=/home/you/.kestrix/master.key
+make dev
+```
+
+Alternatively, put that path in `.env`; `make dev` and `make dev-all` load the
+file automatically.
+
+For Compose, use the same absolute `KESTRIX_MASTER_KEY_PATH`; the service
+mounts it read-only at that path inside the container.
+
 ## Database profiles
 
 Local development uses PostgreSQL database `kestrix_local` on host port `5433`
@@ -35,8 +49,28 @@ make pipeline   # runs the example pipeline in `examples/demo-mono`
 ```bash
 curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
-  -d '{"name":"my-app","repo_path":"./my-app","gitlab_project_id":12345}'
+  -d '{"name":"my-app","repo_url":"https://git.example.test/team/my-app.git","repo_ref":"main","pipeline_dir":"ci","pipeline_file":"pipeline.tf","gitlab_project_id":12345}'
 ```
+
+All registered projects require `repo_url` and `repo_ref`. For a private
+remote, create a credential first and pass its non-secret
+`repo_credential_ref`:
+
+```bash
+curl -X POST http://localhost:8080/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name":"remote-app","repo_url":"https://git.example.test/team/app.git","repo_ref":"main","repo_credential_ref":"build-auth"}'
+```
+
+Credential values are created through the credential API/UI and stored
+encrypted in PostgreSQL. The `repo_credential_ref` is only a lookup key;
+plaintext values are never placed in project definitions, run history, or the
+process environment.
+
+The server validates remote access and parses the pipeline before persisting
+the project. Registered pipeline content can be viewed in Kestrix but must be
+edited and committed in Git. See [Remote projects](remote-projects.md).
+
 ## Docker deployment E2E test
 
 Run the isolated production Compose smoke test with:
@@ -47,9 +81,11 @@ make docker-e2e
 
 The test requires a running Docker daemon, Docker Compose, and `curl`. It builds
 a local test image, uses a unique Compose project, high local ports, and
-disposable PostgreSQL/Redis volumes. It checks `/api/health`, `/api/projects`,
-and `/api/runs` from outside the containers, then removes only its own
-containers, network, and volumes on success, failure, or interruption.
+disposable PostgreSQL/Redis/cache volumes. It also registers a project from a
+bare Git remote, verifies cache persistence across a Kestrix restart, proves a
+cached credential fails closed after revocation, and scans API responses and
+logs for the test secret. It removes only its own containers, network, image,
+and volumes on success, failure, or interruption.
 
 Set `KESTRIX_E2E_IMAGE` to use an existing local image instead of building one,
 or override `KESTRIX_E2E_PORT` and `KESTRIX_E2E_TIMEOUT` when needed.

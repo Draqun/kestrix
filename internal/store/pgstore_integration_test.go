@@ -8,11 +8,15 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 )
@@ -44,16 +48,26 @@ func testPG(t *testing.T) *PGStore {
 	}
 	t.Cleanup(func() {
 		pg.db.Exec(`DELETE FROM runs`)
+		pg.db.Exec(`DELETE FROM credentials`)
 		pg.db.Exec(`DELETE FROM projects`)
 		pg.db.Close()
 	})
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	keyPath := filepath.Join(t.TempDir(), "master.key")
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pg.SetCredentialMasterKeyProvider(credentials.FileMasterKeyProvider{Path: keyPath, Version: 1})
 	return pg
 }
 
 // mustUpsert inserts a project and fails the test on error.
-func mustUpsert(t *testing.T, pg *PGStore, name, repoPath string) {
+func mustUpsert(t *testing.T, pg *PGStore, name, _ string) {
 	t.Helper()
-	if err := pg.Upsert(&domain.ProjectConfig{Name: name, RepoPath: repoPath}); err != nil {
+	if err := pg.Upsert(&domain.ProjectConfig{Name: name, RepoURL: "https://git.example/" + name + ".git", RepoRef: "main"}); err != nil {
 		t.Fatalf("Upsert(%q): %v", name, err)
 	}
 }
@@ -73,9 +87,9 @@ func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *model.Pr
 func TestPG_UpsertAndGet(t *testing.T) {
 	pg := testPG(t)
 	cfg := &domain.ProjectConfig{
-		Name:     "proj-a",
-		RepoPath: "/src/a",
-		RepoURL:  "https://gitlab.com/a.git",
+		Name:    "proj-a",
+		RepoURL: "https://gitlab.com/a.git",
+		RepoRef: "main",
 	}
 	if err := pg.Upsert(cfg); err != nil {
 		t.Fatalf("Upsert: %v", err)
@@ -87,8 +101,8 @@ func TestPG_UpsertAndGet(t *testing.T) {
 	if got == nil {
 		t.Fatal("Get returned nil after Upsert")
 	}
-	if got.RepoPath != "/src/a" {
-		t.Errorf("RepoPath = %q, want /src/a", got.RepoPath)
+	if got.RepoURL != "https://gitlab.com/a.git" || got.RepoRef != "main" {
+		t.Errorf("source = %q@%q", got.RepoURL, got.RepoRef)
 	}
 	if got.CreatedAt == "" {
 		t.Error("CreatedAt not set")
@@ -98,16 +112,137 @@ func TestPG_UpsertAndGet(t *testing.T) {
 	}
 }
 
+func TestPG_RemoteProjectSchemaConstraints(t *testing.T) {
+	pg := testPG(t)
+	var repoPathColumns int
+	if err := pg.db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'projects' AND column_name = 'repo_path'`).Scan(&repoPathColumns); err != nil {
+		t.Fatal(err)
+	}
+	if repoPathColumns != 0 {
+		t.Fatalf("repo_path column count = %d, want 0", repoPathColumns)
+	}
+	if _, err := pg.db.Exec(`INSERT INTO projects (name, repo_url, repo_ref) VALUES ('invalid-empty-url', '', 'main')`); err == nil {
+		t.Fatal("expected empty repo_url constraint failure")
+	}
+	if _, err := pg.db.Exec(`INSERT INTO projects (name, repo_url, repo_ref) VALUES ('invalid-empty-ref', 'https://git.example/repo.git', '')`); err == nil {
+		t.Fatal("expected empty repo_ref constraint failure")
+	}
+}
+
+func TestPG_MigrationPreflightNamesLegacyLocalProjects(t *testing.T) {
+	pg := testPG(t)
+	_, err := pg.db.Exec(`
+		ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_repo_url_nonempty;
+		ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_repo_ref_nonempty;
+		ALTER TABLE projects ALTER COLUMN repo_url DROP NOT NULL;
+		ALTER TABLE projects ALTER COLUMN repo_ref DROP NOT NULL;
+		ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_path TEXT NOT NULL DEFAULT '';
+		INSERT INTO projects (name, repo_path, repo_url, repo_ref) VALUES ('legacy-local-project', '/srv/legacy', '', '');
+	`)
+	if err != nil {
+		t.Fatalf("prepare legacy schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pg.db.Exec(`DELETE FROM projects WHERE name = 'legacy-local-project'`)
+		if err := migrate(pg.db); err != nil {
+			t.Errorf("restore remote schema: %v", err)
+		}
+	})
+
+	err = migrate(pg.db)
+	if err == nil {
+		t.Fatal("expected migration preflight failure")
+	}
+	if !strings.Contains(err.Error(), "legacy-local-project") || !strings.Contains(err.Error(), "explicit remote URL/ref update or deletion") {
+		t.Fatalf("migration error = %q, want actionable project name", err)
+	}
+}
+
+func TestPG_CredentialLifecycleStoresCiphertextOnly(t *testing.T) {
+	pg := testPG(t)
+	meta, err := pg.CreateCredential(domain.CredentialInput{Type: "token", Name: "GitHub", Provider: "github", Host: "github.com", Token: "super-secret-token"})
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+	if meta.Ref == "" || meta.Type != "token" {
+		t.Fatalf("metadata=%+v", meta)
+	}
+	var ciphertext []byte
+	if err := pg.db.QueryRow(`SELECT encrypted_payload FROM credentials WHERE credential_ref=$1`, meta.Ref).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ciphertext), "super-secret-token") {
+		t.Fatal("database contains plaintext token")
+	}
+	resolved, err := pg.ResolveCredential(context.Background(), meta.Ref)
+	if err != nil || resolved.Token != "super-secret-token" {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	if err := pg.RevokeCredential(meta.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ResolveCredential(context.Background(), meta.Ref); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("resolve revoked err=%v", err)
+	}
+	_, err = pg.RotateCredential(meta.Ref, domain.CredentialInput{Type: "token", Name: "GitHub", Token: "replacement"})
+	if err != nil {
+		t.Fatalf("RotateCredential: %v", err)
+	}
+	resolved, err = pg.ResolveCredential(context.Background(), meta.Ref)
+	if err != nil || resolved.Token != "replacement" {
+		t.Fatalf("rotated=%+v err=%v", resolved, err)
+	}
+}
+
+func TestPG_ListCredentialMetadataExcludesSecrets(t *testing.T) {
+	pg := testPG(t)
+	first, err := pg.CreateCredential(domain.CredentialInput{Type: "token", Name: "GitHub", Provider: "github", Host: "github.com", Token: "github-secret"})
+	if err != nil {
+		t.Fatalf("CreateCredential(first): %v", err)
+	}
+	second, err := pg.CreateCredential(domain.CredentialInput{Type: "basic", Name: "Bitbucket", Provider: "bitbucket", Host: "bitbucket.org", Username: "git-user", Password: "bitbucket-secret"})
+	if err != nil {
+		t.Fatalf("CreateCredential(second): %v", err)
+	}
+	if err := pg.RevokeCredential(second.Ref); err != nil {
+		t.Fatalf("RevokeCredential: %v", err)
+	}
+
+	got, err := pg.ListCredentialMetadata()
+	if err != nil {
+		t.Fatalf("ListCredentialMetadata: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("metadata count = %d, want 2", len(got))
+	}
+	if got[0].Ref != second.Ref || got[0].Name != "Bitbucket" || !got[0].Revoked {
+		t.Errorf("first metadata = %+v, want revoked Bitbucket credential", got[0])
+	}
+	if got[1].Ref != first.Ref || got[1].Name != "GitHub" || got[1].Revoked {
+		t.Errorf("second metadata = %+v, want active GitHub credential", got[1])
+	}
+	for _, metadata := range got {
+		encoded := metadata.Ref + metadata.Name + metadata.Type + metadata.Provider + metadata.Host
+		if strings.Contains(encoded, "github-secret") || strings.Contains(encoded, "bitbucket-secret") {
+			t.Fatalf("credential metadata exposed a secret: %+v", metadata)
+		}
+	}
+}
+
 func TestPG_UpsertOverwrite(t *testing.T) {
 	pg := testPG(t)
-	mustUpsert(t, pg, "p", "/old")
-	mustUpsert(t, pg, "p", "/new")
+	if err := pg.Upsert(&domain.ProjectConfig{Name: "p", RepoURL: "https://git.example/old.git", RepoRef: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.Upsert(&domain.ProjectConfig{Name: "p", RepoURL: "https://git.example/new.git", RepoRef: "release"}); err != nil {
+		t.Fatal(err)
+	}
 	got, err := pg.Get("p")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.RepoPath != "/new" {
-		t.Errorf("RepoPath = %q, want /new", got.RepoPath)
+	if got.RepoURL != "https://git.example/new.git" || got.RepoRef != "release" {
+		t.Errorf("source = %q@%q", got.RepoURL, got.RepoRef)
 	}
 }
 
@@ -124,7 +259,7 @@ func TestPG_GetNotFound(t *testing.T) {
 
 func TestPG_FindByGitLabID(t *testing.T) {
 	pg := testPG(t)
-	if err := pg.Upsert(&domain.ProjectConfig{Name: "gl", RepoPath: "/gl", GitLabProjectID: 999}); err != nil {
+	if err := pg.Upsert(&domain.ProjectConfig{Name: "gl", RepoURL: "https://git.example/gl.git", RepoRef: "main", GitLabProjectID: 999}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -208,8 +343,8 @@ func TestPG_Load(t *testing.T) {
 func TestPG_Save(t *testing.T) {
 	pg := testPG(t)
 	projects := map[string]*domain.ProjectConfig{
-		"sv1": {Name: "sv1", RepoPath: "/sv1", CreatedAt: "2025-01-01T00:00:00Z"},
-		"sv2": {Name: "sv2", RepoPath: "/sv2", CreatedAt: "2025-01-01T00:00:00Z"},
+		"sv1": {Name: "sv1", RepoURL: "https://git.example/sv1.git", RepoRef: "main", CreatedAt: "2025-01-01T00:00:00Z"},
+		"sv2": {Name: "sv2", RepoURL: "https://git.example/sv2.git", RepoRef: "main", CreatedAt: "2025-01-01T00:00:00Z"},
 	}
 	if err := pg.Save(projects); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -277,6 +412,39 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	}
 	if run.PipelineDef == nil || run.PipelineDef.Name != "rp2" {
 		t.Errorf("PipelineDef not set correctly: %+v", run.PipelineDef)
+	}
+}
+
+func TestPG_UpdateRunSourcesPersistsRemoteRevisionWithoutCheckoutPath(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "remote-source", "")
+	id := mustCreateRun(t, pg, "remote-source", &model.Project{Name: "remote-source"})
+	sources := []domain.AcquiredSource{{
+		RepoName:         "main",
+		URL:              "https://git.example/remote-source.git",
+		Path:             "/tmp/ephemeral-checkout",
+		RequestedRef:     "refs/heads/main",
+		ResolvedRevision: "0123456789abcdef0123456789abcdef01234567",
+		CredentialRef:    "cred_metadata_only",
+		Primary:          true,
+	}}
+	if err := pg.UpdateRunSources(id, sources); err != nil {
+		t.Fatalf("UpdateRunSources: %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run == nil || len(run.Sources) != 1 {
+		t.Fatalf("stored sources = %+v, want one source", run)
+	}
+	got := run.Sources[0]
+	if got.URL != sources[0].URL || got.RequestedRef != sources[0].RequestedRef || got.ResolvedRevision != sources[0].ResolvedRevision || got.CredentialRef != sources[0].CredentialRef || !got.Primary {
+		t.Fatalf("stored source = %+v, want %+v", got, sources[0])
+	}
+	if got.Path != "" {
+		t.Fatalf("stored source path = %q, want omitted ephemeral checkout", got.Path)
 	}
 }
 
@@ -427,6 +595,30 @@ func TestPG_ApplyTaskResult_Failed(t *testing.T) {
 	}
 	if run.FinishedAt == nil {
 		t.Error("FinishedAt not set for failed run")
+	}
+}
+
+func TestPG_ApplyTaskResult_FailureRemainsNonTerminalWhileManualWorkExists(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "afm", "/afm")
+	id := mustCreateRun(t, pg, "afm", nil)
+
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "deploy", Status: "manual"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(manual): %v", err)
+	}
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(failed): %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "running" {
+		t.Fatalf("Status = %q, want running", run.Status)
+	}
+	if run.FinishedAt != nil {
+		t.Fatal("FinishedAt set while manual work can still execute")
 	}
 }
 

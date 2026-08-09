@@ -29,15 +29,35 @@ ci_repo "auth" {
 }
 
 ci_repo "gateway" {
-  path = "https://gitlab.com/org/gateway.git"
-  kind = "git"
+  url  = "https://gitlab.com/org/gateway.git"
+  ref  = "main"
+}
+
+ci_repo "private_auth" {
+  url           = "ssh://git@example.test/team/auth.git"
+  ref           = "v2.1.0"
+  credential_ref = "build-auth"
 }
 ```
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `path` | string | Yes | Clone URL (multi-repo) or subdirectory (monorepo) |
-| `kind` | string | No | `"subpath"` for monorepo subdirectory, `"git"` for remote (default) |
+| `path` | string | One of `path`/`url` | Relative subdirectory of the acquired primary project checkout |
+| `url` | string | One of `path`/`url` | Standard HTTPS or SSH Git URL on any Git host |
+| `ref` | string | Yes for remote repositories | Branch, tag, or commit SHA; the resolved SHA is recorded per run |
+| `credential_ref` | string | No | Reference to runtime credentials; values never belong in HCL or URLs |
+| `kind` | string | No | Retained for compatibility; `subpath` describes local monorepo paths |
+
+`path` and `url` are mutually exclusive. A `path` must be relative, cannot
+escape the primary checkout with `..`, and never names an arbitrary server
+filesystem location. URLs containing passwords, tokens,
+or other embedded credentials are rejected. Remote sources are cloned into a
+private isolated workspace before the first task starts. Reusable bare Git
+objects live in the private source cache, but writable task files never do.
+Credential references
+are resolved from Kestrix's encrypted credential store, which supports HTTPS
+tokens, username/password or app passwords, and SSH private keys with optional
+known-hosts data.
 
 ## Tasks (`ci_task`)
 

@@ -9,7 +9,11 @@ Register GitLab projects with Kestrix so the webhook handler knows which pipelin
 ## Requirements
 
 ### REQ-1: Project config includes GitLab binding (implemented)
-Each project configuration SHALL include GitLab-specific fields.
+Each project configuration SHALL include its existing GitLab binding fields and
+MAY include a provider-neutral `repo_url`, `repo_ref`, and
+`repo_credential_ref` for a remote source. A remote project SHALL provide both
+`repo_url` and a non-empty `repo_ref`; local projects SHALL continue to use
+`repo_path`. Credential values SHALL NOT be accepted in project definitions.
 
 #### Scenario: Project config includes required fields
 - **WHEN** a project is created via API or config file
@@ -31,6 +35,19 @@ Each project configuration SHALL include GitLab-specific fields.
 - `default_branch` (string, default: "main") — branch to trigger
 - `webhook_secret` (string, optional) — per-project HMAC secret
 - `created_at` (string) — RFC 3339 timestamp
+
+#### Scenario: Register a remote project
+
+- **WHEN** a project is created with `name`, `repo_url`, `repo_ref`, and an
+  optional `repo_credential_ref`
+- **THEN** Kestrix SHALL persist the source declaration and credential reference
+- **AND** it SHALL not persist any credential value
+
+#### Scenario: Reject an incomplete remote project
+
+- **WHEN** a project has `repo_url` without `repo_ref`
+- **THEN** project validation SHALL fail before persistence
+- **AND** the response SHALL explain that the remote ref is required
 
 ### REQ-2: Project persistence (implemented)
 Project configurations SHALL survive server restarts by being stored in PostgreSQL. The server SHALL not load or write project configurations through a JSON FileStore.
@@ -80,7 +97,10 @@ The server SHALL NOT create or update a registered project as a side effect of s
 - **THEN** the server SHALL persist the project and expose it through the project API
 
 ### REQ-5: API CRUD for projects (implemented)
-Existing CRUD endpoints SHALL be extended with new fields.
+Existing project CRUD endpoints SHALL accept and expose non-secret remote
+source metadata, including `repo_url`, `repo_ref`, and `repo_credential_ref`.
+Credential values SHALL be write-only through dedicated credential operations
+and SHALL never appear in project or run responses.
 
 #### Scenario: API CRUD for projects
 - **WHEN** `POST /api/projects` receives a payload with `name`, `repo_path`, and `gitlab_project_id`
@@ -93,6 +113,12 @@ Existing CRUD endpoints SHALL be extended with new fields.
 
 **WHEN** `GET /api/projects` returns project list  
 **THEN** each project SHALL include `gitlab_project_id`, `default_branch`, `webhook_secret` (masked)
+
+#### Scenario: Update a remote source reference
+
+- **WHEN** a client updates `repo_ref` through project CRUD
+- **THEN** the new requested ref SHALL be persisted
+- **AND** future runs SHALL use the new ref without exposing credential data
 
 ## Scenarios
 

@@ -6,12 +6,13 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"kestrix/internal/dag"
 	"kestrix/internal/dispatch"
+	"kestrix/internal/domain"
+	"kestrix/internal/model"
 	"kestrix/internal/parser"
 )
 
@@ -54,15 +55,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"repo":      event.Repo,
 		"branch":    event.Branch,
+		"revision":  event.CheckoutSHA,
 		"commits":   event.CommitCount,
 		"tasks":     []string{},
 		"status":    "received",
 	}
 
 	// ─── Look up project by GitLab project ID ────────────────
-	var pipelineDir string
+	var proj model.Project
+	var projCfg *domain.ProjectConfig
+	cleanup := func() {}
 	if event.GitLabProjectID > 0 && s.projectStore != nil {
-		projCfg, err := s.projectStore.FindByGitLabID(event.GitLabProjectID)
+		projCfg, err = s.projectStore.FindByGitLabID(event.GitLabProjectID)
 		if err != nil {
 			log.Printf("webhook: store lookup error: %v", err)
 			logEntry["status"] = "error"
@@ -83,21 +87,36 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		pipelineDir = filepath.Join(projCfg.RepoPath, projCfg.PipelineDir)
+		if event.CheckoutSHA == "" {
+			logEntry["status"] = "error"
+			logEntry["error"] = "push event has no immutable checkout SHA"
+			s.logWebhook(logEntry)
+			writeError(w, http.StatusBadRequest, "push event has no immutable checkout SHA")
+			return
+		}
+		loaded, session, loadErr := s.loadProjectPipeline(r.Context(), projCfg, event.CheckoutSHA, "webhook")
+		if loadErr != nil {
+			logEntry["status"] = "error"
+			logEntry["error"] = loadErr.Error()
+			s.logWebhook(logEntry)
+			writeError(w, http.StatusUnprocessableEntity, loadErr.Error())
+			return
+		}
+		proj = loaded
+		cleanup = session.Cleanup
 	} else {
-		pipelineDir = s.cfg.PipelineDir
+		proj, err = parser.ParseDir(s.cfg.PipelineDir)
+		if err != nil {
+			log.Printf("webhook: parse error: %v", err)
+			logEntry["status"] = "error"
+			logEntry["error"] = err.Error()
+			s.logWebhook(logEntry)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(logEntry)
+			return
+		}
 	}
-
-	proj, err := parser.ParseDir(pipelineDir)
-	if err != nil {
-		log.Printf("webhook: parse error: %v", err)
-		logEntry["status"] = "error"
-		logEntry["error"] = err.Error()
-		s.logWebhook(logEntry)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(logEntry)
-		return
-	}
+	defer cleanup()
 
 	classifier := DefaultClassifier()
 	changedRepos := classifier.MatchRepos(event.FilesChanged, proj.Repos)
@@ -130,7 +149,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	var dispatchResult map[string]interface{}
 	dispatchID := s.cfg.Dispatch.ProjectID
 	if event.GitLabProjectID > 0 && s.projectStore != nil {
-		if projCfg, _ := s.projectStore.FindByGitLabID(event.GitLabProjectID); projCfg != nil && projCfg.GitLabProjectID > 0 {
+		if projCfg != nil && projCfg.GitLabProjectID > 0 {
 			dispatchID = fmt.Sprintf("%d", projCfg.GitLabProjectID)
 		}
 	}

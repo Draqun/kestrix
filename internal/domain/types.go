@@ -10,9 +10,12 @@ import (
 
 // Repo represents a source repository participating in a project.
 type Repo struct {
-	Name string `hcl:"name,label" json:"name"`
-	Path string `hcl:"path" json:"path"`
-	Kind string `hcl:"kind,optional" json:"kind"`
+	Name          string `hcl:"name,label" json:"name"`
+	Path          string `hcl:"path,optional" json:"path,omitempty"`
+	Kind          string `hcl:"kind,optional" json:"kind,omitempty"`
+	URL           string `hcl:"url,optional" json:"url,omitempty"`
+	Ref           string `hcl:"ref,optional" json:"ref,omitempty"`
+	CredentialRef string `hcl:"credential_ref,optional" json:"credential_ref,omitempty"`
 }
 
 // ExecuteSpec defines what a task runs and where.

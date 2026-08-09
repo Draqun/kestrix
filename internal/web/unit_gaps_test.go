@@ -38,7 +38,7 @@ func runHandlerProject(t *testing.T, valid bool) (*mocks.MockProjectStore, *doma
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := &domain.ProjectConfig{Name: "demo", RepoPath: dir, PipelineDir: ".", PipelineFile: "pipeline.tf"}
+	p := &domain.ProjectConfig{Name: "demo", RepoURL: "file://" + dir, RepoRef: "main", PipelineDir: ".", PipelineFile: "pipeline.tf"}
 	return &mocks.MockProjectStore{GetResult: p}, p
 }
 
@@ -179,22 +179,28 @@ func TestRunListNilAndApprovalBranches(t *testing.T) {
 		t.Fatalf("nil all=%d", w.Code)
 	}
 
-	manualRun := &domain.Run{ID: 9, ProjectName: project.Name, TaskResults: []domain.TaskResult{{Name: "task", Status: "manual"}}}
+	manualRun := &domain.Run{
+		ID: 9, ProjectName: project.Name,
+		PipelineDef: &domain.Project{
+			Name:  project.Name,
+			Repos: []domain.Repo{{Name: "repo", Path: "."}},
+			Tasks: []domain.Task{{Name: "task", Manual: true, Execute: domain.ExecuteSpec{Repo: "repo", Script: ":"}}},
+		},
+		Sources: []domain.AcquiredSource{{
+			RepoName: project.Name, URL: "https://git.example.test/demo.git", RequestedRef: "main",
+			ResolvedRevision: "0123456789abcdef", Primary: true,
+		}},
+		TaskResults: []domain.TaskResult{{Name: "task", Status: "manual"}},
+	}
 	runs.GetRunResult = manualRun
-	// Project lookup, parse, missing service, and approval failure.
+	// Approval uses the stored snapshot and does not require the live project.
 	store.GetResult = nil
 	w = httptest.NewRecorder()
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "runID", "9", "task", "task"))
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("approval project missing=%d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval without live project=%d body=%s", w.Code, w.Body.String())
 	}
-	store, project = runHandlerProject(t, false)
-	srv = setupRunServer(t, store, runs)
-	w = httptest.NewRecorder()
-	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "runID", "9", "task", "task"))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("approval parse=%d", w.Code)
-	}
+	manualRun.TaskResults = []domain.TaskResult{{Name: "task", Status: "manual"}}
 	store, project = runHandlerProject(t, true)
 	srv = setupRunServer(t, store, runs)
 	srv.runService = nil
@@ -206,7 +212,7 @@ func TestRunListNilAndApprovalBranches(t *testing.T) {
 	srv.runService = service.NewRunService(runs, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	w = httptest.NewRecorder()
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "runID", "9", "task", "task"))
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusOK {
 		t.Fatalf("approval runner=%d", w.Code)
 	}
 }
@@ -232,7 +238,7 @@ func TestWebhookUnitBranches(t *testing.T) {
 	// Unknown project is ignored, lookup failures are reported, and a valid
 	// project reaches DAG resolution without any external service.
 	srv.cfg.Signature.Enabled = false
-	payload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"modified":["x.go"]}]}`
+	payload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"id":"abc","modified":["x.go"]}]}`
 	w = httptest.NewRecorder()
 	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload)))
 	if w.Code != http.StatusOK {
@@ -294,7 +300,7 @@ func TestProjectAndPipelineErrorBranches(t *testing.T) {
 	}
 
 	// Path traversal in the configured pipeline directory is rejected.
-	if _, err := srv.projectPipelineDir(&domain.ProjectConfig{RepoPath: t.TempDir(), PipelineDir: "../outside"}); err == nil {
+	if _, err := srv.projectPipelineDir(&domain.ProjectConfig{PipelineDir: "../outside"}, t.TempDir()); err == nil {
 		t.Fatal("expected pipeline escape error")
 	}
 }
@@ -339,7 +345,7 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 	srv = setupRunServer(t, errStore, nil)
 	srv.projectService = service.NewProjectService(errStore)
 	w = httptest.NewRecorder()
-	srv.handleUpdateProject(w, runCtx(httptest.NewRequest("PUT", "/", strings.NewReader(`{"repo_path":"/tmp"}`)), "name", "x"))
+	srv.handleUpdateProject(w, runCtx(httptest.NewRequest("PUT", "/", strings.NewReader(`{"repo_url":"https://git.example.test/x.git","repo_ref":"main"}`)), "name", "x"))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("backend status=%d", w.Code)
 	}
@@ -412,7 +418,8 @@ func TestProjectPipelineAndDashboardRemainingBranches(t *testing.T) {
 		t.Fatalf("definition parse=%d", w.Code)
 	}
 
-	missing := &domain.ProjectConfig{Name: "missing", RepoPath: t.TempDir(), PipelineFile: "missing.tf"}
+	missingRoot := t.TempDir()
+	missing := &domain.ProjectConfig{Name: "missing", RepoURL: "file://" + missingRoot, RepoRef: "main", PipelineFile: "missing.tf"}
 	srv.projectStore = &mocks.MockProjectStore{GetResult: missing}
 	srv.projectService = service.NewProjectService(srv.projectStore)
 	w = httptest.NewRecorder()
@@ -420,7 +427,8 @@ func TestProjectPipelineAndDashboardRemainingBranches(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("pipeline read=%d", w.Code)
 	}
-	escape := &domain.ProjectConfig{Name: "escape", RepoPath: t.TempDir(), PipelineDir: "sub", PipelineFile: "../outside.tf"}
+	escapeRoot := t.TempDir()
+	escape := &domain.ProjectConfig{Name: "escape", RepoURL: "file://" + escapeRoot, RepoRef: "main", PipelineDir: "sub", PipelineFile: "../outside.tf"}
 	srv.projectStore = &mocks.MockProjectStore{GetResult: escape}
 	srv.projectService = service.NewProjectService(srv.projectStore)
 	w = httptest.NewRecorder()
@@ -437,7 +445,7 @@ func TestProjectPipelineAndDashboardRemainingBranches(t *testing.T) {
 	r.Body = failingReader{}
 	w = httptest.NewRecorder()
 	srv.handleSaveProjectPipeline(w, runCtx(r, "name", validProject.Name))
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("save read=%d", w.Code)
 	}
 }
@@ -466,7 +474,7 @@ func TestStaticRouterAndStoreFallback(t *testing.T) {
 	oldPG := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return ps, rs, nil }
 	t.Cleanup(func() { newPGStores = oldPG })
-	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake"})
+	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil {
 		t.Fatalf("initStores: %v", err)
 	}
@@ -505,6 +513,7 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 	pipelineDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
   ci_repo "repo" {
+    path = "."
   }
   ci_task "task" {
     trigger = "repo.repo.changed"
@@ -537,10 +546,11 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 	}
 	// A project-specific GitLab ID overrides the global dispatch project and
 	// an empty configured branch falls back to the webhook branch.
-	projectStore := &mocks.MockProjectStore{FindByGitLabIDResult: &domain.ProjectConfig{RepoPath: pipelineDir, PipelineDir: ".", GitLabProjectID: 99}}
+	projectStore := &mocks.MockProjectStore{FindByGitLabIDResult: &domain.ProjectConfig{Name: "repo", RepoURL: "file://" + pipelineDir, RepoRef: "main", PipelineDir: ".", GitLabProjectID: 99}}
 	srv.projectStore = projectStore
+	srv.sourceSessions = &testSourceSessions{}
 	srv.cfg.Branch = ""
-	projectPayload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"modified":["x.go"]}]}`
+	projectPayload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"id":"abc","modified":["x.go"]}]}`
 	w = httptest.NewRecorder()
 	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(projectPayload)))
 	if w.Code != http.StatusOK {
@@ -575,7 +585,7 @@ func TestRemainingFileAndPathSeams(t *testing.T) {
 	oldAbs := absPath
 	absPath = func(string) (string, error) { return "", errors.New("abs") }
 	t.Cleanup(func() { absPath = oldAbs })
-	if _, err := srv.projectPipelineDir(&domain.ProjectConfig{RepoPath: "repo"}); err == nil {
+	if _, err := srv.projectPipelineDir(&domain.ProjectConfig{}, "repo"); err == nil {
 		t.Fatal("expected abs path error")
 	}
 }

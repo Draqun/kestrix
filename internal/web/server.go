@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,10 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/runner"
 	"kestrix/internal/service"
+	"kestrix/internal/source"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -37,13 +41,22 @@ type Config struct {
 	StaticDir   string
 	// StorePath is retained only for source compatibility with old callers;
 	// PostgreSQL is the sole runtime persistence backend.
-	StorePath   string
-	DatabaseURL string
-	Branch      string
-	Docker      DockerConfig
-	Signature   SignatureConfig
-	Dispatch    DispatchConfig
-	Runner      RunnerConfig
+	StorePath     string
+	DatabaseURL   string
+	MasterKeyPath string
+	Branch        string
+	Docker        DockerConfig
+	Signature     SignatureConfig
+	Dispatch      DispatchConfig
+	Runner        RunnerConfig
+	SourceCache   SourceCacheConfig
+}
+
+// SourceCacheConfig controls the private persistent Git object cache.
+type SourceCacheConfig struct {
+	Directory string
+	MaxAge    time.Duration
+	MaxBytes  int64
 }
 
 // RunnerConfig holds runner execution settings.
@@ -62,20 +75,33 @@ type DockerConfig struct {
 
 // Server is the HTTP server.
 type Server struct {
-	cfg            Config
-	router         chi.Router
-	webhookLog     []map[string]interface{}
-	webhookMu      sync.RWMutex
-	projectStore   domain.ProjectStore
-	runStore       domain.RunStore
-	pipelineRunner domain.PipelineRunner
-	taskRunner     domain.TaskRunner
-	projectService *service.ProjectService
-	runService     *service.RunService
-	webhookService *service.WebhookService
+	cfg             Config
+	router          chi.Router
+	webhookLog      []map[string]interface{}
+	webhookMu       sync.RWMutex
+	projectStore    domain.ProjectStore
+	runStore        domain.RunStore
+	pipelineRunner  domain.PipelineRunner
+	taskRunner      domain.TaskRunner
+	projectService  *service.ProjectService
+	runService      *service.RunService
+	webhookService  *service.WebhookService
+	credentialStore domain.CredentialStore
+	sourceSessions  domain.SourceSessionManager
 }
 
 var listenAndServe = http.ListenAndServe
+
+var newSourceSessionManager = func(opts source.CacheOptions) (domain.SourceSessionManager, error) {
+	return source.NewGitCache(opts)
+}
+
+func (s *Server) credentialResolver() domain.CredentialResolver {
+	if s.credentialStore == nil {
+		return nil
+	}
+	return &source.CredentialStoreResolver{Store: s.credentialStore}
+}
 
 // NewServerE creates a server and returns persistence initialization errors
 // before any HTTP listener is started.
@@ -89,7 +115,34 @@ func NewServerE(cfg Config) (*Server, error) {
 	taskRunner := pipelineRunner
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
 	webhookService := service.NewWebhookService(nil)
-	return NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService), nil
+	s := NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
+	if credentials, ok := projectStore.(domain.CredentialStore); ok {
+		s.credentialStore = credentials
+	}
+	cacheCfg := cfg.SourceCache
+	if cacheCfg.Directory == "" {
+		cacheCfg.Directory = filepath.Join(os.TempDir(), "kestrix-source-cache")
+	}
+	if cacheCfg.MaxAge <= 0 {
+		cacheCfg.MaxAge = 30 * 24 * time.Hour
+	}
+	if cacheCfg.MaxBytes <= 0 {
+		cacheCfg.MaxBytes = 10 << 30
+	}
+	cache, err := newSourceSessionManager(source.CacheOptions{
+		Root: cacheCfg.Directory, MaxAge: cacheCfg.MaxAge, MaxBytes: cacheCfg.MaxBytes,
+		Resolver: s.credentialResolver(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize source cache: %w", err)
+	}
+	s.sourceSessions = cache
+	maintenanceCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cache.Maintain(maintenanceCtx); err != nil && maintenanceCtx.Err() == nil {
+		log.Printf("source cache maintenance warning: %v", err)
+	}
+	return s, nil
 }
 
 // NewServerWithDeps creates a server from prebuilt dependencies.
@@ -124,10 +177,22 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, nil, fmt.Errorf("database URL is required")
 	}
+	if cfg.MasterKeyPath == "" {
+		return nil, nil, fmt.Errorf("credential master key unavailable: KESTRIX_MASTER_KEY_PATH is required")
+	}
+	provider := credentials.FileMasterKeyProvider{Path: cfg.MasterKeyPath, Version: 1}
+	if _, _, err := provider.Current(); err != nil {
+		return nil, nil, fmt.Errorf("validate KESTRIX_MASTER_KEY_PATH: %w", err)
+	}
 	projectStore, runStore, err := newPGStores(cfg.DatabaseURL)
 	if err != nil {
 		message := strings.ReplaceAll(err.Error(), cfg.DatabaseURL, "[redacted database URL]")
 		return nil, nil, fmt.Errorf("initialize PostgreSQL: %s", message)
+	}
+	if setter, ok := projectStore.(interface {
+		SetCredentialMasterKeyProvider(credentials.MasterKeyProvider)
+	}); ok {
+		setter.SetCredentialMasterKeyProvider(provider)
 	}
 	log.Printf("connected to PostgreSQL")
 	return projectStore, runStore, nil
@@ -170,6 +235,11 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/pipeline", s.handleGetPipeline)
 		r.Get("/pipeline/raw", s.handleGetPipelineRaw)
 		r.Get("/projects", s.handleListProjects)
+		r.Get("/credentials", s.handleListCredentials)
+		r.Post("/credentials", s.handleCreateCredential)
+		r.Get("/credentials/{ref}", s.handleGetCredential)
+		r.Put("/credentials/{ref}", s.handleRotateCredential)
+		r.Post("/credentials/{ref}/revoke", s.handleRevokeCredential)
 		r.Post("/projects", s.handleCreateProject)
 		r.Get("/projects/{name}", s.handleGetProject)
 		r.Put("/projects/{name}", s.handleUpdateProject)

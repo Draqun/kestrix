@@ -5,6 +5,7 @@ const KEY_MAP = {
     d: '/',
     p: '/pipelines',
     r: '/projects',
+    s: '/settings',
     w: '/webhooks',
   },
 };

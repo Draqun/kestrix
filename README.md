@@ -40,8 +40,8 @@ make build
 ### 2. Run
 
 ```bash
-# Start the server (default: :8080); projects are registered through the API/UI
-./bin/kestrix serve --dir ./examples/demo-mono
+# Start the server (default: :8080); registered projects are remote-only
+./bin/kestrix serve
 
 # With dispatch to GitLab
 ./bin/kestrix serve \
@@ -56,7 +56,7 @@ make build
 # Register a project explicitly
 curl -X POST http://localhost:8080/api/projects \
   -H "Content-Type: application/json" \
-  -d '{"name":"demo-mono","repo_path":"./examples/demo-mono","pipeline_dir":".","pipeline_file":"pipeline.tf"}'
+  -d '{"name":"demo-mono","repo_url":"https://git.example.test/team/demo-mono.git","repo_ref":"main","pipeline_dir":"ci","pipeline_file":"pipeline.tf"}'
 ```
 
 ### 3. Use
@@ -107,6 +107,11 @@ dispatch:
   project_id: 12345
   gitlab_url: "https://gitlab.com"
   gitlab_token: "glpat-xxx"
+
+source_cache:
+  directory: "/var/lib/kestrix/cache/git"
+  max_age: "720h"
+  max_bytes: 10737418240
 ```
 
 **Precedence:** config file → env vars → CLI flags.
@@ -116,6 +121,9 @@ dispatch:
 | `KESTRIX_WEBHOOK_SECRET` | `--secret` | Webhook HMAC secret |
 | `KESTRIX_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
 | `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
+| `KESTRIX_SOURCE_CACHE_DIR` | `--source-cache-dir` | Private bare-mirror cache directory |
+| `KESTRIX_SOURCE_CACHE_MAX_AGE` | `--source-cache-max-age` | Maximum unused-entry age |
+| `KESTRIX_SOURCE_CACHE_MAX_BYTES` | `--source-cache-max-bytes` | Maximum cache size in bytes |
 
 `KESTRIX_*` is the only supported prefix for Kestrix-owned settings. Generic
 variables such as `DATABASE_URL` and `DOCKER_*` keep their existing names.
@@ -125,7 +133,8 @@ variables such as `DATABASE_URL` and `DOCKER_*` keep their existing names.
 Kestrix is the product name and `kestrix` is the provider-neutral Go module
 path. The optional `source.url` field in `project.yaml` records where the
 repository is hosted, but changing that URL does not require changing Go
-imports. It is public metadata only; credentials belong in environment
+imports. It is public metadata only; credentials belong in the encrypted
+credential store and are referenced by `credential_ref`
 variables.
 
 Consumers that import internal packages must migrate imports from the former
@@ -171,7 +180,7 @@ kestrix/
 │   ├── dispatch/        # GitLab pipeline dispatch client
 │   ├── model/           # Data model (Project, Task, Repo, Variable)
 │   ├── parser/          # HCL parser (hclsyntax)
-│   ├── store/           # Persistent project config (JSON file)
+│   ├── store/           # PostgreSQL project, credential, and run persistence
 │   ├── variables/       # Variable resolution engine
 │   └── web/             # HTTP server, webhook handler, API
 ├── examples/            # One self-contained project per directory
@@ -201,7 +210,7 @@ kestrix/
 | GET | `/api/projects/{name}` | Get project |
 | DELETE | `/api/projects/{name}` | Delete project |
 | GET | `/api/projects/{name}/pipeline` | Get project pipeline HCL |
-| POST | `/api/projects/{name}/pipeline` | Save project pipeline HCL |
+| POST | `/api/projects/{name}/pipeline` | Unsupported (405); registered pipeline HCL is Git-owned |
 | POST | `/api/projects/{name}/resolve` | Resolve project triggers |
 | POST | `/webhook` | GitLab webhook receiver |
 | GET | `/docs/` | Swagger UI |
@@ -255,15 +264,21 @@ cd ui && npm install && npm run dev
 ### Running a pipeline from the UI
 
 1. Start the application with `make ui-serve DIR=.`.
-2. Open **Projects**. If `kestrix` is not listed, create it with repository path
-   set to this checkout's absolute path and pipeline directory set to `ci`.
+2. Push the repository to a reachable Git remote, then open **Projects** and
+   register its URL, explicit ref, and pipeline directory. Create/select a
+   credential first when the remote is private.
 3. Select **Open Pipeline**, stay on the **Graph** view, enter `kestrix` in
    **Changed repos**, then choose **Run locally**.
 4. The job output and final status appear below the graph. Manual tasks remain
    skipped unless **Auto-run manual jobs** is enabled.
 
-The UI executes scripts from registered local projects. Do not expose this
-development server to an untrusted network.
+Registered pipeline content is read-only in Kestrix. Edit and push HCL in Git;
+each operation refreshes the remote and records the resolved commit SHA.
+
+See [Remote projects](docs/remote-projects.md),
+[Repository credentials](docs/repository-credentials.md), and the
+[remote-only migration guide](docs/migrations/remote-only-projects.md) for the
+complete onboarding, cache, security, and upgrade procedure.
 
 ## License
 

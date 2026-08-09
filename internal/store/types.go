@@ -19,6 +19,3 @@ type Run = domain.Run
 // sites in the web layer keep compiling while Store migrates to
 // domain.ProjectStore.
 type ProjectConfig = domain.ProjectConfig
-
-// ExtraRepo is an alias for domain.ExtraRepo.
-type ExtraRepo = domain.ExtraRepo

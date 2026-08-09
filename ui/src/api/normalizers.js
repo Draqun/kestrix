@@ -20,6 +20,9 @@ export function normalizeProject(proj) {
       if (repo.name) r.Name = repo.name;
       if (repo.path) r.Path = repo.path;
       if (repo.kind) r.Kind = repo.kind;
+      if (repo.url) r.URL = repo.url;
+      if (repo.ref) r.Ref = repo.ref;
+      if (repo.credential_ref) r.CredentialRef = repo.credential_ref;
       return r;
     });
   }
