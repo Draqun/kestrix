@@ -5,6 +5,11 @@ BINARY    := bin/kestrix
 GO        := go
 GOFLAGS   :=
 
+# Pinned development tools. staticcheck must stay compatible with the Go
+# release in go.mod: newer staticcheck releases raise their minimum Go version
+# and `@latest` then fails to install against the pinned toolchain.
+STATICCHECK_VERSION ?= v0.7.0
+
 # Portable Go toolchain locations.
 # Override with env vars if your system needs different paths; otherwise
 # everything stays inside the repo so this Makefile works on any machine
@@ -120,13 +125,13 @@ staticcheck:
 	@set -eu; \
 	if [ ! -x "$(GOBIN)/staticcheck" ]; then \
 		echo "Installing staticcheck..."; \
-		$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest; \
+		$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
 	else \
 		want="$$($(GO) version | awk '{print $$3}')"; \
 		have="$$($(GO) version -m "$(GOBIN)/staticcheck" 2>/dev/null | sed -n '1p' | awk -F: '{print $$2}' | xargs)"; \
 		if [ "$$want" != "$$have" ]; then \
 			echo "Rebuilding staticcheck ($$have -> $$want)..."; \
-			$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest; \
+			$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION); \
 		fi; \
 	fi
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH) GOBIN=$(GOBIN) PATH=$(GOBIN):$(PATH) $(GOBIN)/staticcheck ./...
@@ -187,7 +192,7 @@ dev-all:
 
 ## install-tools: Install development tools
 install-tools:
-	$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@latest
+	$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	$(GOENV) $(GO) install github.com/air-verse/air@v1.62.0
 
 ## add-dep: Add a Go module dependency (use as `make add-dep DEP=github.com/foo/bar@latest`)
