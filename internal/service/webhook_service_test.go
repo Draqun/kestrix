@@ -1,34 +1,49 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
 )
 
-func TestWebhookService_Process_Happy(t *testing.T) {
+func TestWebhookService_Record_Happy(t *testing.T) {
 	sink := &mocks.MockWebhookLogSink{}
 	svc := NewWebhookService(sink)
 
-	event := map[string]interface{}{
-		"object_kind":         "push",
-		"project":             map[string]interface{}{"id": float64(123)},
-		"ref":                 "refs/heads/main",
-		"commits":             []interface{}{},
-		"total_commits_count": float64(1),
-	}
-	err := svc.Process(event)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	svc.Record(domain.WebhookEvent{
+		Repo:           "org/service-a",
+		Branch:         "main",
+		Revision:       "0123456789abcdef",
+		Commits:        1,
+		TriggeredTasks: []string{"test_auth"},
+		Status:         domain.WebhookStatusTriggered,
+	})
+
 	if len(sink.Entries) != 1 {
 		t.Fatalf("expected 1 entry logged, got %d", len(sink.Entries))
 	}
+	if sink.Entries[0].Status != domain.WebhookStatusTriggered {
+		t.Errorf("status = %q, want %q", sink.Entries[0].Status, domain.WebhookStatusTriggered)
+	}
 }
 
-func TestWebhookService_Process_NilSink(t *testing.T) {
+func TestWebhookService_Record_NilSink(t *testing.T) {
 	svc := NewWebhookService(nil)
-	if err := svc.Process(map[string]interface{}{"event": "push"}); err != nil {
-		t.Fatalf("nil sink returned error: %v", err)
+	svc.Record(domain.WebhookEvent{Status: domain.WebhookStatusSkipped})
+}
+
+// A failing history store must not surface to the webhook caller: GitLab
+// retries on a non-2xx response, so a reporting outage would become a
+// delivery outage.
+func TestWebhookService_Record_SinkFailureIsSwallowed(t *testing.T) {
+	sink := &mocks.MockWebhookLogSink{RecordErr: errors.New("database unavailable")}
+	svc := NewWebhookService(sink)
+
+	svc.Record(domain.WebhookEvent{Repo: "org/service-a", Status: domain.WebhookStatusTriggered})
+
+	if len(sink.Entries) != 0 {
+		t.Fatalf("failing sink stored %d entries, want 0", len(sink.Entries))
 	}
 }

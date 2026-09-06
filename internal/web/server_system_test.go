@@ -80,7 +80,7 @@ func TestHandleRoot(t *testing.T) {
 		t.Errorf("expected text/html content-type, got %q", w.Header().Get("Content-Type"))
 	}
 	body := w.Body.String()
-	for _, want := range []string{"<html>", "Kestrix", "/docs/", "/health"} {
+	for _, want := range []string{"<html>", "Kestrix", "/docs/", "/api/health"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %q in response body", want)
 		}

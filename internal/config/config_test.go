@@ -456,3 +456,106 @@ func TestSaveMarshalErrorMock(t *testing.T) {
 		t.Fatalf("Save error = %v", err)
 	}
 }
+
+func TestWebhookHistoryLimitDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Webhook.HistoryLimit != DefaultWebhookHistoryLimit {
+		t.Fatalf("default history limit = %d, want %d", cfg.Webhook.HistoryLimit, DefaultWebhookHistoryLimit)
+	}
+}
+
+func TestLoadNormalizesWebhookHistoryLimit(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"absent", "listen_addr: \":9090\"\n", DefaultWebhookHistoryLimit},
+		{"explicit", "webhook:\n  history_limit: 250\n", 250},
+		{"zero falls back", "webhook:\n  history_limit: 0\n", DefaultWebhookHistoryLimit},
+		{"negative falls back", "webhook:\n  history_limit: -5\n", DefaultWebhookHistoryLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Webhook.HistoryLimit != tc.want {
+				t.Errorf("history limit = %d, want %d", cfg.Webhook.HistoryLimit, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyWebhookEnvironment(t *testing.T) {
+	t.Run("environment overrides file", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Webhook.HistoryLimit = 250
+		env := LoadEnvironment([]string{"KESTRIX_WEBHOOK_HISTORY_LIMIT=42"})
+		if err := cfg.ApplyWebhookEnvironment(env); err != nil {
+			t.Fatalf("ApplyWebhookEnvironment: %v", err)
+		}
+		if cfg.Webhook.HistoryLimit != 42 {
+			t.Errorf("history limit = %d, want 42", cfg.Webhook.HistoryLimit)
+		}
+	})
+
+	t.Run("unset keeps configured value", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Webhook.HistoryLimit = 250
+		if err := cfg.ApplyWebhookEnvironment(LoadEnvironment(nil)); err != nil {
+			t.Fatalf("ApplyWebhookEnvironment: %v", err)
+		}
+		if cfg.Webhook.HistoryLimit != 250 {
+			t.Errorf("history limit = %d, want 250", cfg.Webhook.HistoryLimit)
+		}
+	})
+
+	t.Run("non-positive configured value falls back to the default", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Webhook.HistoryLimit = 0
+		if err := cfg.ApplyWebhookEnvironment(LoadEnvironment(nil)); err != nil {
+			t.Fatalf("ApplyWebhookEnvironment: %v", err)
+		}
+		if cfg.Webhook.HistoryLimit != DefaultWebhookHistoryLimit {
+			t.Errorf("history limit = %d, want %d", cfg.Webhook.HistoryLimit, DefaultWebhookHistoryLimit)
+		}
+	})
+
+	t.Run("non-positive configured value falls back to the default", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Webhook.HistoryLimit = 0
+		if err := cfg.ApplyWebhookEnvironment(LoadEnvironment(nil)); err != nil {
+			t.Fatalf("ApplyWebhookEnvironment: %v", err)
+		}
+		if cfg.Webhook.HistoryLimit != DefaultWebhookHistoryLimit {
+			t.Errorf("history limit = %d, want %d", cfg.Webhook.HistoryLimit, DefaultWebhookHistoryLimit)
+		}
+	})
+
+	t.Run("nil environment is a no-op", func(t *testing.T) {
+		cfg := DefaultConfig()
+		if err := cfg.ApplyWebhookEnvironment(nil); err != nil {
+			t.Fatalf("ApplyWebhookEnvironment: %v", err)
+		}
+	})
+
+	for _, raw := range []string{"0", "-1", "many"} {
+		t.Run("invalid "+raw, func(t *testing.T) {
+			cfg := DefaultConfig()
+			env := LoadEnvironment([]string{"KESTRIX_WEBHOOK_HISTORY_LIMIT=" + raw})
+			err := cfg.ApplyWebhookEnvironment(env)
+			if err == nil {
+				t.Fatal("expected an error for an invalid history limit")
+			}
+			if !strings.Contains(err.Error(), "KESTRIX_WEBHOOK_HISTORY_LIMIT") {
+				t.Errorf("error = %v, want it to name the variable", err)
+			}
+		})
+	}
+}

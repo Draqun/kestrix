@@ -13,8 +13,9 @@ import (
 
 // PGStore provides PostgreSQL-backed project configuration storage.
 type PGStore struct {
-	db         *sql.DB
-	masterKeys credentials.MasterKeyProvider
+	db                  *sql.DB
+	masterKeys          credentials.MasterKeyProvider
+	webhookHistoryLimit int
 }
 
 // NewPG creates a PGStore, connects to the database, and ensures the schema exists.
@@ -39,7 +40,16 @@ func NewPG(databaseURL string) (*PGStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &PGStore{db: db}, nil
+	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit}, nil
+}
+
+// SetWebhookHistoryLimit bounds how many webhook events are retained. A
+// non-positive limit restores the default.
+func (s *PGStore) SetWebhookHistoryLimit(limit int) {
+	if limit <= 0 {
+		limit = DefaultWebhookHistoryLimit
+	}
+	s.webhookHistoryLimit = limit
 }
 
 func migrate(db *sql.DB) error {
@@ -94,6 +104,24 @@ func migrate(db *sql.DB) error {
 
 		CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_name);
 		CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+
+		CREATE TABLE IF NOT EXISTS webhook_events (
+			id              SERIAL PRIMARY KEY,
+			received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+			project_name    TEXT,
+			repo            TEXT NOT NULL DEFAULT '',
+			branch          TEXT NOT NULL DEFAULT '',
+			revision        TEXT NOT NULL DEFAULT '',
+			commits         INTEGER NOT NULL DEFAULT 0,
+			triggered_tasks JSONB NOT NULL DEFAULT '[]',
+			status          TEXT NOT NULL,
+			error           TEXT NOT NULL DEFAULT '',
+			dispatch        JSONB NOT NULL DEFAULT '{}'
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_webhook_events_received ON webhook_events(received_at DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS idx_webhook_events_project ON webhook_events(project_name);
+		CREATE INDEX IF NOT EXISTS idx_webhook_events_status ON webhook_events(status);
 	`); err != nil {
 		return fmt.Errorf("create base schema: %w", err)
 	}

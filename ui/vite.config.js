@@ -7,7 +7,6 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/health': 'http://localhost:8080',
       '/webhook': 'http://localhost:8080',
       '/api': 'http://localhost:8080',
       '/docs': 'http://localhost:8080',

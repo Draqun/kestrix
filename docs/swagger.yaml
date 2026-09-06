@@ -229,6 +229,9 @@ paths:
       - pipeline
   /api/health:
     get:
+      description: |-
+        Returns 503 when a backing store query fails; the body then
+        carries "status": "degraded" and omits the failed counter.
       produces:
       - application/json
       responses:
@@ -237,22 +240,63 @@ paths:
           schema:
             additionalProperties: true
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
       summary: Health check
       tags:
       - system
   /api/logs:
     get:
+      description: Returns recorded webhook events newest first, in the standard paginated
+        envelope.
+      parameters:
+      - description: Maximum events to return
+        in: query
+        name: limit
+        type: integer
+      - description: Number of events to skip
+        in: query
+        name: offset
+        type: integer
+      - description: Filter by registered project name
+        in: query
+        name: project
+        type: string
+      - description: Filter by status
+        enum:
+        - triggered
+        - skipped
+        - ignored
+        - error
+        in: query
+        name: status
+        type: string
+      - description: Only events received at or after this RFC3339 timestamp
+        in: query
+        name: since
+        type: string
+      - description: Only events received at or before this RFC3339 timestamp
+        in: query
+        name: until
+        type: string
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            items:
-              additionalProperties: true
-              type: object
-            type: array
-      summary: Get webhook logs
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List webhook history
       tags:
       - webhooks
   /api/pipeline:

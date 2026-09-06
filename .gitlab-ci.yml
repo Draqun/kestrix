@@ -77,8 +77,11 @@ test_fe:
   before_script:
     - cd ui && npm ci --silent
   script:
-    - node --test --experimental-test-coverage src/components/Pagination.test.js src/lib/runFilters.test.js
-  coverage: '/coverage:\s+(\d+\.\d+)%/'
+    - node --test --experimental-test-coverage "src/**/*.test.js"
+    - npm run test:components
+  # Matches the "all files" row of the node --test coverage table, which is the
+  # only coverage summary this job prints.
+  coverage: '/all files\s+\|\s+(\d+\.\d+)\s+\|/'
 
 runner-integration:
   stage: test

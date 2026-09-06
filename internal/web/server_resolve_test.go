@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kestrix/internal/domain"
+	"kestrix/internal/web/pagination"
 )
 
 // pipelineWithTaskTF is a minimal HCL pipeline with one ci_repo and one
@@ -236,20 +239,34 @@ func TestHandleGetLogs_Empty(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	var logs []interface{}
-	if err := json.NewDecoder(w.Body).Decode(&logs); err != nil {
+	var resp struct {
+		Items      []domain.WebhookEvent `json:"items"`
+		Pagination pagination.Meta       `json:"pagination"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(logs) != 0 {
-		t.Errorf("logs = %v, want empty", logs)
+	if len(resp.Items) != 0 {
+		t.Errorf("items = %v, want empty", resp.Items)
+	}
+	if resp.Pagination.Total != 0 {
+		t.Errorf("total = %d, want 0", resp.Pagination.Total)
+	}
+	if resp.Items == nil {
+		t.Error("items = null, want an empty array")
 	}
 }
 
 func TestHandleGetLogs_WithEntries(t *testing.T) {
 	srv := systemHandlerServer(t)
-	srv.webhookLog = append(srv.webhookLog, map[string]interface{}{
-		"event": "push", "project": "demo",
-	})
+	log := testWebhookLog(t, srv)
+	if err := log.Record(domain.WebhookEvent{
+		ProjectName: "demo", Repo: "org/demo", Branch: "main",
+		Status: domain.WebhookStatusTriggered, TriggeredTasks: []string{"build"},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/logs", nil)
 	srv.handleGetLogs(w, r)
@@ -257,11 +274,17 @@ func TestHandleGetLogs_WithEntries(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	var logs []map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&logs); err != nil {
+	var resp struct {
+		Items      []domain.WebhookEvent `json:"items"`
+		Pagination pagination.Meta       `json:"pagination"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(logs) != 1 || logs[0]["event"] != "push" {
-		t.Errorf("logs = %v, want one push entry", logs)
+	if len(resp.Items) != 1 || resp.Items[0].Repo != "org/demo" {
+		t.Fatalf("items = %+v, want one org/demo event", resp.Items)
+	}
+	if resp.Pagination.Total != 1 {
+		t.Errorf("total = %d, want 1", resp.Pagination.Total)
 	}
 }

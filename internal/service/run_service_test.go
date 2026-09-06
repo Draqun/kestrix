@@ -587,13 +587,14 @@ func TestApproveManualTask_ErrorBranches(t *testing.T) {
 	}
 }
 
-func TestWebhookService_Process_NilAndAppend(t *testing.T) {
+func TestWebhookService_Record_NilReceiverAndSink(t *testing.T) {
 	var nilSvc *WebhookService
-	if err := nilSvc.Process(map[string]interface{}{"a": 1}); err != nil {
-		t.Fatalf("nil receiver returned error: %v", err)
-	}
-	svc := NewWebhookService(&mocks.MockWebhookLogSink{})
-	if err := svc.Process(map[string]interface{}{"event": "push"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	nilSvc.Record(domain.WebhookEvent{Repo: "a"})
+
+	sink := &mocks.MockWebhookLogSink{}
+	svc := NewWebhookService(sink)
+	svc.Record(domain.WebhookEvent{Repo: "org/service-a", Status: domain.WebhookStatusTriggered})
+	if len(sink.Entries) != 1 {
+		t.Fatalf("expected 1 recorded event, got %d", len(sink.Entries))
 	}
 }

@@ -210,6 +210,10 @@ func cmdServe(args []string) {
 	if *secret != "" {
 		cfg.Webhook.Secret = *secret
 	}
+	if err := cfg.ApplyWebhookEnvironment(env); err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
+	}
 	if *gitlabURL != "" {
 		cfg.Dispatch.GitLabURL = *gitlabURL
 	}
@@ -271,6 +275,7 @@ func cmdServe(args []string) {
 			Secret:  cfg.Webhook.Secret,
 			Method:  *method,
 		},
+		WebhookHistoryLimit: cfg.Webhook.HistoryLimit,
 		Dispatch: web.DispatchConfig{
 			Enabled:     cfg.Dispatch.Enabled,
 			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),

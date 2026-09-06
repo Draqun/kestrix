@@ -205,6 +205,7 @@ kestrix/
 | POST | `/api/resolve` | Resolve trigger conditions |
 | POST | `/api/generate` | Generate gitlab-ci.yml |
 | GET | `/api/validate` | Validate pipeline |
+| GET | `/api/logs` | Webhook event history, paginated and filterable |
 | GET | `/api/projects` | List projects |
 | POST | `/api/projects` | Create project |
 | GET | `/api/projects/{name}` | Get project |

@@ -46,7 +46,9 @@ func testPG(t *testing.T) *PGStore {
 	if err != nil {
 		t.Skipf("PostgreSQL not available: %v", err)
 	}
+	pg.db.Exec(`DELETE FROM webhook_events`)
 	t.Cleanup(func() {
+		pg.db.Exec(`DELETE FROM webhook_events`)
 		pg.db.Exec(`DELETE FROM runs`)
 		pg.db.Exec(`DELETE FROM credentials`)
 		pg.db.Exec(`DELETE FROM projects`)
