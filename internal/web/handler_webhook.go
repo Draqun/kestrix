@@ -16,11 +16,31 @@ import (
 	"kestrix/internal/parser"
 )
 
-func (s *Server) logWebhook(entry map[string]interface{}) {
+func (s *Server) logWebhook(event domain.WebhookEvent) {
 	if s.webhookService == nil {
 		return
 	}
-	_ = s.webhookService.Process(entry)
+	s.webhookService.Record(event)
+}
+
+// writeWebhookErrorResponse answers the two failure paths that report the event
+// they just recorded. logEntry is a domain.WebhookEvent because it is the
+// history row; encoding that struct directly would put the persistence type's
+// field names on the wire (received_at, triggered_tasks, and an always-zero id)
+// and silently change the response contract of POST /webhook, so the response
+// document is built explicitly.
+func writeWebhookErrorResponse(w http.ResponseWriter, entry domain.WebhookEvent) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"timestamp": entry.ReceivedAt.Format(time.RFC3339),
+		"repo":      entry.Repo,
+		"branch":    entry.Branch,
+		"revision":  entry.Revision,
+		"commits":   entry.Commits,
+		"tasks":     entry.TriggeredTasks,
+		"status":    entry.Status,
+		"error":     entry.Error,
+	})
 }
 
 // handleWebhook godoc
@@ -51,14 +71,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	logEntry := map[string]interface{}{
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"repo":      event.Repo,
-		"branch":    event.Branch,
-		"revision":  event.CheckoutSHA,
-		"commits":   event.CommitCount,
-		"tasks":     []string{},
-		"status":    "received",
+	logEntry := domain.WebhookEvent{
+		ReceivedAt:     time.Now().UTC(),
+		Repo:           event.Repo,
+		Branch:         event.Branch,
+		Revision:       event.CheckoutSHA,
+		Commits:        event.CommitCount,
+		TriggeredTasks: []string{},
+		Status:         domain.WebhookStatusError,
 	}
 
 	// ─── Look up project by GitLab project ID ────────────────
@@ -69,17 +89,16 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		projCfg, err = s.projectStore.FindByGitLabID(event.GitLabProjectID)
 		if err != nil {
 			log.Printf("webhook: store lookup error: %v", err)
-			logEntry["status"] = "error"
-			logEntry["error"] = err.Error()
+			logEntry.Status = domain.WebhookStatusError
+			logEntry.Error = err.Error()
 			s.logWebhook(logEntry)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logEntry)
+			writeWebhookErrorResponse(w, logEntry)
 			return
 		}
 		if projCfg == nil {
 			log.Printf("webhook: unknown project gitlab_id=%d", event.GitLabProjectID)
-			logEntry["status"] = "ignored"
-			logEntry["error"] = "unknown project"
+			logEntry.Status = domain.WebhookStatusIgnored
+			logEntry.Error = "unknown project"
 			s.logWebhook(logEntry)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -87,17 +106,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		logEntry.ProjectName = projCfg.Name
 		if event.CheckoutSHA == "" {
-			logEntry["status"] = "error"
-			logEntry["error"] = "push event has no immutable checkout SHA"
+			logEntry.Status = domain.WebhookStatusError
+			logEntry.Error = "push event has no immutable checkout SHA"
 			s.logWebhook(logEntry)
 			writeError(w, http.StatusBadRequest, "push event has no immutable checkout SHA")
 			return
 		}
 		loaded, session, loadErr := s.loadProjectPipeline(r.Context(), projCfg, event.CheckoutSHA, "webhook")
 		if loadErr != nil {
-			logEntry["status"] = "error"
-			logEntry["error"] = loadErr.Error()
+			logEntry.Status = domain.WebhookStatusError
+			logEntry.Error = loadErr.Error()
 			s.logWebhook(logEntry)
 			writeError(w, http.StatusUnprocessableEntity, loadErr.Error())
 			return
@@ -108,13 +128,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		proj, err = parser.ParseDir(s.cfg.PipelineDir)
 		if err != nil {
 			log.Printf("webhook: parse error: %v", err)
-			logEntry["status"] = "error"
-			logEntry["error"] = err.Error()
+			logEntry.Status = domain.WebhookStatusError
+			logEntry.Error = err.Error()
 			s.logWebhook(logEntry)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logEntry)
+			writeWebhookErrorResponse(w, logEntry)
 			return
 		}
+		// This mode has no registered project, but the parsed pipeline names the
+		// project the event is about. Recording it keeps the history Project
+		// column and the project filter usable here too, instead of leaving
+		// every row in a single-pipeline deployment blank.
+		logEntry.ProjectName = proj.Name
 	}
 	defer cleanup()
 
@@ -136,10 +160,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logEntry["tasks"] = triggeredTasks
-	logEntry["status"] = "triggered"
+	if triggeredTasks == nil {
+		triggeredTasks = []string{}
+	}
+	logEntry.TriggeredTasks = triggeredTasks
+	logEntry.Status = domain.WebhookStatusTriggered
 	if len(triggeredTasks) == 0 {
-		logEntry["status"] = "skipped"
+		logEntry.Status = domain.WebhookStatusSkipped
 	}
 
 	log.Printf("webhook: repo=%s branch=%s commits=%d files=%d tasks=%v",
@@ -178,18 +205,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			if err != nil {
 				log.Printf("webhook: dispatch error: %v", err)
-				logEntry["dispatch"] = map[string]interface{}{
-					"dispatched": false,
-					"error":      err.Error(),
-				}
+				logEntry.Status = domain.WebhookStatusError
+				logEntry.Error = err.Error()
+				dispatchResult = map[string]interface{}{"dispatched": false, "error": err.Error()}
 			} else {
 				log.Printf("webhook: dispatched pipeline %d (%s)", resp.PipelineID, resp.WebURL)
-				logEntry["dispatch"] = map[string]interface{}{
+				logEntry.DispatchedID = resp.PipelineID
+				logEntry.DispatchedURL = resp.WebURL
+				dispatchResult = map[string]interface{}{
 					"dispatched":   true,
 					"pipeline_id":  resp.PipelineID,
 					"pipeline_url": resp.WebURL,
 				}
-				dispatchResult = logEntry["dispatch"].(map[string]interface{})
 			}
 		}
 	}

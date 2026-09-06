@@ -8,7 +8,7 @@ IMAGE="${DOCKER_IMAGE:-kestrix}"
 TAG="${DOCKER_TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo 'dev')}"
 COMPOSE_DIR="${COMPOSE_DIR:-docker}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
-HEALTH_URL="${HEALTH_URL:-http://localhost:18080/health}"
+HEALTH_URL="${HEALTH_URL:-http://localhost:18080/api/health}"
 
 FULL_IMAGE="${IMAGE}:${TAG}"
 

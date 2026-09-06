@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 
@@ -434,13 +435,16 @@ func NewWebhookService(logSink domain.WebhookLogSink) *WebhookService {
 	return &WebhookService{logSink: logSink}
 }
 
-// Process parses and logs a webhook event.
-func (s *WebhookService) Process(event map[string]interface{}) error {
+// Record stores a processed webhook event in history. A storage failure is
+// logged and swallowed: webhook delivery must not fail because history is
+// unavailable, or GitLab would retry a push that Kestrix already handled.
+func (s *WebhookService) Record(event domain.WebhookEvent) {
 	if s == nil || s.logSink == nil {
-		return nil
+		return
 	}
-	s.logSink.Append(event)
-	return nil
+	if err := s.logSink.Record(event); err != nil {
+		log.Printf("webhook history: record event repo=%s status=%s: %v", event.Repo, event.Status, err)
+	}
 }
 
 // BuildVarStore constructs a variables.Store from project config, model, and env.

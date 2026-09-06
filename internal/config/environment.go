@@ -20,18 +20,21 @@ const unsupportedProjectPrefix = "META" + "CI_"
 // Kestrix-owned variables are read only from the canonical KESTRIX_* names.
 // Generic and provider-owned variables retain their original names.
 type Environment struct {
-	ListenAddr      string
-	PipelineDir     string
-	WebhookSecret   string
-	WebhookMethod   string
-	DispatchProject string
-	GitLabURL       string
-	GitLabToken     string
-	TestDatabaseURL string
-	DatabaseURL     string
-	MasterKeyPath   string
-	Docker          DockerEnvironment
-	SourceCache     SourceCacheEnvironment
+	ListenAddr    string
+	PipelineDir   string
+	WebhookSecret string
+	WebhookMethod string
+	// WebhookHistoryLimit bounds retained webhook history. Zero means the
+	// operator did not set it and the configured default applies.
+	WebhookHistoryLimit int
+	DispatchProject     string
+	GitLabURL           string
+	GitLabToken         string
+	TestDatabaseURL     string
+	DatabaseURL         string
+	MasterKeyPath       string
+	Docker              DockerEnvironment
+	SourceCache         SourceCacheEnvironment
 
 	values        map[string]string
 	originalEnvs  []string
@@ -106,17 +109,30 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	var historyLimit int
+	if raw := values[Prefix+"WEBHOOK_HISTORY_LIMIT"]; raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_WEBHOOK_HISTORY_LIMIT must be a positive integer")
+			}
+		} else {
+			historyLimit = parsed
+		}
+	}
+
 	return &Environment{
-		ListenAddr:      values[Prefix+"ADDR"],
-		PipelineDir:     values[Prefix+"DIR"],
-		WebhookSecret:   values[Prefix+"WEBHOOK_SECRET"],
-		WebhookMethod:   values[Prefix+"WEBHOOK_METHOD"],
-		DispatchProject: values[Prefix+"DISPATCH_PROJECT"],
-		GitLabURL:       values[Prefix+"GITLAB_URL"],
-		GitLabToken:     values[Prefix+"GITLAB_TOKEN"],
-		TestDatabaseURL: values[Prefix+"TEST_DATABASE_URL"],
-		DatabaseURL:     values["DATABASE_URL"],
-		MasterKeyPath:   values[Prefix+"MASTER_KEY_PATH"],
+		ListenAddr:          values[Prefix+"ADDR"],
+		PipelineDir:         values[Prefix+"DIR"],
+		WebhookSecret:       values[Prefix+"WEBHOOK_SECRET"],
+		WebhookMethod:       values[Prefix+"WEBHOOK_METHOD"],
+		WebhookHistoryLimit: historyLimit,
+		DispatchProject:     values[Prefix+"DISPATCH_PROJECT"],
+		GitLabURL:           values[Prefix+"GITLAB_URL"],
+		GitLabToken:         values[Prefix+"GITLAB_TOKEN"],
+		TestDatabaseURL:     values[Prefix+"TEST_DATABASE_URL"],
+		DatabaseURL:         values["DATABASE_URL"],
+		MasterKeyPath:       values[Prefix+"MASTER_KEY_PATH"],
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],

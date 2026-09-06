@@ -115,10 +115,17 @@ type PipelineConfig struct {
 	Dir string `yaml:"dir"`
 }
 
-// WebhookConfig controls webhook authentication.
+// WebhookConfig controls webhook authentication and history retention.
 type WebhookConfig struct {
 	Secret string `yaml:"secret"`
+	// HistoryLimit is the maximum number of webhook events kept in history.
+	// Older events are discarded once the limit is exceeded.
+	HistoryLimit int `yaml:"history_limit"`
 }
+
+// DefaultWebhookHistoryLimit is the number of webhook events retained when no
+// limit is configured.
+const DefaultWebhookHistoryLimit = 1000
 
 // DispatchConfig controls GitLab pipeline dispatch.
 type DispatchConfig struct {
@@ -135,6 +142,9 @@ func DefaultConfig() *Config {
 		Branch:     "main",
 		Pipeline: PipelineConfig{
 			Dir: ".",
+		},
+		Webhook: WebhookConfig{
+			HistoryLimit: DefaultWebhookHistoryLimit,
 		},
 		Dispatch: DispatchConfig{
 			GitLabURL: "https://gitlab.com",
@@ -203,8 +213,30 @@ func Load(path string) (*Config, error) {
 		cfg.sourceCacheMaxAgeSet = presence.SourceCache.MaxAge != nil
 		cfg.sourceCacheMaxBytesSet = presence.SourceCache.MaxBytes != nil
 	}
+	if cfg.Webhook.HistoryLimit <= 0 {
+		cfg.Webhook.HistoryLimit = DefaultWebhookHistoryLimit
+	}
 
 	return cfg, nil
+}
+
+// ApplyWebhookEnvironment applies the canonical webhook history limit from the
+// environment. The environment wins over the config file so operators can tune
+// retention per deployment without editing a mounted file.
+func (c *Config) ApplyWebhookEnvironment(env *Environment) error {
+	if env == nil {
+		return nil
+	}
+	if err := env.ValidationError(); err != nil {
+		return err
+	}
+	if env.WebhookHistoryLimit > 0 {
+		c.Webhook.HistoryLimit = env.WebhookHistoryLimit
+	}
+	if c.Webhook.HistoryLimit <= 0 {
+		c.Webhook.HistoryLimit = DefaultWebhookHistoryLimit
+	}
+	return nil
 }
 
 // ApplySourceCacheEnvironment applies canonical environment values only where

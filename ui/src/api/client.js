@@ -26,11 +26,26 @@ export async function resolveTriggers(changed = [], dir = './examples/demo-mono'
   return res.json();
 }
 
-export async function getWebhookLogs() {
-  // For now, read from in-memory store
-  const res = await fetch(`${API_BASE}/api/logs`);
-  if (!res.ok) return [];
-  return res.json();
+// getWebhookLogs reads durable webhook history. Filters are optional:
+// project, status, since and until (RFC3339) combine conjunctively.
+export async function getWebhookLogs({
+  limit = 25, offset = 0, project = '', status = '', since = '', until = '',
+} = {}) {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', limit);
+  if (offset) params.append('offset', offset);
+  if (project) params.append('project', project);
+  if (status) params.append('status', status);
+  if (since) params.append('since', since);
+  if (until) params.append('until', until);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE}/api/logs${query}`);
+  if (!res.ok) throw new Error(`Webhook history failed: ${res.statusText}`);
+  const data = await res.json();
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    pagination: data.pagination || { total: 0, limit, offset, next: null, prev: null },
+  };
 }
 
 export async function generateCI(dir = './examples/demo-mono', changed = []) {

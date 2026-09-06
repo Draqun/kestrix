@@ -2,6 +2,26 @@
 
 All notable changes to Kestrix are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Durable webhook history: every parsed webhook event is recorded in PostgreSQL and survives a server restart, including events that are ignored, skipped, or failed. Requests rejected before their payload is parsed are not recorded.
+- `KESTRIX_WEBHOOK_HISTORY_LIMIT` (default `1000`, also `webhook.history_limit` in the config file) bounds retained webhook events; the oldest are discarded once the limit is exceeded.
+- `GET /api/logs` accepts `project`, `status`, `since`, and `until` filters alongside `limit` and `offset`.
+- The Webhook Logs page offers project, status, and date-range filters with pagination, and shows explicit empty and error states.
+
+### Changed
+
+- **BREAKING**: `GET /api/logs` returns the paginated `{items, pagination}` envelope already used by `/api/runs` and `/api/projects`, instead of a bare JSON array.
+- `GET /api/health` reports the stored webhook count and the registered project count as separate values; both fields previously echoed the same in-memory counter.
+- `GET /api/health` responds `503 Service Unavailable` with `"status": "degraded"` and omits a counter whose store query failed, instead of reporting a healthy zero behind a 200. The Compose healthchecks and `scripts/deploy.sh` read the HTTP status only, so a degraded runtime now actually fails them.
+- A webhook whose GitLab pipeline dispatch fails is recorded with status `error` rather than `triggered`, so `GET /api/logs?status=error` finds it.
+
+### Fixed
+
+- The Webhook Logs page no longer falls back to fabricated sample events, and no longer calls a hard-coded `http://localhost:8080`, which broke the Docker deployment profile on port `18080`.
+
 ## [v0.2.0] - 2026-07-31
 
 ### Added

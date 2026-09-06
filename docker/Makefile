@@ -97,7 +97,7 @@ test-webhook:
 ## health: Check service health
 health:
 	@echo "Kestrix health:"
-	@curl -s http://localhost:8080/health 2>/dev/null || echo "  Kestrix: not running"
+	@curl -s http://localhost:8080/api/health 2>/dev/null || echo "  Kestrix: not running"
 	@echo ""
 	@echo "Postgres:"
 	@$(COMPOSE) exec -T postgres pg_isready -U kestrix 2>/dev/null || echo "  Postgres: not running"

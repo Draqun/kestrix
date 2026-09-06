@@ -19,3 +19,9 @@ type Run = domain.Run
 // sites in the web layer keep compiling while Store migrates to
 // domain.ProjectStore.
 type ProjectConfig = domain.ProjectConfig
+
+// WebhookEvent is an alias for domain.WebhookEvent.
+type WebhookEvent = domain.WebhookEvent
+
+// WebhookEventFilter is an alias for domain.WebhookEventFilter.
+type WebhookEventFilter = domain.WebhookEventFilter

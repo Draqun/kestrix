@@ -107,6 +107,7 @@ func NewServer(cfg Config) *Server {
 		}
 	}
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
+	webhookLog := &mocks.MockWebhookLogSink{}
 	pipelineRunner := &runner.PipelineExecutor{Mode: "local", GenerateYAML: GenerateGitLabCI}
 	srv := NewServerWithDeps(
 		cfg,
@@ -116,8 +117,19 @@ func NewServer(cfg Config) *Server {
 		pipelineRunner,
 		pipelineRunner,
 		service.NewRunService(runStore, pipelineRunner, pipelineRunner),
-		nil,
+		service.NewWebhookService(webhookLog),
 	)
+	srv.webhookLogStore = webhookLog
 	srv.sourceSessions = &testSourceSessions{}
 	return srv
+}
+
+// testWebhookLog returns the in-memory webhook history behind a test server,
+// so tests can assert on recorded events without reaching for the HTTP API.
+func testWebhookLog(t interface{ Fatalf(string, ...interface{}) }, srv *Server) *mocks.MockWebhookLogSink {
+	log, ok := srv.webhookLogStore.(*mocks.MockWebhookLogSink)
+	if !ok {
+		t.Fatalf("webhook log store is %T, want *mocks.MockWebhookLogSink", srv.webhookLogStore)
+	}
+	return log
 }

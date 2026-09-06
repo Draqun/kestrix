@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"kestrix/internal/credentials"
@@ -47,9 +46,12 @@ type Config struct {
 	Branch        string
 	Docker        DockerConfig
 	Signature     SignatureConfig
-	Dispatch      DispatchConfig
-	Runner        RunnerConfig
-	SourceCache   SourceCacheConfig
+	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
+	// store default.
+	WebhookHistoryLimit int
+	Dispatch            DispatchConfig
+	Runner              RunnerConfig
+	SourceCache         SourceCacheConfig
 }
 
 // SourceCacheConfig controls the private persistent Git object cache.
@@ -77,8 +79,7 @@ type DockerConfig struct {
 type Server struct {
 	cfg             Config
 	router          chi.Router
-	webhookLog      []map[string]interface{}
-	webhookMu       sync.RWMutex
+	webhookLogStore domain.WebhookLogStore
 	projectStore    domain.ProjectStore
 	runStore        domain.RunStore
 	pipelineRunner  domain.PipelineRunner
@@ -114,8 +115,12 @@ func NewServerE(cfg Config) (*Server, error) {
 	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI}
 	taskRunner := pipelineRunner
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
-	webhookService := service.NewWebhookService(nil)
+	webhookSink, _ := projectStore.(domain.WebhookLogSink)
+	webhookService := service.NewWebhookService(webhookSink)
 	s := NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
+	if logStore, ok := projectStore.(domain.WebhookLogStore); ok {
+		s.webhookLogStore = logStore
+	}
 	if credentials, ok := projectStore.(domain.CredentialStore); ok {
 		s.credentialStore = credentials
 	}
@@ -167,7 +172,7 @@ func NewServerWithDeps(
 		webhookService: webhookService,
 	}
 	if s.webhookService == nil {
-		s.webhookService = service.NewWebhookService(s)
+		s.webhookService = service.NewWebhookService(nil)
 	}
 	s.router = s.buildRouter()
 	return s
@@ -194,30 +199,11 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	}); ok {
 		setter.SetCredentialMasterKeyProvider(provider)
 	}
+	if setter, ok := projectStore.(interface{ SetWebhookHistoryLimit(int) }); ok {
+		setter.SetWebhookHistoryLimit(cfg.WebhookHistoryLimit)
+	}
 	log.Printf("connected to PostgreSQL")
 	return projectStore, runStore, nil
-}
-
-// Append implements domain.WebhookLogSink.
-func (s *Server) Append(entry map[string]interface{}) {
-	s.webhookMu.Lock()
-	defer s.webhookMu.Unlock()
-	s.webhookLog = append(s.webhookLog, entry)
-}
-
-// List implements domain.WebhookLogSink.
-func (s *Server) List() []map[string]interface{} {
-	s.webhookMu.RLock()
-	defer s.webhookMu.RUnlock()
-	entries := make([]map[string]interface{}, len(s.webhookLog))
-	for i, entry := range s.webhookLog {
-		clone := make(map[string]interface{}, len(entry))
-		for k, v := range entry {
-			clone[k] = v
-		}
-		entries[i] = clone
-	}
-	return entries
 }
 
 func (s *Server) buildRouter() chi.Router {

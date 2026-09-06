@@ -190,10 +190,51 @@ type RunnerOptions struct {
 	SourcesPrepared       bool
 }
 
-// WebhookLogSink is the port for webhook event logging.
+// WebhookEvent is a single processed webhook delivery, recorded in webhook
+// history. Status is one of "triggered", "skipped", "ignored", or "error".
+type WebhookEvent struct {
+	ID             int       `json:"id"`
+	ReceivedAt     time.Time `json:"received_at"`
+	ProjectName    string    `json:"project_name,omitempty"`
+	Repo           string    `json:"repo"`
+	Branch         string    `json:"branch"`
+	Revision       string    `json:"revision,omitempty"`
+	Commits        int       `json:"commits"`
+	TriggeredTasks []string  `json:"triggered_tasks"`
+	Status         string    `json:"status"`
+	Error          string    `json:"error,omitempty"`
+	DispatchedID   int       `json:"dispatched_pipeline_id,omitempty"`
+	DispatchedURL  string    `json:"dispatched_pipeline_url,omitempty"`
+}
+
+// Webhook event statuses.
+const (
+	WebhookStatusTriggered = "triggered"
+	WebhookStatusSkipped   = "skipped"
+	WebhookStatusIgnored   = "ignored"
+	WebhookStatusError     = "error"
+)
+
+// WebhookEventFilter narrows a webhook history query. Zero-valued fields are
+// not applied; the fields that are set combine conjunctively.
+type WebhookEventFilter struct {
+	ProjectName string
+	Status      string
+	Since       *time.Time
+	Until       *time.Time
+}
+
+// WebhookLogSink is the write port for webhook history. Implementations must
+// not fail webhook delivery: recording errors are reported, never propagated
+// to the caller of the webhook endpoint.
 type WebhookLogSink interface {
-	Append(entry map[string]interface{})
-	List() []map[string]interface{}
+	Record(event WebhookEvent) error
+}
+
+// WebhookLogStore is the read port for webhook history.
+type WebhookLogStore interface {
+	ListWebhookEvents(filter WebhookEventFilter, limit, offset int) ([]WebhookEvent, error)
+	CountWebhookEvents(filter WebhookEventFilter) (int, error)
 }
 
 // ProjectConfig is the configuration of a registered project.

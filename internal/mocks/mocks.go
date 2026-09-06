@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
@@ -325,21 +326,91 @@ func (m *MockPipelineRunner) RunTask(ctx context.Context, project domain.Project
 	return domain.TaskResult{Name: taskName, Status: "passed"}, m.RunErr
 }
 
-// MockWebhookLogSink records appended entries.
+// MockWebhookLogSink records webhook events in memory and serves them back.
+// It implements both domain.WebhookLogSink and domain.WebhookLogStore so unit
+// tests can exercise the write and read paths against one store.
+// RecordErr, ListErr, and CountErr force the corresponding failure path.
 type MockWebhookLogSink struct {
-	mu      sync.Mutex
-	Entries []map[string]interface{}
+	mu        sync.Mutex
+	Entries   []domain.WebhookEvent
+	RecordErr error
+	ListErr   error
+	CountErr  error
 }
 
-func (m *MockWebhookLogSink) Append(entry map[string]interface{}) {
-	m.mu.Lock()
-	m.Entries = append(m.Entries, entry)
-	m.mu.Unlock()
-}
-func (m *MockWebhookLogSink) List() []map[string]interface{} {
+// Record stores an event, stamping a receive time and id when unset.
+func (m *MockWebhookLogSink) Record(event domain.WebhookEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]map[string]interface{}, len(m.Entries))
+	if m.RecordErr != nil {
+		return m.RecordErr
+	}
+	if event.ReceivedAt.IsZero() {
+		event.ReceivedAt = time.Now().UTC()
+	}
+	event.ID = len(m.Entries) + 1
+	m.Entries = append(m.Entries, event)
+	return nil
+}
+
+// List returns the recorded events in insertion order, oldest first.
+func (m *MockWebhookLogSink) List() []domain.WebhookEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.WebhookEvent, len(m.Entries))
 	copy(out, m.Entries)
 	return out
+}
+
+// matching applies the filter to the recorded events, newest first.
+func (m *MockWebhookLogSink) matching(filter domain.WebhookEventFilter) []domain.WebhookEvent {
+	var out []domain.WebhookEvent
+	for i := len(m.Entries) - 1; i >= 0; i-- {
+		e := m.Entries[i]
+		if filter.ProjectName != "" && e.ProjectName != filter.ProjectName {
+			continue
+		}
+		if filter.Status != "" && e.Status != filter.Status {
+			continue
+		}
+		if filter.Since != nil && e.ReceivedAt.Before(*filter.Since) {
+			continue
+		}
+		if filter.Until != nil && e.ReceivedAt.After(*filter.Until) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func (m *MockWebhookLogSink) ListWebhookEvents(filter domain.WebhookEventFilter, limit, offset int) ([]domain.WebhookEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ListErr != nil {
+		return nil, m.ListErr
+	}
+	matched := m.matching(filter)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(matched) {
+		return nil, nil
+	}
+	end := len(matched)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	out := make([]domain.WebhookEvent, end-offset)
+	copy(out, matched[offset:end])
+	return out, nil
+}
+
+func (m *MockWebhookLogSink) CountWebhookEvents(filter domain.WebhookEventFilter) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.CountErr != nil {
+		return 0, m.CountErr
+	}
+	return len(m.matching(filter)), nil
 }

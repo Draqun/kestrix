@@ -75,6 +75,7 @@ const docTemplate = `{
         },
         "/api/health": {
             "get": {
+                "description": "Returns 503 when a backing store query fails; the body then\ncarries \"status\": \"degraded\" and omits the failed counter.",
                 "produces": [
                     "application/json"
                 ],
@@ -89,27 +90,85 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": true
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
                     }
                 }
             }
         },
         "/api/logs": {
             "get": {
+                "description": "Returns recorded webhook events newest first, in the standard paginated envelope.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "webhooks"
                 ],
-                "summary": "Get webhook logs",
+                "summary": "List webhook history",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Maximum events to return",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of events to skip",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by registered project name",
+                        "name": "project",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "triggered",
+                            "skipped",
+                            "ignored",
+                            "error"
+                        ],
+                        "type": "string",
+                        "description": "Filter by status",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only events received at or after this RFC3339 timestamp",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only events received at or before this RFC3339 timestamp",
+                        "name": "until",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     }

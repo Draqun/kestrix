@@ -2,7 +2,9 @@ package mocks
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
@@ -90,13 +92,75 @@ func TestMockPipelineRunner_RunTaskPanics(t *testing.T) {
 	_, _ = m.RunTask(context.Background(), model.Project{}, "lint", domain.RunnerOptions{})
 }
 
-func TestMockWebhookLogSink_AppendAndList(t *testing.T) {
+func TestMockWebhookLogSink_RecordAndList(t *testing.T) {
 	m := &MockWebhookLogSink{}
-	m.Append(map[string]interface{}{"event": "push"})
-	m.Append(map[string]interface{}{"event": "merge"})
+	if err := m.Record(domain.WebhookEvent{Repo: "push", Status: domain.WebhookStatusTriggered}); err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
+	if err := m.Record(domain.WebhookEvent{Repo: "merge", Status: domain.WebhookStatusSkipped}); err != nil {
+		t.Fatalf("Record returned error: %v", err)
+	}
 	list := m.List()
-	if len(list) != 2 || list[0]["event"] != "push" || list[1]["event"] != "merge" {
+	if len(list) != 2 || list[0].Repo != "push" || list[1].Repo != "merge" {
 		t.Errorf("List = %+v", list)
+	}
+	if list[0].ReceivedAt.IsZero() {
+		t.Error("Record did not stamp ReceivedAt")
+	}
+}
+
+func TestMockWebhookLogSink_RecordError(t *testing.T) {
+	m := &MockWebhookLogSink{RecordErr: errors.New("boom")}
+	if err := m.Record(domain.WebhookEvent{}); err == nil {
+		t.Fatal("expected RecordErr to be returned")
+	}
+	if len(m.Entries) != 0 {
+		t.Errorf("failed Record stored %d entries, want 0", len(m.Entries))
+	}
+}
+
+func TestMockWebhookLogSink_FilterAndPaginate(t *testing.T) {
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	m := &MockWebhookLogSink{}
+	for i, e := range []domain.WebhookEvent{
+		{ProjectName: "web", Status: domain.WebhookStatusTriggered},
+		{ProjectName: "api", Status: domain.WebhookStatusError},
+		{ProjectName: "web", Status: domain.WebhookStatusError},
+	} {
+		e.ReceivedAt = base.Add(time.Duration(i) * time.Minute)
+		if err := m.Record(e); err != nil {
+			t.Fatalf("Record returned error: %v", err)
+		}
+	}
+
+	filter := domain.WebhookEventFilter{ProjectName: "web", Status: domain.WebhookStatusError}
+	count, err := m.CountWebhookEvents(filter)
+	if err != nil {
+		t.Fatalf("CountWebhookEvents returned error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+
+	all, err := m.ListWebhookEvents(domain.WebhookEventFilter{}, 2, 0)
+	if err != nil {
+		t.Fatalf("ListWebhookEvents returned error: %v", err)
+	}
+	if len(all) != 2 || all[0].ProjectName != "web" || all[0].Status != domain.WebhookStatusError {
+		t.Errorf("newest-first page = %+v", all)
+	}
+
+	since := base.Add(time.Minute)
+	windowed, err := m.ListWebhookEvents(domain.WebhookEventFilter{Since: &since}, 10, 0)
+	if err != nil {
+		t.Fatalf("ListWebhookEvents returned error: %v", err)
+	}
+	if len(windowed) != 2 {
+		t.Errorf("since filter returned %d events, want 2", len(windowed))
+	}
+
+	if page, err := m.ListWebhookEvents(domain.WebhookEventFilter{}, 10, 99); err != nil || page != nil {
+		t.Errorf("offset past end = %+v, %v", page, err)
 	}
 }
 
