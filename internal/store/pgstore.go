@@ -122,6 +122,21 @@ func migrate(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_webhook_events_received ON webhook_events(received_at DESC, id DESC);
 		CREATE INDEX IF NOT EXISTS idx_webhook_events_project ON webhook_events(project_name);
 		CREATE INDEX IF NOT EXISTS idx_webhook_events_status ON webhook_events(status);
+
+		CREATE TABLE IF NOT EXISTS users (
+			name           TEXT PRIMARY KEY,
+			password_hash  TEXT NOT NULL,
+			role           TEXT NOT NULL,
+			created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		CREATE TABLE IF NOT EXISTS project_members (
+			user_name    TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+			project_name TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
+			role         TEXT NOT NULL,
+			PRIMARY KEY (user_name, project_name)
+		);
 	`); err != nil {
 		return fmt.Errorf("create base schema: %w", err)
 	}

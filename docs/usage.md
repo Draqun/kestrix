@@ -10,18 +10,30 @@ Projects are managed explicitly through the project API or UI. Starting the
 server with a pipeline directory does not create a project automatically.
 
 Before starting a host-run server, provide its separately managed credential
-master-key file (mode `0600`):
+master-key file and JWT signing-key file (each mode `0600`, and never the
+same file as each other - see [Authentication](authentication.md) for why):
 
 ```bash
 export KESTRIX_MASTER_KEY_PATH=/home/you/.kestrix/master.key
+export KESTRIX_JWT_SIGNING_KEY_PATH=/home/you/.kestrix/jwt.key
 make dev
 ```
 
-Alternatively, put that path in `.env`; `make dev` and `make dev-all` load the
+Alternatively, put both paths in `.env`; `make dev` and `make dev-all` load the
 file automatically.
 
-For Compose, use the same absolute `KESTRIX_MASTER_KEY_PATH`; the service
-mounts it read-only at that path inside the container.
+For Compose, use the same absolute paths; the service mounts each read-only
+at that path inside the container.
+
+Kestrix refuses every `/api` request until an administrator account exists.
+Create the first one once the server can reach the database:
+
+```bash
+kestrix user create --role admin <name>
+```
+
+See [Authentication](authentication.md) for login, roles, project grants, and
+account recovery.
 
 ## Database profiles
 

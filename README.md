@@ -281,6 +281,10 @@ See [Remote projects](docs/remote-projects.md),
 [remote-only migration guide](docs/migrations/remote-only-projects.md) for the
 complete onboarding, cache, security, and upgrade procedure.
 
+Every `/api` route requires a signed-in account. See
+[Authentication](docs/authentication.md) for login, roles, project grants,
+signing-key provisioning, and account recovery.
+
 ## License
 
 MIT

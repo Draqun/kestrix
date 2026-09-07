@@ -150,7 +150,7 @@ func TestHandleSaveProjectPipeline_Happy(t *testing.T) {
 	// handleSaveProjectPipeline pulls the project name via chi.URLParam,
 	// which requires the chi RouteContext. Invoke through the real router
 	// so URLParams are populated correctly.
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -183,7 +183,7 @@ func TestHandleGetProjectPipeline_NotFound(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/nope/pipeline", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
@@ -196,7 +196,7 @@ func TestHandleGetProjectPipeline_Happy(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/demo/pipeline", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -224,7 +224,7 @@ func TestHandleGetProjectPipeline_ReadFails(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/demo/pipeline", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 when pipeline file missing", w.Code)
@@ -235,7 +235,7 @@ func TestHandleGetProjectDefinition_NotFound(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/nope/definition", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
@@ -248,7 +248,7 @@ func TestHandleGetProjectDefinition_Happy(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/demo/definition", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -269,7 +269,7 @@ func TestHandleGetProject_Happy(t *testing.T) {
 	srv, _ := savePipelineServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/demo", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -286,7 +286,7 @@ func TestHandleGetProject_NotFound(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/projects/nope", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
@@ -301,7 +301,7 @@ func TestHandleUpdateProject_Happy(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("PUT", "/api/projects/demo",
 		strings.NewReader(body))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -313,7 +313,7 @@ func TestHandleUpdateProject_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("PUT", "/api/projects/nope",
 		strings.NewReader(`{}`))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
@@ -325,7 +325,7 @@ func TestHandleUpdateProject_InvalidJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("PUT", "/api/projects/demo",
 		strings.NewReader("not json"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
@@ -336,7 +336,7 @@ func TestHandleDeleteProject_Happy(t *testing.T) {
 	srv, _ := savePipelineServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("DELETE", "/api/projects/demo", nil)
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -444,7 +444,7 @@ func TestHandleSaveProjectPipeline_MkdirError(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
 		strings.NewReader("body"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -485,7 +485,7 @@ func TestHandleSaveProjectPipeline_WriteError(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
 		strings.NewReader("body"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -511,7 +511,7 @@ func TestHandleSaveProjectPipeline_EscapePath(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
 		strings.NewReader("body"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -542,7 +542,7 @@ func TestHandleResolveProject_InvalidJSON(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/resolve",
 		strings.NewReader("{not json"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
@@ -569,7 +569,7 @@ func TestHandleResolveProject_BadPipeline(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/resolve",
 		strings.NewReader(`{"changed":["svc"]}`))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
@@ -702,7 +702,7 @@ func TestHandleSaveProjectPipeline_PipelinePathError(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
 		strings.NewReader("body"))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -751,7 +751,7 @@ func TestHandleResolveProject_ResolveError(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/resolve",
 		strings.NewReader(`{"changed":["svc"]}`))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())

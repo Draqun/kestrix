@@ -9,6 +9,9 @@ const colorMode = vi.hoisted(() => ({ toggle: vi.fn() }));
 vi.mock('../context/ColorModeContext.jsx', () => ({
   useColorMode: () => ({ mode: 'light', toggleColorMode: colorMode.toggle }),
 }));
+vi.mock('../context/AuthContext.jsx', () => ({
+  useAuth: () => ({ name: 'test-admin', role: 'admin', logout: vi.fn(), roleAtLeast: () => true }),
+}));
 vi.mock('../hooks/useKeyboardNav.js', () => ({ default: () => {} }));
 
 function matchesWidth(query, width) {

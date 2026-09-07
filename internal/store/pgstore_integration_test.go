@@ -50,6 +50,8 @@ func testPG(t *testing.T) *PGStore {
 	t.Cleanup(func() {
 		pg.db.Exec(`DELETE FROM webhook_events`)
 		pg.db.Exec(`DELETE FROM runs`)
+		pg.db.Exec(`DELETE FROM project_members`)
+		pg.db.Exec(`DELETE FROM users`)
 		pg.db.Exec(`DELETE FROM credentials`)
 		pg.db.Exec(`DELETE FROM projects`)
 		pg.db.Close()

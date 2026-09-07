@@ -303,6 +303,7 @@ func TestNewServerEWiresWebhookHistory(t *testing.T) {
 	server, err := NewServerE(Config{
 		DatabaseURL:         "postgres://valid",
 		MasterKeyPath:       validMasterKeyPath(t),
+		JWTSigningKeyPath:   validSigningKeyPath(t),
 		WebhookHistoryLimit: 250,
 	})
 	if err != nil {

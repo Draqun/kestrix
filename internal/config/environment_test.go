@@ -35,6 +35,20 @@ func TestLoadEnvironmentAllowsEmptyMasterKeyPathForStartupValidation(t *testing.
 	}
 }
 
+func TestLoadEnvironmentReadsJWTSigningKeyPath(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_JWT_SIGNING_KEY_PATH=/run/secrets/kestrix_jwt_key"})
+	if env.JWTSigningKeyPath != "/run/secrets/kestrix_jwt_key" {
+		t.Fatalf("typed JWT signing-key path = %q", env.JWTSigningKeyPath)
+	}
+}
+
+func TestLoadEnvironmentAllowsEmptyJWTSigningKeyPathForStartupValidation(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_JWT_SIGNING_KEY_PATH="})
+	if env.JWTSigningKeyPath != "" {
+		t.Fatalf("JWT signing-key path = %q, want empty", env.JWTSigningKeyPath)
+	}
+}
+
 func TestLoadEnvironmentParsesTypedSourceCacheSettings(t *testing.T) {
 	env := LoadEnvironment([]string{
 		"KESTRIX_SOURCE_CACHE_DIR=/var/cache/kestrix",

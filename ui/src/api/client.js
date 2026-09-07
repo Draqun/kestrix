@@ -5,19 +5,61 @@ const API_BASE = import.meta.env?.VITE_API_URL || '';
 
 export { normalizeProject };
 
+// ─── Authentication plumbing ────────────────────────────────────
+//
+// AuthContext is the only caller of setAuthToken/setUnauthorizedHandler.
+// Every exported request function below goes through apiFetch so a token,
+// once set, is attached everywhere with nothing left to individually
+// remember, and a 401 from any call is reported to the same place.
+
+let authToken = null;
+let onUnauthorized = null;
+
+/** setAuthToken records the bearer token attached to every later request. */
+export function setAuthToken(token) {
+  authToken = token || null;
+}
+
+/** setUnauthorizedHandler is called once, by AuthProvider, on every 401. */
+export function setUnauthorizedHandler(handler) {
+  onUnauthorized = handler;
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401 && onUnauthorized) onUnauthorized();
+  return res;
+}
+
+/** login exchanges credentials for a token. Never attaches a stale token. */
+export async function login(name, password) {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Invalid name or password');
+  }
+  return res.json();
+}
+
 export async function healthCheck() {
-  const res = await fetch(`${API_BASE}/api/health`);
+  const res = await apiFetch(`${API_BASE}/api/health`);
   return res.json();
 }
 
 export async function parsePipeline(dir = './examples/demo-mono') {
-  const res = await fetch(`${API_BASE}/api/pipeline?dir=${encodeURIComponent(dir)}`);
+  const res = await apiFetch(`${API_BASE}/api/pipeline?dir=${encodeURIComponent(dir)}`);
   if (!res.ok) throw new Error(`Pipeline parse failed: ${res.statusText}`);
   return res.json();
 }
 
 export async function resolveTriggers(changed = [], dir = './examples/demo-mono') {
-  const res = await fetch(`${API_BASE}/api/resolve`, {
+  const res = await apiFetch(`${API_BASE}/api/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ changed, dir }),
@@ -39,7 +81,7 @@ export async function getWebhookLogs({
   if (since) params.append('since', since);
   if (until) params.append('until', until);
   const query = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${API_BASE}/api/logs${query}`);
+  const res = await apiFetch(`${API_BASE}/api/logs${query}`);
   if (!res.ok) throw new Error(`Webhook history failed: ${res.statusText}`);
   const data = await res.json();
   return {
@@ -49,7 +91,7 @@ export async function getWebhookLogs({
 }
 
 export async function generateCI(dir = './examples/demo-mono', changed = []) {
-  const res = await fetch(`${API_BASE}/api/generate`, {
+  const res = await apiFetch(`${API_BASE}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dir, changed }),
@@ -59,7 +101,7 @@ export async function generateCI(dir = './examples/demo-mono', changed = []) {
 }
 
 export async function validatePipeline(dir = './examples/demo-mono') {
-  const res = await fetch(`${API_BASE}/api/validate?dir=${encodeURIComponent(dir)}`);
+  const res = await apiFetch(`${API_BASE}/api/validate?dir=${encodeURIComponent(dir)}`);
   if (!res.ok) throw new Error(`Validate failed: ${res.statusText}`);
   return res.json();
 }
@@ -71,7 +113,7 @@ export async function listProjects(limit = 25, offset = 0) {
   if (limit) params.append('limit', limit);
   if (offset) params.append('offset', offset);
   const query = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${API_BASE}/api/projects${query}`);
+  const res = await apiFetch(`${API_BASE}/api/projects${query}`);
   if (!res.ok) throw new Error(`List projects failed: ${res.statusText}`);
   const data = await res.json();
   if (data.items && Array.isArray(data.items)) {
@@ -81,14 +123,14 @@ export async function listProjects(limit = 25, offset = 0) {
 }
 
 export async function getProject(name) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`);
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error(`Get project failed: ${res.statusText}`);
   const data = await res.json();
   return normalizeProject(data);
 }
 
 export async function createProject(cfg) {
-  const res = await fetch(`${API_BASE}/api/projects`, {
+  const res = await apiFetch(`${API_BASE}/api/projects`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
@@ -101,7 +143,7 @@ export async function createProject(cfg) {
 }
 
 export async function deleteProject(name) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
@@ -112,7 +154,7 @@ export async function deleteProject(name) {
 }
 
 export async function updateProject(name, cfg) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
@@ -125,7 +167,7 @@ export async function updateProject(name, cfg) {
 }
 
 export async function getProjectPipeline(name) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`);
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`);
   if (!res.ok) {
     // 404 → no pipeline file yet; return empty template.
     if (res.status === 404) return '';
@@ -135,7 +177,7 @@ export async function getProjectPipeline(name) {
 }
 
 export async function getProjectDefinition(name) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/definition`);
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/definition`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `Get pipeline definition failed: ${res.statusText}`);
@@ -145,7 +187,7 @@ export async function getProjectDefinition(name) {
 }
 
 export async function saveProjectPipeline(name, hcl) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/pipeline`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: hcl,
@@ -158,7 +200,7 @@ export async function saveProjectPipeline(name, hcl) {
 }
 
 export async function resolveProject(name, changed = []) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/resolve`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ changed }),
@@ -171,7 +213,7 @@ export async function resolveProject(name, changed = []) {
 }
 
 export async function runProject(name, changed = [], includeManual = false) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/run`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ changed, include_manual: includeManual }),
@@ -186,25 +228,25 @@ export async function listRuns(name, limit = 25, offset = 0) {
   if (limit) params.append('limit', limit);
   if (offset) params.append('offset', offset);
   const query = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs${query}`);
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs${query}`);
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function getRun(name, runID) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}`);
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}`);
   if (!res.ok) throw new Error(`Get run failed: ${res.statusText}`);
   return res.json();
 }
 
 export async function listAllRuns() {
-  const res = await fetch(`${API_BASE}/api/runs`);
+  const res = await apiFetch(`${API_BASE}/api/runs`);
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function cancelRun(name, runID) {
-  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/cancel`, {
+  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/cancel`, {
     method: 'POST',
   });
   if (!res.ok) {
@@ -215,19 +257,19 @@ export async function cancelRun(name, runID) {
 }
 
 export async function getVersion() {
-  const res = await fetch(`${API_BASE}/api/version`);
+  const res = await apiFetch(`${API_BASE}/api/version`);
   if (!res.ok) return { version: "unknown" };
   return res.json();
 }
 
 export async function getDashboard() {
-  const res = await fetch(`${API_BASE}/api/dashboard`);
+  const res = await apiFetch(`${API_BASE}/api/dashboard`);
   if (!res.ok) throw new Error(`Dashboard failed: ${res.statusText}`);
   return res.json();
 }
 
 export async function approveManualTask(name, runID, task) {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}/tasks/${encodeURIComponent(task)}/run`,
     { method: 'POST' },
   );
@@ -239,13 +281,13 @@ export async function approveManualTask(name, runID, task) {
 }
 
 export async function listCredentials() {
-  const res = await fetch(`${API_BASE}/api/credentials`);
+  const res = await apiFetch(`${API_BASE}/api/credentials`);
   if (!res.ok) throw new Error(`List credentials failed: ${res.statusText}`);
   return res.json();
 }
 
 export async function createCredential(input) {
-  const res = await fetch(`${API_BASE}/api/credentials`, {
+  const res = await apiFetch(`${API_BASE}/api/credentials`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
   const data = await res.json().catch(() => ({}));
@@ -254,7 +296,7 @@ export async function createCredential(input) {
 }
 
 export async function rotateCredential(ref, input) {
-  const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}`, {
+  const res = await apiFetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
   const data = await res.json().catch(() => ({}));
@@ -263,6 +305,6 @@ export async function rotateCredential(ref, input) {
 }
 
 export async function revokeCredential(ref) {
-  const res = await fetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}/revoke`, { method: 'POST' });
+  const res = await apiFetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}/revoke`, { method: 'POST' });
   if (!res.ok) throw new Error(`Revoke credential failed: ${res.statusText}`);
 }

@@ -237,6 +237,45 @@ type WebhookLogStore interface {
 	CountWebhookEvents(filter WebhookEventFilter) (int, error)
 }
 
+// UserStore persists user accounts and their password hashes. GetUser and
+// ListUsers never expose a password hash; only GetUserCredential does, and it
+// exists solely for authentication.
+type UserStore interface {
+	CreateUser(name string, role Role, passwordHash string) (User, error)
+	GetUser(name string) (User, error)
+	GetUserCredential(name string) (UserCredential, error)
+	ListUsers() ([]User, error)
+	UpdateUserRole(name string, role Role) error
+	UpdateUserPassword(name string, passwordHash string) error
+	DeleteUser(name string) error
+}
+
+// GrantStore persists per-project role grants. ResolveGrant reports whether
+// a grant exists at all, distinct from returning the zero Role.
+type GrantStore interface {
+	SetProjectGrant(userName, projectName string, role Role) error
+	RemoveProjectGrant(userName, projectName string) error
+	ListGrantsForUser(userName string) ([]ProjectGrant, error)
+	ListGrantsForProject(projectName string) ([]ProjectGrant, error)
+	ResolveGrant(userName, projectName string) (role Role, found bool, err error)
+}
+
+// PasswordHasher hashes and verifies passwords. Implementations must use a
+// memory-hard algorithm, a per-call random salt, and must not be sensitive to
+// timing across the success and failure paths.
+type PasswordHasher interface {
+	Hash(password string) (string, error)
+	Verify(hash, password string) (bool, error)
+}
+
+// TokenIssuer issues and verifies signed authentication tokens. Verify must
+// reject a token whose signature does not check out, whose signing algorithm
+// is not the expected one, or whose expiry has passed.
+type TokenIssuer interface {
+	Issue(user User) (token string, expiresAt time.Time, err error)
+	Verify(token string) (Claims, error)
+}
+
 // ProjectConfig is the configuration of a registered project.
 // It lives in domain so both ProjectStore and ProjectService can use it
 // without importing store.

@@ -100,7 +100,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(createBody))
 	req.Header.Set("Content-Type", "application/json")
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -123,7 +123,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	gitE2E(t, work, "push", "--quiet", "origin", "main")
 
 	w = httptest.NewRecorder()
-	srv.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/remote-e2e/definition", nil))
+	srv.router.ServeHTTP(w, authed(t, srv, httptest.NewRequest(http.MethodGet, "/api/projects/remote-e2e/definition", nil)))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "version-2") {
 		t.Fatalf("updated definition status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -134,7 +134,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/projects/remote-e2e/run", strings.NewReader(`{"changed":["app"]}`))
 	req.Header.Set("Content-Type", "application/json")
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusOK {
 		t.Fatalf("run status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -153,7 +153,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"local-rejected","repo_path":"/srv/repo","pipeline_dir":"ci"}`))
 	req.Header.Set("Content-Type", "application/json")
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("local registration status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -377,7 +377,7 @@ project "tf-demo" {
 	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(createBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201: %s", w.Code, w.Body.String())
 	}
@@ -386,7 +386,7 @@ project "tf-demo" {
 	req = httptest.NewRequest("POST", "/api/projects/tf-demo/pipeline", bytes.NewBufferString(pipeline))
 	req.Header.Set("Content-Type", "text/plain")
 	w = httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("save status = %d, want 405: %s", w.Code, w.Body.String())
 	}
@@ -396,7 +396,7 @@ project "tf-demo" {
 	req = httptest.NewRequest("POST", "/api/projects/tf-demo/resolve", bytes.NewBufferString(resolveBody))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusOK {
 		t.Fatalf("resolve status = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -455,7 +455,7 @@ func TestRunProject(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/projects/run-demo/run", bytes.NewBufferString(`{"changed":["app"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusOK {
 		t.Fatalf("run status = %d: %s", w.Code, w.Body.String())
 	}
@@ -529,7 +529,7 @@ func TestResolveProjectManual(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/projects/manual-demo/resolve", bytes.NewBufferString(`{"changed":["app"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
+	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusOK {
 		t.Fatalf("resolve status = %d: %s", w.Code, w.Body.String())
 	}

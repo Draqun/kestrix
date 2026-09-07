@@ -6,6 +6,10 @@ All notable changes to Kestrix are documented here.
 
 ### Added
 
+- Local user accounts, JWT-based login, and role-based access control (`viewer`/`operator`/`admin`, plus per-project role grants). `POST /api/auth/login` and admin-only account endpoints (`/api/users*`) are new.
+- `kestrix user create|list|passwd|delete` manages accounts directly against the database, so the first administrator can be created without a reachable API or an existing account. Passwords are always read from a terminal prompt or standard input, never a flag.
+- `KESTRIX_JWT_SIGNING_KEY_PATH` configures the token signing key, provisioned and validated at startup the same way as `KESTRIX_MASTER_KEY_PATH`.
+- The UI requires sign-in before showing any data, attaches the session token to every request, and hides actions the signed-in role cannot perform (server-enforced regardless of what the UI shows).
 - Durable webhook history: every parsed webhook event is recorded in PostgreSQL and survives a server restart, including events that are ignored, skipped, or failed. Requests rejected before their payload is parsed are not recorded.
 - `KESTRIX_WEBHOOK_HISTORY_LIMIT` (default `1000`, also `webhook.history_limit` in the config file) bounds retained webhook events; the oldest are discarded once the limit is exceeded.
 - `GET /api/logs` accepts `project`, `status`, `since`, and `until` filters alongside `limit` and `offset`.
@@ -13,6 +17,7 @@ All notable changes to Kestrix are documented here.
 
 ### Changed
 
+- **BREAKING**: Every `/api` route except `GET /api/health` and `POST /api/auth/login` now requires a valid bearer token; an existing deployment must set `KESTRIX_JWT_SIGNING_KEY_PATH` and run `kestrix user create --role admin <name>` before upgrading, or the server starts but the UI and API are unusable. `POST /webhook` is unaffected: it keeps its own shared-secret verification.
 - **BREAKING**: `GET /api/logs` returns the paginated `{items, pagination}` envelope already used by `/api/runs` and `/api/projects`, instead of a bare JSON array.
 - `GET /api/health` reports the stored webhook count and the registered project count as separate values; both fields previously echoed the same in-memory counter.
 - `GET /api/health` responds `503 Service Unavailable` with `"status": "degraded"` and omits a counter whose store query failed, instead of reporting a healthy zero behind a 200. The Compose healthchecks and `scripts/deploy.sh` read the HTTP status only, so a degraded runtime now actually fails them.

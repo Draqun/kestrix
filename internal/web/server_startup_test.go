@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,12 +31,25 @@ func validMasterKeyPath(t *testing.T) string {
 	return path
 }
 
+func validSigningKeyPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "jwt.key")
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func (f *failingMaintenanceSessions) Maintain(context.Context) error {
 	return errors.New("maintenance failed")
 }
 
 func TestNewServerERequiresDatabaseURL(t *testing.T) {
-	server, err := NewServerE(Config{})
+	server, err := NewServerE(Config{JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err == nil || err.Error() != "database URL is required" {
 		t.Fatalf("error = %v, want missing database URL error", err)
 	}
@@ -44,9 +59,73 @@ func TestNewServerERequiresDatabaseURL(t *testing.T) {
 }
 
 func TestNewServerERequiresExplicitMasterKeyPath(t *testing.T) {
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid"})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err == nil || server != nil || !strings.Contains(err.Error(), "KESTRIX_MASTER_KEY_PATH") {
 		t.Fatalf("server=%v error=%v, want missing master-key path error", server, err)
+	}
+}
+
+func TestNewServerERequiresExplicitJWTSigningKeyPath(t *testing.T) {
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)})
+	if err == nil || server != nil || !strings.Contains(err.Error(), "KESTRIX_JWT_SIGNING_KEY_PATH") {
+		t.Fatalf("server=%v error=%v, want missing JWT signing-key path error", server, err)
+	}
+}
+
+func TestNewServerERejectsInvalidJWTSigningKeyBeforeDatabase(t *testing.T) {
+	called := false
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		called = true
+		return nil, nil, errors.New("should not connect")
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	path := filepath.Join(t.TempDir(), "jwt.key")
+	secret := "not-a-signing-key"
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: path})
+	if err == nil || server != nil || called {
+		t.Fatalf("server=%v error=%v database called=%t", server, err, called)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("startup error leaked key material: %v", err)
+	}
+}
+
+func TestNewServerETokensSurviveRestart(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	keyPath := validSigningKeyPath(t)
+	cfg := Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: keyPath}
+
+	first, err := NewServerE(cfg)
+	if err != nil {
+		t.Fatalf("first NewServerE: %v", err)
+	}
+	token, _, err := first.tokenIssuer.Issue(domain.User{Name: "alice", Role: domain.RoleAdmin})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	second, err := NewServerE(cfg)
+	if err != nil {
+		t.Fatalf("second NewServerE (simulated restart): %v", err)
+	}
+	claims, err := second.tokenIssuer.Verify(token)
+	if err != nil {
+		t.Fatalf("Verify after restart: %v", err)
+	}
+	if claims.UserName != "alice" {
+		t.Fatalf("claims.UserName = %q, want alice", claims.UserName)
 	}
 }
 
@@ -64,7 +143,7 @@ func TestNewServerERejectsInvalidMasterKeyBeforeDatabase(t *testing.T) {
 	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: path})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: path, JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err == nil || server != nil || called {
 		t.Fatalf("server=%v error=%v database called=%t", server, err, called)
 	}
@@ -80,7 +159,7 @@ func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 	}
 	t.Cleanup(func() { newPGStores = old })
 
-	server, err := NewServerE(Config{DatabaseURL: "postgres://user:secret@example.invalid/db?sslmode=disable", MasterKeyPath: validMasterKeyPath(t)})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://user:secret@example.invalid/db?sslmode=disable", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err == nil || server != nil {
 		t.Fatalf("server=%v error=%v, want startup failure", server, err)
 	}
@@ -107,7 +186,7 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 	t.Cleanup(func() { newPGStores = old })
 
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err != nil {
 		t.Fatalf("NewServerE: %v", err)
 	}
@@ -119,6 +198,43 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 	if server.webhookService == nil {
 		t.Fatal("webhook service was not wired")
+	}
+}
+
+// combinedUserGrantStore lets one fake satisfy ProjectStore, RunStore,
+// UserStore, and GrantStore at once, exercising the type-assertion branches
+// in NewServerE that wire s.userStore, s.grantStore, and s.authService -
+// branches a plain *mocks.MockProjectStore never reaches.
+type combinedUserGrantStore struct {
+	*mocks.MockProjectStore
+	*mocks.MockRunStore
+	*errUserStore
+	*errGrantStore
+}
+
+func TestNewServerEWiresUserAndGrantStoresWhenSupported(t *testing.T) {
+	combined := &combinedUserGrantStore{
+		MockProjectStore: &mocks.MockProjectStore{},
+		MockRunStore:     &mocks.MockRunStore{},
+		errUserStore:     newErrUserStore(),
+		errGrantStore:    newErrGrantStore(),
+	}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
+	t.Cleanup(func() { newPGStores = old })
+
+	s, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+	if s.userStore == nil {
+		t.Fatal("userStore was not wired despite the store implementing domain.UserStore")
+	}
+	if s.grantStore == nil {
+		t.Fatal("grantStore was not wired despite the store implementing domain.GrantStore")
+	}
+	if s.authService == nil {
+		t.Fatal("authService was not constructed once a userStore was wired")
 	}
 }
 
@@ -134,15 +250,28 @@ func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
 	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) {
 		return nil, errors.New("cache failed")
 	}
-	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
+	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
 		t.Fatalf("server=%v error=%v", server, err)
 	}
 
 	manager := &failingMaintenanceSessions{testSourceSessions: &testSourceSessions{}}
 	newSourceSessionManager = func(source.CacheOptions) (domain.SourceSessionManager, error) { return manager, nil }
-	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t)})
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err != nil || server.sourceSessions != manager {
 		t.Fatalf("server=%v error=%v", server, err)
+	}
+}
+
+func TestServer_Router(t *testing.T) {
+	srv := NewServer(Config{})
+	if srv.Router() == nil {
+		t.Fatal("Router() returned nil")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	srv.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Router()-served /api/health status = %d, want 200", w.Code)
 	}
 }
 

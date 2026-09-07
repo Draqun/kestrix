@@ -196,7 +196,7 @@ func TestServerWiresCredentialStoreAndMasterKeyPath(t *testing.T) {
 	old := newPGStores
 	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
 	t.Cleanup(func() { newPGStores = old })
-	s, err := NewServerE(Config{DatabaseURL: "postgres://test", MasterKeyPath: validMasterKeyPath(t)})
+	s, err := NewServerE(Config{DatabaseURL: "postgres://test", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

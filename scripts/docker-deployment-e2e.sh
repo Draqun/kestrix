@@ -52,6 +52,9 @@ OVERRIDE_FILE="${TEMP_DIR}/docker-compose.override.yml"
 REMOTE_BARE="${TEMP_DIR}/remote.git"
 REMOTE_WORK="${TEMP_DIR}/remote-work"
 MASTER_KEY_FILE="${TEMP_DIR}/master.key"
+JWT_SIGNING_KEY_FILE="${TEMP_DIR}/jwt.key"
+ADMIN_NAME="e2e-admin"
+ADMIN_PASSWORD="e2e-admin-password-$$"
 
 mkdir -p "${REMOTE_WORK}/ci"
 git init --quiet --bare --initial-branch=main "${REMOTE_BARE}"
@@ -75,6 +78,8 @@ git -C "${REMOTE_WORK}" push --quiet -u origin main
 
 dd if=/dev/urandom of="${MASTER_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${MASTER_KEY_FILE}"
+dd if=/dev/urandom of="${JWT_SIGNING_KEY_FILE}" bs=32 count=1 status=none
+chmod 600 "${JWT_SIGNING_KEY_FILE}"
 printf '%s\n' \
   'services:' \
   '  kestrix:' \
@@ -86,6 +91,7 @@ printf '%s\n' \
 
 export KESTRIX_IMAGE="${IMAGE_OVERRIDE:-${IMAGE_TAG}}"
 export KESTRIX_MASTER_KEY_PATH="${MASTER_KEY_FILE}"
+export KESTRIX_JWT_SIGNING_KEY_PATH="${JWT_SIGNING_KEY_FILE}"
 export KESTRIX_PORT="${BASE_PORT}"
 export BUSINESS_PORT
 export BUSINESS_BIND_HOST=127.0.0.1
@@ -162,12 +168,39 @@ wait_for_health() {
 
 wait_for_health
 
+# Kestrix serves no /api route until an administrator exists - see
+# user-authentication spec, "Server never runs unauthenticated". Bootstrap
+# one exactly the way an operator would: the CLI, run inside the container
+# against its own DATABASE_URL, reading the password from stdin so it never
+# appears in the process table.
+echo "Bootstrapping the first administrator account..."
+printf '%s\n' "${ADMIN_PASSWORD}" | compose exec -T kestrix \
+  /kestrix user create --role admin "${ADMIN_NAME}"
+
+LOGIN_RESPONSE="${TEMP_DIR}/login.json"
+status="$(curl -sS -o "${LOGIN_RESPONSE}" -w '%{http_code}' --max-time 10 \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"${ADMIN_NAME}\",\"password\":\"${ADMIN_PASSWORD}\"}")"
+if [[ "${status}" != "200" ]]; then
+  echo "Login as the bootstrapped administrator returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${LOGIN_RESPONSE}" >&2
+  exit 1
+fi
+API_TOKEN="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${LOGIN_RESPONSE}")"
+if [[ -z "${API_TOKEN}" ]]; then
+  echo "Login response did not contain a token." >&2
+  exit 1
+fi
+AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
+echo "Authenticated as ${ADMIN_NAME}."
+
 assert_json_endpoint() {
   local path="$1"
   local expected_field="$2"
   local response_file="${TEMP_DIR}/response"
   local status
-  status="$(curl -sS -o "${response_file}" -w '%{http_code}' --max-time 10 "http://127.0.0.1:${BASE_PORT}${path}")"
+  status="$(curl -sS -o "${response_file}" -w '%{http_code}' --max-time 10 "${AUTH_HEADER[@]}" "http://127.0.0.1:${BASE_PORT}${path}")"
   if [[ "${status}" != "200" ]]; then
     echo "${path} returned HTTP ${status}; response:" >&2
     sed -n '1,120p' "${response_file}" >&2
@@ -212,7 +245,7 @@ echo "/settings: HTTP ${status} (SPA route and credential section verified)"
 
 SECRET_VALUE='e2e-secret-do-not-log'
 CREDENTIAL_RESPONSE="${TEMP_DIR}/credential.json"
-status="$(curl -sS -o "${CREDENTIAL_RESPONSE}" -w '%{http_code}' --max-time 10 \
+status="$(curl -sS -o "${CREDENTIAL_RESPONSE}" -w '%{http_code}' --max-time 10 "${AUTH_HEADER[@]}" \
   -X POST "${API_BASE}/api/credentials" \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"Docker E2E\",\"type\":\"token\",\"provider\":\"git\",\"host\":\"local\",\"token\":\"${SECRET_VALUE}\"}")"
@@ -232,7 +265,7 @@ if [[ -z "${CREDENTIAL_REF}" ]]; then
 fi
 
 PROJECT_RESPONSE="${TEMP_DIR}/project.json"
-status="$(curl -sS -o "${PROJECT_RESPONSE}" -w '%{http_code}' --max-time 20 \
+status="$(curl -sS -o "${PROJECT_RESPONSE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" \
   -X POST "${API_BASE}/api/projects" \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"docker-remote\",\"repo_url\":\"file:///e2e/remote.git\",\"repo_ref\":\"main\",\"repo_credential_ref\":\"${CREDENTIAL_REF}\",\"pipeline_dir\":\"ci\",\"pipeline_file\":\"pipeline.tf\"}")"
@@ -247,7 +280,7 @@ if grep -Eq "${SECRET_VALUE}|repo_path|source-session|/var/lib/kestrix/cache" "$
 fi
 
 PIPELINE_BEFORE="${TEMP_DIR}/pipeline-before.tf"
-status="$(curl -sS -o "${PIPELINE_BEFORE}" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+status="$(curl -sS -o "${PIPELINE_BEFORE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/pipeline")"
 if [[ "${status}" != "200" ]] || ! grep -q 'docker-remote' "${PIPELINE_BEFORE}"; then
   echo "Remote pipeline read failed before restart (HTTP ${status})." >&2
   exit 1
@@ -265,29 +298,33 @@ if [[ "${CACHE_AFTER}" != "${CACHE_BEFORE}" ]]; then
   echo "Source cache did not persist unchanged across container restart." >&2
   exit 1
 fi
-status="$(curl -sS -o "${TEMP_DIR}/pipeline-after.tf" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+status="$(curl -sS -o "${TEMP_DIR}/pipeline-after.tf" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/pipeline")"
 if [[ "${status}" != "200" ]]; then
   echo "Cached pipeline read failed after restart (HTTP ${status})." >&2
   exit 1
 fi
 
-status="$(curl -sS -o "${TEMP_DIR}/revoke-response" -w '%{http_code}' --max-time 10 \
+status="$(curl -sS -o "${TEMP_DIR}/revoke-response" -w '%{http_code}' --max-time 10 "${AUTH_HEADER[@]}" \
   -X POST "${API_BASE}/api/credentials/${CREDENTIAL_REF}/revoke")"
 if [[ "${status}" != "204" ]]; then
   echo "Credential revocation returned HTTP ${status}." >&2
   exit 1
 fi
-status="$(curl -sS -o "${TEMP_DIR}/revoked-read.json" -w '%{http_code}' --max-time 20 "${API_BASE}/api/projects/docker-remote/pipeline")"
+status="$(curl -sS -o "${TEMP_DIR}/revoked-read.json" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/pipeline")"
 if [[ "${status}" != "400" ]] || ! grep -qi 'revoked' "${TEMP_DIR}/revoked-read.json"; then
   echo "Cached source did not fail closed after credential revocation (HTTP ${status})." >&2
   exit 1
 fi
 
-curl -fsS --max-time 10 "${API_BASE}/api/credentials" > "${TEMP_DIR}/credentials.json"
-curl -fsS --max-time 10 "${API_BASE}/api/projects/docker-remote" > "${TEMP_DIR}/project-read.json"
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/credentials" > "${TEMP_DIR}/credentials.json"
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote" > "${TEMP_DIR}/project-read.json"
 compose logs --no-color > "${TEMP_DIR}/compose.log"
 if grep -R -q "${SECRET_VALUE}" "${CREDENTIAL_RESPONSE}" "${PROJECT_RESPONSE}" "${TEMP_DIR}/credentials.json" "${TEMP_DIR}/project-read.json" "${TEMP_DIR}/revoked-read.json" "${TEMP_DIR}/compose.log"; then
   echo "Credential secret was found in an API response or deployment log." >&2
+  exit 1
+fi
+if grep -R -q "${ADMIN_PASSWORD}" "${TEMP_DIR}/compose.log"; then
+  echo "Administrator password was found in the deployment log." >&2
   exit 1
 fi
 

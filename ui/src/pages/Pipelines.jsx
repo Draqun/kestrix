@@ -30,6 +30,7 @@ import { layoutFromProject } from '../lib/dagLayout';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
+import { useAuth } from '../context/AuthContext';
 
 
 
@@ -67,6 +68,8 @@ function formatDuration(ms) {
 }
 
 export function RunDetail({ projectName, runId, onBack }) {
+  const { roleAtLeast } = useAuth();
+  const canOperate = roleAtLeast('operator');
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -184,7 +187,7 @@ export function RunDetail({ projectName, runId, onBack }) {
           <Chip label={`Changed: ${r.changed.join(', ')}`} size="small" variant="outlined" />
         )}
         <Box sx={{ flexGrow: 1 }} />
-        {r?.status === 'running' && (
+        {canOperate && r?.status === 'running' && (
           <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
             {canceling ? 'Canceling…' : 'Cancel'}
           </Button>
@@ -240,7 +243,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                           }}
                         />
                       </ListItemButton>
-                      {canRun && (
+                      {canOperate && canRun && (
                         <Button size="small" variant="contained" color="info" sx={{ mt: 0.5, mx: 1 }}
                           disabled={!!approving} onClick={() => handleApprove(job.name)}>
                           {approving === job.name ? 'Starting…' : 'Run'}
@@ -269,7 +272,7 @@ export function RunDetail({ projectName, runId, onBack }) {
                   {activeJob.duration > 0 && (
                     <Typography variant="caption" color="text.secondary">{formatDuration(activeJob.duration)}</Typography>
                   )}
-                  {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
+                  {canOperate && isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
                     <Button size="small" variant="contained" color="info" disabled={!!approving}
                       onClick={() => handleApprove(activeJob.name)}>
                       {approving === activeJob.name ? 'Starting…' : 'Run manual job'}
@@ -321,6 +324,8 @@ export function RunDetail({ projectName, runId, onBack }) {
 }
 
 export function RunList({ onNewRun, onOpenRun }) {
+  const { roleAtLeast } = useAuth();
+  const canOperate = roleAtLeast('operator');
   const [searchParams, setSearchParams] = useSearchParams();
   const allowedLimits = [10, 25, 50, 100];
   const limit = allowedLimits.includes(Number(searchParams.get('limit')))
@@ -412,9 +417,11 @@ export function RunList({ onNewRun, onOpenRun }) {
         <IconButton onClick={loadRuns} title="Refresh">
           <HistoryIcon />
         </IconButton>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={onNewRun} sx={{ ml: 1 }}>
-          New run
-        </Button>
+        {canOperate && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={onNewRun} sx={{ ml: 1 }}>
+            New run
+          </Button>
+        )}
       </Box>
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2, alignItems: 'center' }}>
@@ -563,6 +570,8 @@ export function NewRun({ onSelect, onBack }) {
 }
 
 export function RunProject({ projectName, onBack, onStarted }) {
+  const { roleAtLeast } = useAuth();
+  const canOperate = roleAtLeast('operator');
   const [project, setProject] = useState(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -653,9 +662,11 @@ export function RunProject({ projectName, onBack, onStarted }) {
               <TextField size="small" placeholder="Changed repos: tf_plugin, backend" value={changedRepos}
                 onChange={(e) => setChangedRepos(e.target.value)} sx={{ flex: 1 }} />
               <Button variant="contained" startIcon={<ResolveIcon />} onClick={handleResolve} disabled={!projectName}>Resolve</Button>
-              <Button color="success" variant="contained" startIcon={<RunIcon />} onClick={handleRun} disabled={running}>
-                {running ? 'Starting…' : 'Run'}
-              </Button>
+              {canOperate && (
+                <Button color="success" variant="contained" startIcon={<RunIcon />} onClick={handleRun} disabled={running}>
+                  {running ? 'Starting…' : 'Run'}
+                </Button>
+              )}
             </Box>
             <FormControlLabel
               sx={{ mb: 1, ml: 0 }}
