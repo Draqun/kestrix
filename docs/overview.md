@@ -18,8 +18,10 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 | [CI Tools](ci-tools.md) | CI generator, dispatch client, runner modes |
 | [Terraform Provider](terraform-provider.md) | Infrastructure‑as‑code for project management |
 | [Business Pages](business.md) | Public‑facing documentation and onboarding |
+| [Authentication](authentication.md) | Login, roles, project grants, and account recovery |
 
 ## See Also
 - [DAG engine documentation](dag-engine.md)
 - [Usage guide](usage.md)
+- [Authentication](authentication.md)
 - [Architecture overview](architecture.md)

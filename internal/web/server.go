@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"kestrix/internal/auth"
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/runner"
@@ -40,12 +41,13 @@ type Config struct {
 	StaticDir   string
 	// StorePath is retained only for source compatibility with old callers;
 	// PostgreSQL is the sole runtime persistence backend.
-	StorePath     string
-	DatabaseURL   string
-	MasterKeyPath string
-	Branch        string
-	Docker        DockerConfig
-	Signature     SignatureConfig
+	StorePath         string
+	DatabaseURL       string
+	MasterKeyPath     string
+	JWTSigningKeyPath string
+	Branch            string
+	Docker            DockerConfig
+	Signature         SignatureConfig
 	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
 	// store default.
 	WebhookHistoryLimit int
@@ -89,6 +91,11 @@ type Server struct {
 	webhookService  *service.WebhookService
 	credentialStore domain.CredentialStore
 	sourceSessions  domain.SourceSessionManager
+	userStore       domain.UserStore
+	grantStore      domain.GrantStore
+	tokenIssuer     domain.TokenIssuer
+	passwordHasher  domain.PasswordHasher
+	authService     *service.AuthService
 }
 
 var listenAndServe = http.ListenAndServe
@@ -107,6 +114,10 @@ func (s *Server) credentialResolver() domain.CredentialResolver {
 // NewServerE creates a server and returns persistence initialization errors
 // before any HTTP listener is started.
 func NewServerE(cfg Config) (*Server, error) {
+	tokenIssuer, err := newTokenIssuer(cfg)
+	if err != nil {
+		return nil, err
+	}
 	projectStore, runStore, err := initStores(cfg)
 	if err != nil {
 		return nil, err
@@ -123,6 +134,17 @@ func NewServerE(cfg Config) (*Server, error) {
 	}
 	if credentials, ok := projectStore.(domain.CredentialStore); ok {
 		s.credentialStore = credentials
+	}
+	if users, ok := projectStore.(domain.UserStore); ok {
+		s.userStore = users
+	}
+	if grants, ok := projectStore.(domain.GrantStore); ok {
+		s.grantStore = grants
+	}
+	s.tokenIssuer = tokenIssuer
+	s.passwordHasher = auth.NewArgon2Hasher()
+	if s.userStore != nil {
+		s.authService = service.NewAuthService(s.userStore, s.passwordHasher, s.tokenIssuer)
 	}
 	cacheCfg := cfg.SourceCache
 	if cacheCfg.Directory == "" {
@@ -178,6 +200,20 @@ func NewServerWithDeps(
 	return s
 }
 
+// newTokenIssuer validates the configured JWT signing key and returns a
+// domain.TokenIssuer backed by it. It fails before any database work starts,
+// mirroring how the credential master key is validated.
+func newTokenIssuer(cfg Config) (domain.TokenIssuer, error) {
+	if cfg.JWTSigningKeyPath == "" {
+		return nil, fmt.Errorf("token signing key unavailable: KESTRIX_JWT_SIGNING_KEY_PATH is required")
+	}
+	provider := auth.FileSigningKeyProvider{Path: cfg.JWTSigningKeyPath}
+	if _, err := provider.Key(); err != nil {
+		return nil, fmt.Errorf("validate KESTRIX_JWT_SIGNING_KEY_PATH: %w", err)
+	}
+	return auth.JWTIssuer{Key: provider.Key}, nil
+}
+
 func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, nil, fmt.Errorf("database URL is required")
@@ -214,38 +250,66 @@ func (s *Server) buildRouter() chi.Router {
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Heartbeat("/ping"))
 
-	// API routes
+	// API routes. Every route is either on the public group (no token
+	// required) or on the protected group (RequireAuth, then a per-group
+	// RequireRole minimum) - see access-control spec "Authentication
+	// required on API routes": a route added to neither is unreachable,
+	// never accidentally open.
 	r.Route("/api", func(r chi.Router) {
-		r.Get("/dashboard", s.handleDashboard)
-		r.Get("/health", s.handleHealth)
-		r.Get("/pipeline", s.handleGetPipeline)
-		r.Get("/pipeline/raw", s.handleGetPipelineRaw)
-		r.Get("/projects", s.handleListProjects)
-		r.Get("/credentials", s.handleListCredentials)
-		r.Post("/credentials", s.handleCreateCredential)
-		r.Get("/credentials/{ref}", s.handleGetCredential)
-		r.Put("/credentials/{ref}", s.handleRotateCredential)
-		r.Post("/credentials/{ref}/revoke", s.handleRevokeCredential)
-		r.Post("/projects", s.handleCreateProject)
-		r.Get("/projects/{name}", s.handleGetProject)
-		r.Put("/projects/{name}", s.handleUpdateProject)
-		r.Delete("/projects/{name}", s.handleDeleteProject)
-		r.Get("/projects/{name}/definition", s.handleGetProjectDefinition)
-		r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
-		r.Post("/projects/{name}/pipeline", s.handleSaveProjectPipeline)
-		r.Post("/projects/{name}/resolve", s.handleResolveProject)
-		r.Post("/projects/{name}/run", s.handleRunProject)
-		r.Post("/projects/{name}/tasks/{task}/run", s.handleRunTask)
-		r.Get("/projects/{name}/runs", s.handleListRuns)
-		r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
-		r.Post("/projects/{name}/runs/{runID}/cancel", s.handleCancelRun)
-		r.Post("/projects/{name}/runs/{runID}/tasks/{task}/run", s.handleApproveManualTask)
-		r.Get("/runs", s.handleListAllRuns)
-		r.Post("/resolve", s.handleResolve)
-		r.Post("/generate", s.handleGenerate)
-		r.Get("/validate", s.handleValidate)
-		r.Get("/logs", s.handleGetLogs)
-		r.Get("/version", s.handleVersion)
+		r.Group(func(r chi.Router) {
+			r.Get("/health", s.handleHealth)
+			r.Post("/auth/login", s.handleLogin)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(s.RequireAuth)
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.RequireRole(domain.RoleViewer))
+				r.Get("/dashboard", s.handleDashboard)
+				r.Get("/pipeline", s.handleGetPipeline)
+				r.Get("/pipeline/raw", s.handleGetPipelineRaw)
+				r.Get("/projects", s.handleListProjects)
+				r.Get("/projects/{name}", s.handleGetProject)
+				r.Get("/projects/{name}/definition", s.handleGetProjectDefinition)
+				r.Get("/projects/{name}/pipeline", s.handleGetProjectPipeline)
+				r.Post("/projects/{name}/resolve", s.handleResolveProject)
+				r.Get("/projects/{name}/runs", s.handleListRuns)
+				r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
+				r.Get("/runs", s.handleListAllRuns)
+				r.Post("/resolve", s.handleResolve)
+				r.Post("/generate", s.handleGenerate)
+				r.Get("/validate", s.handleValidate)
+				r.Get("/logs", s.handleGetLogs)
+				r.Get("/version", s.handleVersion)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.RequireRole(domain.RoleOperator))
+				r.Post("/projects/{name}/pipeline", s.handleSaveProjectPipeline)
+				r.Post("/projects/{name}/run", s.handleRunProject)
+				r.Post("/projects/{name}/tasks/{task}/run", s.handleRunTask)
+				r.Post("/projects/{name}/runs/{runID}/cancel", s.handleCancelRun)
+				r.Post("/projects/{name}/runs/{runID}/tasks/{task}/run", s.handleApproveManualTask)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.RequireRole(domain.RoleAdmin))
+				r.Get("/credentials", s.handleListCredentials)
+				r.Post("/credentials", s.handleCreateCredential)
+				r.Get("/credentials/{ref}", s.handleGetCredential)
+				r.Put("/credentials/{ref}", s.handleRotateCredential)
+				r.Post("/credentials/{ref}/revoke", s.handleRevokeCredential)
+				r.Post("/projects", s.handleCreateProject)
+				r.Put("/projects/{name}", s.handleUpdateProject)
+				r.Delete("/projects/{name}", s.handleDeleteProject)
+				r.Get("/users", s.handleListUsers)
+				r.Post("/users", s.handleCreateUser)
+				r.Put("/users/{user}/role", s.handleUpdateUserRole)
+				r.Put("/users/{user}/grants", s.handleSetUserGrants)
+				r.Delete("/users/{user}", s.handleDeleteUser)
+			})
+		})
 	})
 
 	// Webhook
@@ -285,6 +349,13 @@ func (s *Server) buildRouter() chi.Router {
 	}
 
 	return r
+}
+
+// Router returns the server's HTTP handler, for embedding or for driving it
+// in tests (httptest.NewRecorder + Router().ServeHTTP) without opening a
+// real listener.
+func (s *Server) Router() http.Handler {
+	return s.router
 }
 
 // ListenAndServe starts the server.

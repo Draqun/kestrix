@@ -82,6 +82,11 @@ host path. Compose mounts that file read-only at the same path inside the
 container. Back up the master key securely before creating credentials. Losing
 or replacing it makes existing ciphertext unrecoverable.
 
+This key is separate from `KESTRIX_JWT_SIGNING_KEY_PATH`, which authenticates
+API sessions rather than credential storage - see
+[Authentication](authentication.md). Every endpoint in this document also now
+requires a signed-in account with the `admin` role.
+
 ## Providers
 
 The provider and host fields are descriptive metadata only. Git always uses

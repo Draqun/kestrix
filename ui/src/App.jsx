@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { ColorModeProvider } from './context/ColorModeContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
+import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import { RunList, NewRun, RunProject, RunDetail } from './pages/Pipelines';
 import Projects from './pages/Projects';
@@ -53,6 +55,11 @@ function RunDetailRoutes() {
 
 function AppRoutes() {
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) {
+    return <Login />;
+  }
 
   return (
     <Layout>
@@ -74,9 +81,11 @@ function AppRoutes() {
 export default function App() {
   return (
     <ColorModeProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </AuthProvider>
     </ColorModeProvider>
   );
 }

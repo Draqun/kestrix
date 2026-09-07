@@ -66,6 +66,15 @@ definitions:
       webhook_secret:
         type: string
     type: object
+  domain.ProjectGrant:
+    properties:
+      project_name:
+        type: string
+      role:
+        type: string
+      user_name:
+        type: string
+    type: object
   domain.Repo:
     properties:
       credential_ref:
@@ -183,6 +192,61 @@ definitions:
           $ref: '#/definitions/domain.TaskResult'
         type: array
     type: object
+  web.createUserRequest:
+    properties:
+      name:
+        type: string
+      password:
+        type: string
+      role:
+        type: string
+    type: object
+  web.loginRequest:
+    properties:
+      name:
+        type: string
+      password:
+        type: string
+    type: object
+  web.loginResponse:
+    properties:
+      expires_at:
+        type: string
+      token:
+        type: string
+    type: object
+  web.setGrantsRequest:
+    properties:
+      grants:
+        items:
+          properties:
+            project_name:
+              type: string
+            role:
+              type: string
+          type: object
+        type: array
+    type: object
+  web.updateUserRoleRequest:
+    properties:
+      role:
+        type: string
+    type: object
+  web.userView:
+    properties:
+      created_at:
+        type: string
+      grants:
+        items:
+          $ref: '#/definitions/domain.ProjectGrant'
+        type: array
+      name:
+        type: string
+      role:
+        type: string
+      updated_at:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -192,6 +256,33 @@ info:
   title: Kestrix API
   version: 0.2.0
 paths:
+  /api/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.loginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.loginResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Authenticate and obtain a token
+      tags:
+      - auth
   /api/dashboard:
     get:
       produces:
@@ -587,6 +678,105 @@ paths:
       summary: List all pipeline runs across projects
       tags:
       - runs
+  /api/users:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List accounts
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: New account
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.createUserRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/web.userView'
+      summary: Create an account
+      tags:
+      - users
+  /api/users/{user}:
+    delete:
+      parameters:
+      - description: Account name
+        in: path
+        name: user
+        required: true
+        type: string
+      responses:
+        "204":
+          description: ""
+      summary: Delete an account
+      tags:
+      - users
+  /api/users/{user}/grants:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Account name
+        in: path
+        name: user
+        required: true
+        type: string
+      - description: Desired grants
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.setGrantsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.userView'
+      summary: Replace an account's project grants
+      tags:
+      - users
+  /api/users/{user}/role:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Account name
+        in: path
+        name: user
+        required: true
+        type: string
+      - description: New role
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.updateUserRoleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.userView'
+      summary: Change an account's global role
+      tags:
+      - users
   /api/validate:
     get:
       parameters:

@@ -45,3 +45,11 @@ func TestCompileTime_ProjectStore_PGStore(t *testing.T) {
 func TestCompileTime_RunStore_PGStore(t *testing.T) {
 	var _ domain.RunStore = (*store.PGStore)(nil)
 }
+
+func TestCompileTime_UserStore_PGStore(t *testing.T) {
+	var _ domain.UserStore = (*store.PGStore)(nil)
+}
+
+func TestCompileTime_GrantStore_PGStore(t *testing.T) {
+	var _ domain.GrantStore = (*store.PGStore)(nil)
+}

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCredential, createProject, getWebhookLogs, listCredentials, saveProjectPipeline } from './client.js';
+import {
+  createCredential, createProject, getWebhookLogs, listCredentials, saveProjectPipeline,
+  login, setAuthToken, setUnauthorizedHandler, healthCheck, listProjects,
+} from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
 test('UI API creates a project with the remote-only payload', async (t) => {
@@ -111,4 +114,98 @@ test('getWebhookLogs tolerates a response without items', async (t) => {
   const data = await getWebhookLogs();
   assert.deepEqual(data.items, []);
   assert.equal(data.pagination.total, 0);
+});
+
+test('every request attaches the bearer token once it is set', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; setAuthToken(null); });
+
+  const captured = [];
+  globalThis.fetch = async (url, options = {}) => {
+    captured.push({ url, headers: options.headers || {} });
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  setAuthToken('test-token-123');
+  await healthCheck();
+  await listProjects();
+
+  assert.equal(captured.length, 2);
+  for (const call of captured) {
+    assert.equal(call.headers.Authorization, 'Bearer test-token-123');
+  }
+});
+
+test('no request attaches a token before one is set', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = options.headers || {};
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  setAuthToken(null);
+  await healthCheck();
+
+  assert.equal('Authorization' in captured, false);
+});
+
+test('a 401 response invokes the unauthorized handler exactly once', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; setUnauthorizedHandler(null); });
+
+  globalThis.fetch = async () => new Response('{}', { status: 401, headers: { 'Content-Type': 'application/json' } });
+
+  let calls = 0;
+  setUnauthorizedHandler(() => { calls++; });
+  await healthCheck();
+
+  assert.equal(calls, 1);
+});
+
+test('a non-401 response never invokes the unauthorized handler', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; setUnauthorizedHandler(null); });
+
+  globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  let calls = 0;
+  setUnauthorizedHandler(() => { calls++; });
+  await healthCheck();
+
+  assert.equal(calls, 0);
+});
+
+test('login posts credentials without an Authorization header and returns the token', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; setAuthToken(null); });
+
+  setAuthToken('stale-token-from-a-previous-session');
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ token: 'fresh-token', expires_at: '2026-01-01T00:00:00Z' }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const resp = await login('alice', 's3cret');
+
+  assert.equal(captured.url, '/api/auth/login');
+  assert.deepEqual(JSON.parse(captured.options.body), { name: 'alice', password: 's3cret' });
+  assert.equal('Authorization' in (captured.options.headers || {}), false);
+  assert.equal(resp.token, 'fresh-token');
+});
+
+test('login throws the server-provided error message on failure', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'invalid name or password' }), {
+    status: 401, headers: { 'Content-Type': 'application/json' },
+  });
+
+  await assert.rejects(() => login('alice', 'wrong'), /invalid name or password/);
 });

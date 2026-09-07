@@ -18,6 +18,7 @@ import {
 } from '@mui/icons-material';
 import { listProjects, createProject, deleteProject, getProject, updateProject, getProjectDefinition } from '../api/client';
 import CredentialSelectField from '../components/credentials/CredentialSelectField.jsx';
+import { useAuth } from '../context/AuthContext';
 import Pagination from '../components/Pagination';
 import useCredentials from '../hooks/useCredentials.js';
 import {
@@ -27,6 +28,8 @@ import {
 } from '../lib/projectForm.js';
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
+  const { roleAtLeast } = useAuth();
+  const canAdminister = roleAtLeast('admin');
   const [searchParams, setSearchParams] = useSearchParams();
   const allowedLimits = [10, 25, 50, 100];
   const limit = allowedLimits.includes(Number(searchParams.get('limit')))
@@ -172,21 +175,25 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           <Typography variant="h4" sx={{ ml: 2 }}>{selectedName}</Typography>
           <Chip label={config?.pipeline_dir || 'ci'} size="small" variant="outlined" sx={{ ml: 1 }} />
           <Box sx={{ flexGrow: 1 }} />
-          <Tooltip title="Edit project">
-            <IconButton size="small" onClick={openEdit}>
-              <EditIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+          {canAdminister && (
+            <Tooltip title="Edit project">
+              <IconButton size="small" onClick={openEdit}>
+                <EditIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="Open pipeline">
             <IconButton size="small" onClick={() => onOpenPipeline && onOpenPipeline(selectedName)}>
               <PipelineIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Delete project">
-            <IconButton color="error" onClick={() => handleDelete(selectedName)}>
-              <DeleteIcon />
-            </IconButton>
-          </Tooltip>
+          {canAdminister && (
+            <Tooltip title="Delete project">
+              <IconButton color="error" onClick={() => handleDelete(selectedName)}>
+                <DeleteIcon />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
 
         {detailLoading && <LinearProgress sx={{ mb: 2 }} />}
@@ -315,9 +322,11 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         <Tooltip title="Refresh">
           <IconButton onClick={fetchProjects}><RefreshIcon /></IconButton>
         </Tooltip>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setShowCreate(true)} sx={{ ml: 1 }}>
-          Add project
-        </Button>
+        {canAdminister && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setShowCreate(true)} sx={{ ml: 1 }}>
+            Add project
+          </Button>
+        )}
       </Box>
 
       {loading && <LinearProgress sx={{ mb: 2 }} />}
@@ -351,11 +360,13 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
                     <PipelineIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="Delete project">
-                  <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); handleDelete(p.name); }}>
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                {canAdminister && (
+                  <Tooltip title="Delete project">
+                    <IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); handleDelete(p.name); }}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </ListItemSecondaryAction>
             </ListItem>
           </Box>

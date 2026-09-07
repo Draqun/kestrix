@@ -54,6 +54,8 @@ func main() {
 		cmdServe(os.Args[2:])
 	case "variables":
 		cmdVariables(os.Args[2:])
+	case "user":
+		cmdUser(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -71,7 +73,11 @@ Usage:
   kestrix validate   <file.tf>
   kestrix run        [--changed repo1,repo2] [--workdir .] [--include-manual] <file.tf>
   kestrix serve      [--addr :8080] [--database-url postgres://...] [--static ../ui/dist] [--secret TOKEN] [--dispatch PROJECT_ID]
-  kestrix variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]`)
+  kestrix variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]
+  kestrix user create [--role viewer|operator|admin] <name>
+  kestrix user list
+  kestrix user passwd <name>
+  kestrix user delete <name>`)
 }
 
 func cmdRun(args []string) {
@@ -253,12 +259,13 @@ func cmdServe(args []string) {
 
 	// Convert to web.Config.
 	webCfg := web.Config{
-		ListenAddr:    cfg.ListenAddr,
-		PipelineDir:   cfg.Pipeline.Dir,
-		StaticDir:     *staticDir,
-		DatabaseURL:   *dbURL,
-		MasterKeyPath: env.MasterKeyPath,
-		Branch:        cfg.Branch,
+		ListenAddr:        cfg.ListenAddr,
+		PipelineDir:       cfg.Pipeline.Dir,
+		StaticDir:         *staticDir,
+		DatabaseURL:       *dbURL,
+		MasterKeyPath:     env.MasterKeyPath,
+		JWTSigningKeyPath: env.JWTSigningKeyPath,
+		Branch:            cfg.Branch,
 		SourceCache: web.SourceCacheConfig{
 			Directory: cfg.SourceCache.Directory,
 			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),

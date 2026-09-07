@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useColorMode } from '../context/ColorModeContext';
+import { useAuth } from '../context/AuthContext';
 import useKeyboardNav from '../hooks/useKeyboardNav';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon,
@@ -18,6 +19,7 @@ import {
   MusicNote as MusicNoteIcon,
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
 import { getVersion } from '../api/client';
 
@@ -43,6 +45,7 @@ export default function Layout({ children }) {
   const location = useLocation();
   const [version, setVersion] = useState(null);
   const { mode, toggleColorMode } = useColorMode();
+  const { name, role, logout } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md'));
@@ -123,7 +126,18 @@ export default function Layout({ children }) {
             size="small"
             color="secondary"
             variant="outlined"
+            sx={{ mr: 1 }}
           />
+          {name && (
+            <Tooltip title={`Signed in as ${name} (${role})`}>
+              <Chip label={name} size="small" variant="outlined" color="inherit" sx={{ mr: 1 }} />
+            </Tooltip>
+          )}
+          <Tooltip title="Sign out">
+            <IconButton color="inherit" aria-label="Sign out" onClick={logout}>
+              <LogoutIcon />
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
 

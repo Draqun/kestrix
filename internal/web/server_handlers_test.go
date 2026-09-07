@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"kestrix/internal/auth"
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
 	"kestrix/internal/service"
@@ -155,7 +156,7 @@ func TestHandleSaveProjectPipeline_BadBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/pipeline",
 		strings.NewReader(""))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405 (body=%s)", w.Code, w.Body.String())
@@ -181,13 +182,14 @@ func TestHandleResolveProject_Happy(t *testing.T) {
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
 		sourceSessions: &testSourceSessions{},
+		tokenIssuer:    auth.JWTIssuer{Key: testSigningKey},
 	}
 	srv.router = srv.buildRouter()
 
 	body := `{"changed":["svc"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/resolve", strings.NewReader(body))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
@@ -213,7 +215,7 @@ func TestHandleResolveProject_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/nope/resolve",
 		strings.NewReader(`{"changed":["svc"]}`))
-	srv.router.ServeHTTP(w, r)
+	srv.router.ServeHTTP(w, authed(t, srv, r))
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)

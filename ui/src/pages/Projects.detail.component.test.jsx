@@ -4,6 +4,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, test, vi } from 'vitest';
 import Projects from './Projects.jsx';
 
+vi.mock('../context/AuthContext.jsx', () => ({
+  useAuth: () => ({ name: 'test-admin', role: 'admin', logout: () => {}, roleAtLeast: () => true }),
+}));
+
 beforeEach(() => {
   globalThis.fetch = vi.fn(async (url) => {
     let body;

@@ -33,6 +33,7 @@ type Environment struct {
 	TestDatabaseURL     string
 	DatabaseURL         string
 	MasterKeyPath       string
+	JWTSigningKeyPath   string
 	Docker              DockerEnvironment
 	SourceCache         SourceCacheEnvironment
 
@@ -133,6 +134,7 @@ func LoadEnvironment(environ []string) *Environment {
 		TestDatabaseURL:     values[Prefix+"TEST_DATABASE_URL"],
 		DatabaseURL:         values["DATABASE_URL"],
 		MasterKeyPath:       values[Prefix+"MASTER_KEY_PATH"],
+		JWTSigningKeyPath:   values[Prefix+"JWT_SIGNING_KEY_PATH"],
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],

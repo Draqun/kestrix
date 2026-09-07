@@ -61,6 +61,83 @@ type ProjectFile struct {
 	Project Project `hcl:"project,block"`
 }
 
+// Role is a Kestrix permission level. Roles are ordered: a higher role
+// includes every permission of the roles below it.
+type Role string
+
+// Global and per-project roles, from least to most privileged.
+const (
+	RoleViewer   Role = "viewer"
+	RoleOperator Role = "operator"
+	RoleAdmin    Role = "admin"
+)
+
+// roleRank orders the known roles. A role absent from this map (including
+// the zero value) ranks below every known role.
+var roleRank = map[Role]int{
+	RoleViewer:   1,
+	RoleOperator: 2,
+	RoleAdmin:    3,
+}
+
+// Valid reports whether r is one of the known roles.
+func (r Role) Valid() bool {
+	_, ok := roleRank[r]
+	return ok
+}
+
+// AtLeast reports whether r grants at least the permissions of other. An
+// unrecognized role satisfies no requirement, including itself.
+func (r Role) AtLeast(other Role) bool {
+	rr, ok := roleRank[r]
+	if !ok {
+		return false
+	}
+	return rr >= roleRank[other]
+}
+
+// HigherRole returns whichever of a and b ranks higher. An unrecognized role
+// never outranks a known one.
+func HigherRole(a, b Role) Role {
+	if roleRank[a] >= roleRank[b] {
+		return a
+	}
+	return b
+}
+
+// User is a Kestrix account. It is safe to return from any API response or
+// CLI output: it never carries a password hash.
+type User struct {
+	Name      string    `json:"name"`
+	Role      Role      `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// UserCredential pairs a user's identity with its stored password hash. It
+// must never be serialized to an API response or CLI output.
+type UserCredential struct {
+	User
+	PasswordHash string
+}
+
+// ProjectGrant assigns a user a role scoped to one project. It never lowers
+// the permissions the user's global role already provides; see
+// domain.HigherRole.
+type ProjectGrant struct {
+	UserName    string `json:"user_name"`
+	ProjectName string `json:"project_name"`
+	Role        Role   `json:"role"`
+}
+
+// Claims is the verified identity and role carried by an authentication
+// token, produced only by TokenIssuer.Verify.
+type Claims struct {
+	UserName  string
+	Role      Role
+	ExpiresAt time.Time
+}
+
 // TaskResult captures the outcome of a single task execution.
 // It is the single source of truth for task results across the runner,
 // store, and service layers.

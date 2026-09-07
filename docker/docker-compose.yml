@@ -25,11 +25,13 @@ services:
       # scripts are available to the runner as well as to the hot reloader.
       - ..:/app
       - ${KESTRIX_MASTER_KEY_PATH:?Set KESTRIX_MASTER_KEY_PATH to a mode-0600 master-key file}:${KESTRIX_MASTER_KEY_PATH}:ro
+      - ${KESTRIX_JWT_SIGNING_KEY_PATH:?Set KESTRIX_JWT_SIGNING_KEY_PATH to a mode-0600 signing-key file}:${KESTRIX_JWT_SIGNING_KEY_PATH}:ro
       # Allow the local pipeline's docker_build task to build sibling images.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - KESTRIX_WEBHOOK_SECRET=${KESTRIX_WEBHOOK_SECRET:-dev-secret}
       - KESTRIX_MASTER_KEY_PATH=${KESTRIX_MASTER_KEY_PATH}
+      - KESTRIX_JWT_SIGNING_KEY_PATH=${KESTRIX_JWT_SIGNING_KEY_PATH}
       - KESTRIX_WEBHOOK_HISTORY_LIMIT=${KESTRIX_WEBHOOK_HISTORY_LIMIT:-1000}
       - KESTRIX_GITLAB_URL=${KESTRIX_GITLAB_URL:-https://gitlab.com}
       - KESTRIX_GITLAB_TOKEN=${KESTRIX_GITLAB_TOKEN:-}

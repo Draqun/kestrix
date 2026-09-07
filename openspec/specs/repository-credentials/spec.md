@@ -8,7 +8,7 @@ Define encrypted, provider-neutral credentials for remote Git source acquisition
 
 ### Requirement: Encrypted provider-neutral credential storage
 
-Kestrix SHALL store Git credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL, and plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses.
+Kestrix SHALL store Git credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key.
 
 #### Scenario: Store a GitHub or GitLab token
 

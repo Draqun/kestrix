@@ -10,7 +10,27 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"kestrix/internal/domain"
 )
+
+// TestWebhookBearerTokenDoesNotSubstituteForSharedSecret pins
+// access-control's "Webhook secret is still enforced" scenario: a valid
+// Kestrix user token is not a substitute for the webhook's own shared
+// secret, and a wrong or missing secret is still rejected regardless of
+// what else the request carries.
+func TestWebhookBearerTokenDoesNotSubstituteForSharedSecret(t *testing.T) {
+	srv := NewServer(Config{Signature: SignatureConfig{Enabled: true, Secret: "correct"}})
+	body := `{"ref":"refs/heads/main","commits":[],"repository":{"name":"x"}}`
+	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(body))
+	req.Header.Set("Authorization", authToken(t, srv, domain.RoleAdmin))
+	// No X-Gitlab-Token at all: only a user bearer token is presented.
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (a user token must not substitute for the webhook secret)", w.Code)
+	}
+}
 
 func TestVerifyGitLabToken(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

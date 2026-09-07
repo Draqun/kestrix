@@ -4,7 +4,12 @@
 #
 # Usage:
 #   KESTRIX_IMAGE=kestrix:latest KESTRIX_MASTER_KEY_PATH=/srv/kestrix/master.key \
+#     KESTRIX_JWT_SIGNING_KEY_PATH=/srv/kestrix/jwt.key \
 #     docker compose -f docker-compose.prod.yml up -d
+#
+# Kestrix serves no request until an administrator account exists:
+#   docker compose -f docker-compose.prod.yml exec kestrix \
+#     kestrix user create --role admin <name>
 #
 services:
   kestrix:
@@ -15,6 +20,7 @@ services:
       - DATABASE_URL=postgres://kestrix:kestrix@postgres:5432/kestrix?sslmode=disable
       - KESTRIX_WEBHOOK_SECRET=${KESTRIX_WEBHOOK_SECRET:-dev-secret}
       - KESTRIX_MASTER_KEY_PATH=${KESTRIX_MASTER_KEY_PATH}
+      - KESTRIX_JWT_SIGNING_KEY_PATH=${KESTRIX_JWT_SIGNING_KEY_PATH}
       - KESTRIX_WEBHOOK_HISTORY_LIMIT=${KESTRIX_WEBHOOK_HISTORY_LIMIT:-1000}
       - KESTRIX_GITLAB_URL=${KESTRIX_GITLAB_URL:-https://gitlab.com}
       - KESTRIX_GITLAB_TOKEN=${KESTRIX_GITLAB_TOKEN:-}
@@ -28,6 +34,7 @@ services:
       - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
     volumes:
       - ${KESTRIX_MASTER_KEY_PATH:?Set KESTRIX_MASTER_KEY_PATH to a mode-0600 master-key file}:${KESTRIX_MASTER_KEY_PATH}:ro
+      - ${KESTRIX_JWT_SIGNING_KEY_PATH:?Set KESTRIX_JWT_SIGNING_KEY_PATH to a mode-0600 signing-key file}:${KESTRIX_JWT_SIGNING_KEY_PATH}:ro
       - source_cache:/var/lib/kestrix/cache/git
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
