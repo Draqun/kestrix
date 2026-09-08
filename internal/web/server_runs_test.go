@@ -479,6 +479,19 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	if len(mock.CreateRunCalls) != 1 || mock.CreateRunCalls[0].StartedBy != "user:dave" {
 		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:dave", mock.CreateRunCalls)
 	}
+	// handleRunTask shares RunService.RunTask with the manual-approval path
+	// (design.md D4), so re-running a task directly by name stamps the same
+	// approver fields on its result - see REVIEW.md R1/R2.
+	if len(mock.FinishRunCalls) != 1 || len(mock.FinishRunCalls[0].TaskResults) != 1 {
+		t.Fatalf("FinishRunCalls = %+v, want 1 call with 1 task result", mock.FinishRunCalls)
+	}
+	tr := mock.FinishRunCalls[0].TaskResults[0]
+	if tr.ApprovedBy != "user:dave" {
+		t.Errorf("ApprovedBy = %q, want user:dave", tr.ApprovedBy)
+	}
+	if tr.ApprovedAt == nil {
+		t.Error("ApprovedAt = nil, want set")
+	}
 }
 
 // ── handleApproveManualTask ──────────────────────────────────────
