@@ -70,6 +70,20 @@ printf '%s\n' \
   '      script = "test -f version.txt"' \
   '    }' \
   '  }' \
+  '  ci_task "print_env" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "env | sort"' \
+  '    }' \
+  '  }' \
+  '  ci_task "sleep_task" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "sleep 120"' \
+  '    }' \
+  '  }' \
   '}' > "${REMOTE_WORK}/ci/pipeline.tf"
 printf '%s\n' 'docker-e2e-source' > "${REMOTE_WORK}/version.txt"
 git -C "${REMOTE_WORK}" add .
@@ -80,14 +94,28 @@ dd if=/dev/urandom of="${MASTER_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${MASTER_KEY_FILE}"
 dd if=/dev/urandom of="${JWT_SIGNING_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${JWT_SIGNING_KEY_FILE}"
+# Task-execution-isolation checks below need `docker` runner mode so a task
+# actually starts a container to inspect. That needs the `docker` CLI and
+# the host's socket inside the deployment container (Docker-outside-of-
+# Docker) - test-only, never part of the shipped image or Compose file. The
+# bind-mounted host /tmp makes DockerExecutor's per-run workdir (created
+# under the container's /tmp) resolve to the same path when the *host*
+# daemon services the `-v` mount for a sibling task container.
+STARTUP_SCRIPT='apk add --no-cache docker-cli bash >/dev/null'
+STARTUP_SCRIPT="${STARTUP_SCRIPT} && mkdir -p /root/.kestrix"
+STARTUP_SCRIPT="${STARTUP_SCRIPT} && printf 'runner:\n  mode: docker\n' > /root/.kestrix/config.yaml"
+STARTUP_SCRIPT="${STARTUP_SCRIPT} && git config --global --add safe.directory /e2e/remote.git"
+STARTUP_SCRIPT="${STARTUP_SCRIPT} && exec /kestrix serve --addr :8080 --static ./ui/dist"
 printf '%s\n' \
   'services:' \
   '  kestrix:' \
   '    entrypoint: ["/bin/sh", "-c"]' \
-  '    command: ["git config --global --add safe.directory /e2e/remote.git && exec /kestrix serve --addr :8080 --static ./ui/dist"]' \
+  "    command: [\"${STARTUP_SCRIPT}\"]" \
   '    volumes:' \
   '      - source_cache:/var/lib/kestrix/cache/git' \
-  "      - ${REMOTE_BARE}:/e2e/remote.git:ro" > "${OVERRIDE_FILE}"
+  "      - ${REMOTE_BARE}:/e2e/remote.git:ro" \
+  '      - /var/run/docker.sock:/var/run/docker.sock' \
+  '      - /tmp:/tmp' > "${OVERRIDE_FILE}"
 
 export KESTRIX_IMAGE="${IMAGE_OVERRIDE:-${IMAGE_TAG}}"
 export KESTRIX_MASTER_KEY_PATH="${MASTER_KEY_FILE}"
@@ -328,6 +356,98 @@ if grep -Eq "${SECRET_VALUE}|repo_path|source-session|/var/lib/kestrix/cache" "$
   echo "Project API response exposed secret or host/cache path data." >&2
   exit 1
 fi
+
+# task-execution-isolation: a task process must never see a control-plane
+# secret, even running as a container in the deployment image.
+# KESTRIX_TEST_DATABASE_URL is the one KESTRIX_* name expected here: it is
+# on this Compose file's own KESTRIX_RUNNER_ENV_PASSTHROUGH default, and the
+# design accepts it (the test helper refuses any database not ending in
+# _test). print_env's own output is the task's complete view of its
+# environment - see design.md D1/D2.
+echo "Verifying a task process cannot see control-plane secrets..."
+ENV_TASK_RESPONSE="${TEMP_DIR}/env-task.json"
+status="$(curl -sS -o "${ENV_TASK_RESPONSE}" -w '%{http_code}' --max-time 60 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/projects/docker-remote/tasks/print_env/run" \
+  -H 'Content-Type: application/json' -d '{}')"
+if [[ "${status}" != "200" ]]; then
+  echo "print_env task run returned HTTP ${status}:" >&2
+  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  exit 1
+fi
+if grep -Eq '(^|\\n)DATABASE_URL=|KESTRIX_MASTER_KEY_PATH=|KESTRIX_JWT_SIGNING_KEY_PATH=|KESTRIX_GITLAB_TOKEN=|KESTRIX_WEBHOOK_SECRET=' "${ENV_TASK_RESPONSE}"; then
+  echo "Task process leaked a control-plane secret variable:" >&2
+  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  exit 1
+fi
+if ! grep -q 'PATH=' "${ENV_TASK_RESPONSE}"; then
+  echo "Task process is missing the base allowlist (PATH):" >&2
+  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  exit 1
+fi
+if ! grep -q 'KESTRIX_TEST_DATABASE_URL=' "${ENV_TASK_RESPONSE}"; then
+  echo "Task process is missing the expected KESTRIX_RUNNER_ENV_PASSTHROUGH entry (KESTRIX_TEST_DATABASE_URL):" >&2
+  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  exit 1
+fi
+echo "Task environment allowlist verified: no control-plane secret leaked."
+
+# task-execution-isolation: cancelling a run must stop its docker-mode
+# task's container - see the "Cancel a running Docker task" scenario.
+echo "Verifying cancellation stops a docker-mode task's container..."
+SLEEP_RUN_RESPONSE="${TEMP_DIR}/sleep-run.json"
+status="$(curl -sS -o "${SLEEP_RUN_RESPONSE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/projects/docker-remote/run" \
+  -H 'Content-Type: application/json' -d '{}')"
+if [[ "${status}" != "200" ]]; then
+  echo "Starting the run for sleep_task returned HTTP ${status}:" >&2
+  sed -n '1,200p' "${SLEEP_RUN_RESPONSE}" >&2
+  exit 1
+fi
+SLEEP_RUN_ID="$(sed -n 's/.*"run_id":\([0-9]*\).*/\1/p' "${SLEEP_RUN_RESPONSE}")"
+if [[ -z "${SLEEP_RUN_ID}" ]]; then
+  echo "Run response did not contain a run_id:" >&2
+  sed -n '1,200p' "${SLEEP_RUN_RESPONSE}" >&2
+  exit 1
+fi
+
+RUN_STATE="${TEMP_DIR}/sleep-run-state.json"
+deadline=$((SECONDS + 60))
+until curl -sS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs/${SLEEP_RUN_ID}" -o "${RUN_STATE}" \
+  && grep -q '"name":"sleep_task","status":"running"' "${RUN_STATE}"; do
+  if (( SECONDS >= deadline )); then
+    echo "sleep_task did not reach status running within timeout:" >&2
+    sed -n '1,200p' "${RUN_STATE}" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+CONTAINER_NAME="$(docker ps --filter 'name=kestrix-sleep_task-' --format '{{.Names}}' | head -n1)"
+if [[ -z "${CONTAINER_NAME}" ]]; then
+  echo "Expected a running kestrix-sleep_task-* container; found none:" >&2
+  docker ps >&2
+  exit 1
+fi
+echo "sleep_task container running: ${CONTAINER_NAME}"
+
+status="$(curl -sS -o "${TEMP_DIR}/sleep-cancel-response.json" -w '%{http_code}' --max-time 30 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/projects/docker-remote/runs/${SLEEP_RUN_ID}/cancel")"
+if [[ "${status}" != "200" ]]; then
+  echo "Cancelling the sleep_task run returned HTTP ${status}:" >&2
+  sed -n '1,200p' "${TEMP_DIR}/sleep-cancel-response.json" >&2
+  exit 1
+fi
+
+deadline=$((SECONDS + 20))
+while docker ps --filter "name=${CONTAINER_NAME}" --format '{{.Names}}' | grep -q "${CONTAINER_NAME}"; do
+  if (( SECONDS >= deadline )); then
+    echo "Container ${CONTAINER_NAME} is still running after cancellation:" >&2
+    docker ps >&2
+    exit 1
+  fi
+  sleep 1
+done
+echo "Container ${CONTAINER_NAME} is absent from 'docker ps' after cancellation."
 
 PIPELINE_BEFORE="${TEMP_DIR}/pipeline-before.tf"
 status="$(curl -sS -o "${PIPELINE_BEFORE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/pipeline")"

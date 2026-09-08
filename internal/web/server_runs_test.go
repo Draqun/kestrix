@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,74 @@ func TestHandleCancelRun_Happy(t *testing.T) {
 	}
 	if resp["status"] != "canceled" {
 		t.Errorf("status = %q, want canceled", resp["status"])
+	}
+}
+
+func TestHandleCancelRun_NoRunService(t *testing.T) {
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
+	srv.runService = nil
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/1/cancel", nil), "name", "demo", "runID", "1")
+	srv.handleCancelRun(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// blockingCancelRunner blocks Run until releaseCh closes, ignoring context
+// cancellation - simulating a run that does not terminate within its grace
+// period, for handleCancelRun's timeout path.
+type blockingCancelRunner struct {
+	startedCh chan struct{}
+	releaseCh chan struct{}
+}
+
+func (r *blockingCancelRunner) Run(_ context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	close(r.startedCh)
+	<-r.releaseCh
+	return nil, nil
+}
+
+func (r *blockingCancelRunner) RunTask(_ context.Context, _ domain.Project, _ string, _ domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+func TestHandleCancelRun_Timeout(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 99}
+	runner := &blockingCancelRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := service.NewRunService(store, runner, runner)
+	svc.CancelGrace = time.Millisecond
+	oldBuffer := service.CancelWaitBuffer
+	service.CancelWaitBuffer = 50 * time.Millisecond
+	t.Cleanup(func() { service.CancelWaitBuffer = oldBuffer })
+
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
+		runStore:       store,
+		runService:     svc,
+		sourceSessions: &testSourceSessions{},
+	}
+
+	runID, err := svc.Start(context.Background(), "demo", &domain.Project{Name: "demo"}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+	t.Cleanup(func() { close(runner.releaseCh) })
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/99/cancel", nil), "name", "demo", "runID", strconv.Itoa(runID))
+	srv.handleCancelRun(w, r)
+
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "did not stop in time") {
+		t.Errorf("body = %q, want it to say the run did not stop in time", w.Body.String())
+	}
+	if len(store.CancelRunCalls) != 0 {
+		t.Errorf("CancelRun should not be called on timeout, got %v", store.CancelRunCalls)
 	}
 }
 

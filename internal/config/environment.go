@@ -54,6 +54,24 @@ type Environment struct {
 	ContentSecurityPolicy string
 	Docker                DockerEnvironment
 	SourceCache           SourceCacheEnvironment
+	// RunnerEnvPassthrough names host environment variables forwarded to
+	// task processes verbatim, in addition to the fixed base set, CI_*
+	// variables, and resolved pipeline variables; see design.md D2 in the
+	// runner-execution-isolation change. LoadEnvironment refuses to start
+	// when this list names a control-plane secret.
+	RunnerEnvPassthrough []string
+	// RunnerDockerPIDs, RunnerDockerMemory, and RunnerDockerCPUs bound a
+	// Docker task's process count, memory, and CPU share. RunnerDockerUser
+	// and RunnerDockerNetwork set its user and network; see design.md D3.
+	RunnerDockerPIDs    int
+	RunnerDockerMemory  string
+	RunnerDockerCPUs    string
+	RunnerDockerUser    string
+	RunnerDockerNetwork string
+	// RunnerCancelGrace bounds how long a cancelled task's process (or
+	// container) gets to exit before being killed; see design.md D4.
+	// Defaults to 10s.
+	RunnerCancelGrace time.Duration
 
 	values        map[string]string
 	originalEnvs  []string
@@ -188,6 +206,69 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	deniedPassthrough := map[string]bool{
+		Prefix + "MASTER_KEY_PATH":      true,
+		Prefix + "JWT_SIGNING_KEY_PATH": true,
+		"DATABASE_URL":                  true,
+		Prefix + "GITLAB_TOKEN":         true,
+		Prefix + "WEBHOOK_SECRET":       true,
+	}
+	var runnerEnvPassthrough []string
+	if raw := values[Prefix+"RUNNER_ENV_PASSTHROUGH"]; raw != "" {
+		for _, name := range strings.Split(raw, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if deniedPassthrough[name] {
+				if validationErr == nil {
+					validationErr = fmt.Errorf("KESTRIX_RUNNER_ENV_PASSTHROUGH must not include %s", name)
+				}
+				continue
+			}
+			runnerEnvPassthrough = append(runnerEnvPassthrough, name)
+		}
+	}
+
+	runnerDockerPIDs := 256
+	if raw := values[Prefix+"RUNNER_DOCKER_PIDS"]; raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_DOCKER_PIDS must be a positive integer")
+			}
+		} else {
+			runnerDockerPIDs = parsed
+		}
+	}
+
+	runnerDockerMemory := "2g"
+	if raw := values[Prefix+"RUNNER_DOCKER_MEMORY"]; raw != "" {
+		runnerDockerMemory = raw
+	}
+
+	runnerDockerCPUs := "2"
+	if raw := values[Prefix+"RUNNER_DOCKER_CPUS"]; raw != "" {
+		runnerDockerCPUs = raw
+	}
+
+	runnerDockerNetwork := "bridge"
+	if raw := values[Prefix+"RUNNER_DOCKER_NETWORK"]; raw != "" {
+		runnerDockerNetwork = raw
+	}
+
+	runnerCancelGrace := 10 * time.Second
+	if raw := values[Prefix+"RUNNER_CANCEL_GRACE"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed < 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_CANCEL_GRACE must be a non-negative duration")
+			}
+		} else {
+			runnerCancelGrace = parsed
+		}
+	}
+
 	return &Environment{
 		ListenAddr:            values[Prefix+"ADDR"],
 		PipelineDir:           values[Prefix+"DIR"],
@@ -217,9 +298,16 @@ func LoadEnvironment(environ []string) *Environment {
 			MaxAge:    maxAge,
 			MaxBytes:  maxBytes,
 		},
-		values:        values,
-		originalEnvs:  normalized,
-		validationErr: validationErr,
+		RunnerEnvPassthrough: runnerEnvPassthrough,
+		RunnerDockerPIDs:     runnerDockerPIDs,
+		RunnerDockerMemory:   runnerDockerMemory,
+		RunnerDockerCPUs:     runnerDockerCPUs,
+		RunnerDockerUser:     values[Prefix+"RUNNER_DOCKER_USER"],
+		RunnerDockerNetwork:  runnerDockerNetwork,
+		RunnerCancelGrace:    runnerCancelGrace,
+		values:               values,
+		originalEnvs:         normalized,
+		validationErr:        validationErr,
 	}
 }
 

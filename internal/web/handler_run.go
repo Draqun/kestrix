@@ -3,12 +3,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/service"
 
 	"kestrix/internal/web/pagination"
 
@@ -294,7 +296,10 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// handleCancelRun cancels a running pipeline run.
+// handleCancelRun cancels a running pipeline run. If the run is actively
+// executing, Cancel terminates its task before the store records it as
+// canceled; a run stuck beyond its grace period stays "running" and this
+// reports 504 rather than falsely claiming the run stopped.
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	runID := 0
 	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)
@@ -302,7 +307,15 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
 	}
-	if err := s.runStore.CancelRun(runID); err != nil {
+	if s.runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	if err := s.runService.Cancel(r.Context(), runID); err != nil {
+		if errors.Is(err, service.ErrRunCancelTimedOut) {
+			writeError(w, http.StatusGatewayTimeout, fmt.Sprintf("run %d did not stop in time", runID))
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

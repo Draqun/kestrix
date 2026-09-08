@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"kestrix/internal/config"
@@ -28,7 +30,45 @@ var (
 	resolveNodes   = func(project model.Project, changed map[string]bool) ([]dag.Node, error) {
 		return dag.New(project).Resolve(changed)
 	}
+	// killGroup signals every process in pgid's process group. It is a
+	// package variable so unit tests can record calls without sending real
+	// signals; see design.md D4.
+	killGroup = func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) }
 )
+
+// setCancelViaProcessGroup makes cmd start in its own process group and
+// wires its Cancel/WaitDelay so that context cancellation sends the group a
+// SIGTERM, then a SIGKILL after grace if it hasn't exited (WaitDelay also
+// makes the stdlib SIGKILL the direct child if it outlives the same grace).
+// See design.md D4 and the task-execution-isolation capability.
+//
+// It returns a cleanup func the caller must call after cmd.Run() returns.
+// Without it, a process group that exits cleanly from SIGTERM well before
+// grace would still take a SIGKILL grace later, by which point the OS may
+// have reused that pid/pgid for an unrelated process; the cleanup stops the
+// pending timer so a clean exit never fires a stray, late SIGKILL.
+func setCancelViaProcessGroup(cmd *exec.Cmd, grace time.Duration) (cleanup func()) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var mu sync.Mutex
+	var timer *time.Timer
+	cmd.Cancel = func() error {
+		err := killGroup(cmd.Process.Pid, syscall.SIGTERM)
+		mu.Lock()
+		timer = time.AfterFunc(grace, func() {
+			_ = killGroup(cmd.Process.Pid, syscall.SIGKILL)
+		})
+		mu.Unlock()
+		return err
+	}
+	cmd.WaitDelay = grace
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+}
 
 // TaskResult is an alias for domain.TaskResult, the single type used
 // across runner, store, and service layers.
@@ -100,10 +140,21 @@ func (e taskFatal) Error() string { return e.err.Error() }
 func (e taskFatal) Unwrap() error { return e.err }
 
 // DockerExecutor runs tasks inside Docker containers with volume mounts.
+// PIDs, Memory, and CPUs bound the container's process count, memory, and
+// CPU share; User and Network set its user and network. See
+// task-execution-isolation and design.md D3.
 type DockerExecutor struct {
 	WorkDir      string
 	Repos        map[string]model.Repo
 	DefaultImage string
+	PIDs         int
+	Memory       string
+	CPUs         string
+	User         string
+	Network      string
+	// Grace bounds how long `docker stop` waits before the daemon kills the
+	// container; see design.md D4.
+	Grace time.Duration
 }
 
 func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
@@ -127,22 +178,43 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (image=%s, dir=%s)\n", task.Name, image, relDir)
 
+	containerName := fmt.Sprintf("kestrix-%s-%d", task.Name, time.Now().UnixNano())
 	args := []string{
 		"run", "--rm",
-		"--name", fmt.Sprintf("kestrix-%s-%d", task.Name, time.Now().UnixNano()),
-		"-v", e.WorkDir + ":/workspace",
-		"-w", "/workspace/" + relDir,
-		"-e", "CI_PROJECT_DIR=/workspace/" + relDir,
+		"--name", containerName,
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
 	}
+	if e.PIDs > 0 {
+		args = append(args, "--pids-limit", strconv.Itoa(e.PIDs))
+	}
+	if e.Memory != "" {
+		args = append(args, "--memory", e.Memory)
+	}
+	if e.CPUs != "" {
+		args = append(args, "--cpus", e.CPUs)
+	}
+	if e.Network != "" {
+		args = append(args, "--network", e.Network)
+	}
+	if e.User != "" {
+		args = append(args, "--user", e.User)
+	}
+	args = append(args,
+		"-v", e.WorkDir+":/workspace",
+		"-w", "/workspace/"+relDir,
+	)
 	if external != "" {
 		args = append(args, "-v", external+":/sources/"+repo.Name)
 	}
 
+	ci := map[string]string{"CI_PROJECT_DIR": "/workspace/" + relDir}
+	var vars map[string]string
 	if opts.Variables != nil {
-		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-		for k, v := range vars {
-			args = append(args, "-e", k+"="+v)
-		}
+		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
+	}
+	for _, entry := range config.Current().TaskEnv(ci, vars) {
+		args = append(args, "-e", entry)
 	}
 
 	args = append(args, image, "sh", "-c", task.Execute.Script)
@@ -152,6 +224,11 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	cmd := commandContext(ctx, "docker", args...)
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
+	cmd.Cancel = func() error {
+		grace := strconv.Itoa(int(e.Grace.Seconds()))
+		stop := commandContext(context.Background(), "docker", "stop", "-t", grace, containerName)
+		return stop.Run()
+	}
 
 	runErr := cmd.Run()
 
@@ -175,14 +252,13 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (local, dir=%s)\n", task.Name, relDir)
 
-	env := config.Current().Environ()
-	env = append(env, "CI_PROJECT_DIR="+taskDir)
+	ci := map[string]string{"CI_PROJECT_DIR": taskDir}
+	var vars map[string]string
 	if opts.Variables != nil {
-		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-		for k, v := range vars {
-			env = append(env, k+"="+v)
-		}
+		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
 	}
+	envSettings := config.Current()
+	env := envSettings.TaskEnv(ci, vars)
 
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
@@ -191,8 +267,10 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	cmd.Env = env
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
+	stopCancelTimer := setCancelViaProcessGroup(cmd, envSettings.RunnerCancelGrace)
 
 	runErr := cmd.Run()
+	stopCancelTimer()
 
 	return taskOut.String(), runErr
 }
@@ -207,22 +285,25 @@ func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opt
 	stage := e.StageMap[task.Name]
 	fmt.Fprintf(opts.Stdout, "[RUN] %s (stage=%s via gitlab-runner exec)\n", task.Name, stage)
 
+	ci := map[string]string{"CI_PROJECT_DIR": e.WorkDir}
+	var vars map[string]string
+	if opts.Variables != nil {
+		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
+	}
+
+	envSettings := config.Current()
+
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
 	cmd := commandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
 	cmd.Dir = e.WorkDir
-	cmd.Env = append(config.Current().Environ(), "CI_PROJECT_DIR="+e.WorkDir)
+	cmd.Env = envSettings.TaskEnv(ci, vars)
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
-
-	if opts.Variables != nil {
-		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-		for k, v := range vars {
-			cmd.Env = append(cmd.Env, k+"="+v)
-		}
-	}
+	stopCancelTimer := setCancelViaProcessGroup(cmd, envSettings.RunnerCancelGrace)
 
 	runErr := cmd.Run()
+	stopCancelTimer()
 
 	return taskOut.String(), runErr
 }
@@ -232,8 +313,19 @@ func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opt
 func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts Options) ([]TaskResult, error) {
 	var results []TaskResult
 	failedTasks := make(map[string]bool)
+	allowlistPrinted := false
 	for _, node := range ordered {
 		task := node.Task
+		if ctx.Err() != nil {
+			fmt.Fprintf(opts.Stdout, "[SKIP] %s (run canceled)\n", task.Name)
+			canceled := TaskResult{Name: task.Name, Status: "canceled", Error: "canceled"}
+			results = append(results, canceled)
+			failedTasks[task.Name] = true
+			if opts.OnTaskComplete != nil {
+				opts.OnTaskComplete(canceled)
+			}
+			continue
+		}
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
 			waiting := TaskResult{Name: task.Name, Status: "manual"}
@@ -261,6 +353,10 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 			continue
 		}
 
+		if !allowlistPrinted {
+			fmt.Fprintf(opts.Stdout, "[ENV] task allowlist: %s\n", strings.Join(config.Current().AllowlistNames(), ", "))
+			allowlistPrinted = true
+		}
 		if opts.OnTaskStart != nil {
 			opts.OnTaskStart(task.Name)
 		}
@@ -279,7 +375,16 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 			Output:   output,
 			Duration: dur,
 		}
-		if runErr != nil {
+		if runErr != nil && ctx.Err() != nil {
+			// The run was canceled while this task was executing: its
+			// termination is expected, not a pipeline failure. See
+			// design.md D5 and the "Cancel a running local task" scenario.
+			tr.Status = "canceled"
+			tr.Error = "canceled"
+			fmt.Fprintf(opts.Stdout, "[DONE] %s (canceled)\n", task.Name)
+			results = append(results, tr)
+			failedTasks[task.Name] = true
+		} else if runErr != nil {
 			tr.Status = "failed"
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
@@ -342,10 +447,17 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		defaultImage = "alpine:latest"
 	}
 
+	env := config.Current()
 	executor := &DockerExecutor{
 		WorkDir:      workDir,
 		Repos:        repos,
 		DefaultImage: defaultImage,
+		PIDs:         env.RunnerDockerPIDs,
+		Memory:       env.RunnerDockerMemory,
+		CPUs:         env.RunnerDockerCPUs,
+		User:         env.RunnerDockerUser,
+		Network:      env.RunnerDockerNetwork,
+		Grace:        env.RunnerCancelGrace,
 	}
 	return taskLoop(ctx, ordered, executor, opts)
 }
@@ -499,14 +611,12 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		opts.OnTaskStart(task.Name)
 	}
 
-	env := config.Current().Environ()
-	env = append(env, "CI_PROJECT_DIR="+taskDir)
+	ci := map[string]string{"CI_PROJECT_DIR": taskDir}
+	var vars map[string]string
 	if opts.Variables != nil {
-		vars := opts.Variables.Get(task.Execute.Repo, task.Name, "")
-		for k, v := range vars {
-			env = append(env, k+"="+v)
-		}
+		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
 	}
+	env := config.Current().TaskEnv(ci, vars)
 
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}

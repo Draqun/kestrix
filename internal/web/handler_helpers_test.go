@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 
 	"kestrix/internal/model"
@@ -46,5 +47,32 @@ func TestBuildVarStore_AllScopes(t *testing.T) {
 	vs := srv.buildVarStore(proj)
 	if vs == nil {
 		t.Fatal("expected non-nil var store")
+	}
+}
+
+// TestBuildVarStore_DoesNotLeakDockerCredentialsOrKestrixEnvironment is a
+// regression test: buildVarStore used to seed every KESTRIX_* environment
+// variable (secrets included) and the configured Docker registry password
+// into the store unconditionally, which flows straight into a task's
+// environment as an always-included pipeline variable, bypassing the
+// task-execution-isolation allowlist. See handler_helpers.go's buildVarStore
+// doc comment.
+func TestBuildVarStore_DoesNotLeakDockerCredentialsOrKestrixEnvironment(t *testing.T) {
+	srv := &Server{cfg: Config{
+		Docker: DockerConfig{
+			Registry: "reg", Image: "img", Username: "user", Password: "super-secret-registry-password",
+		},
+	}}
+	proj := &model.Project{Name: "proj"}
+	resolved := srv.buildVarStore(proj).Get("", "", "")
+	for _, leaked := range []string{"DOCKER_REGISTRY", "DOCKER_IMAGE", "DOCKER_USERNAME", "DOCKER_PASSWORD"} {
+		if v, ok := resolved[leaked]; ok {
+			t.Errorf("buildVarStore leaked %s=%q from Docker config", leaked, v)
+		}
+	}
+	for name := range resolved {
+		if strings.HasPrefix(name, "KESTRIX_") || strings.Contains(strings.ToUpper(name), "MASTER_KEY") || strings.Contains(strings.ToUpper(name), "WEBHOOK_SECRET") {
+			t.Errorf("buildVarStore leaked environment-derived variable %q", name)
+		}
 	}
 }

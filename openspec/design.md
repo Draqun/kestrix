@@ -83,6 +83,6 @@ Instead of hardcoding "docs don't trigger builds", we use a `FileClassifier` wit
 ## Security Considerations
 
 - Webhook payloads are untrusted — the parser rejects malformed JSON and non-push events
-- Pipeline definitions are trusted — they are managed by the project owner
+- Pipeline definitions are untrusted input, trusted only as far as the least trusted committer of the repository they are read from — the project owner registers the project, but every committer authors its pipeline; see the `task-execution-isolation` capability for what a task process may see and do
 - No secrets are stored in the pipeline definition
 - Future: JWT/auth tokens for webhook verification

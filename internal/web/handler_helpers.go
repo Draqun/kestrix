@@ -11,8 +11,21 @@ func addEnvironmentVariables(vs *variables.Store, entries []variables.Variable) 
 	}
 }
 
-// buildVarStore constructs a variables.Store from a project's variables,
-// KESTRIX_* environment variables, and Docker config.
+// buildVarStore constructs a variables.Store from a project's own declared
+// variables only.
+//
+// It used to also seed every KESTRIX_* environment variable (prefix
+// stripped) and the configured Docker registry credentials unconditionally,
+// via variables.FromKestrix() and s.cfg.Docker. Those variables flow
+// straight into a task's environment as pipeline variables - the highest-
+// priority, always-included tier of config.Environment.TaskEnv - which
+// bypassed the task-execution-isolation allowlist entirely: every task in
+// every project could always read KESTRIX_MASTER_KEY_PATH,
+// KESTRIX_JWT_SIGNING_KEY_PATH, KESTRIX_WEBHOOK_SECRET,
+// KESTRIX_GITLAB_TOKEN, and the Docker registry password as plain pipeline
+// variables, regardless of KESTRIX_RUNNER_ENV_PASSTHROUGH. An operator who
+// needs a task to see a Docker credential or another host variable now
+// lists it explicitly in KESTRIX_RUNNER_ENV_PASSTHROUGH instead.
 func (s *Server) buildVarStore(proj *model.Project) *variables.Store {
 	vs := variables.New()
 	if proj != nil {
@@ -37,19 +50,6 @@ func (s *Server) buildVarStore(proj *model.Project) *variables.Store {
 				vs.SetProject(v.Key, val, opts...)
 			}
 		}
-	}
-	addEnvironmentVariables(vs, variables.FromKestrix().List())
-	if s.cfg.Docker.Registry != "" {
-		vs.SetProject("DOCKER_REGISTRY", s.cfg.Docker.Registry)
-	}
-	if s.cfg.Docker.Image != "" {
-		vs.SetProject("DOCKER_IMAGE", s.cfg.Docker.Image)
-	}
-	if s.cfg.Docker.Username != "" {
-		vs.SetProject("DOCKER_USERNAME", s.cfg.Docker.Username)
-	}
-	if s.cfg.Docker.Password != "" {
-		vs.SetProject("DOCKER_PASSWORD", s.cfg.Docker.Password)
 	}
 	return vs
 }

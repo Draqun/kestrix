@@ -39,6 +39,13 @@ type Config struct {
 	sourceCacheDirectorySet bool
 	sourceCacheMaxAgeSet    bool
 	sourceCacheMaxBytesSet  bool
+
+	runnerDockerPIDsSet    bool
+	runnerDockerMemorySet  bool
+	runnerDockerCPUsSet    bool
+	runnerDockerUserSet    bool
+	runnerDockerNetworkSet bool
+	runnerCancelGraceSet   bool
 }
 
 // Duration is a YAML duration encoded with Go duration syntax, for example
@@ -100,6 +107,17 @@ type RunnerConfig struct {
 	Mode string `yaml:"mode"`
 	// Executor is the gitlab-runner executor to use (shell, docker, etc.). Only used with mode=gitlab-runner.
 	Executor string `yaml:"executor"`
+	// DockerPIDs, DockerMemory, and DockerCPUs bound a Docker task's
+	// process count, memory, and CPU share. DockerUser and DockerNetwork
+	// set its user and network. See task-execution-isolation.
+	DockerPIDs    int    `yaml:"docker_pids"`
+	DockerMemory  string `yaml:"docker_memory"`
+	DockerCPUs    string `yaml:"docker_cpus"`
+	DockerUser    string `yaml:"docker_user"`
+	DockerNetwork string `yaml:"docker_network"`
+	// CancelGrace bounds how long a cancelled task gets to exit before
+	// being killed.
+	CancelGrace Duration `yaml:"cancel_grace"`
 }
 
 // DockerConfig holds Docker registry and deployment settings.
@@ -150,8 +168,13 @@ func DefaultConfig() *Config {
 			GitLabURL: "https://gitlab.com",
 		},
 		Runner: RunnerConfig{
-			Mode:     "local",
-			Executor: "shell",
+			Mode:          "local",
+			Executor:      "shell",
+			DockerPIDs:    256,
+			DockerMemory:  "2g",
+			DockerCPUs:    "2",
+			DockerNetwork: "bridge",
+			CancelGrace:   Duration(10 * time.Second),
 		},
 		SourceCache: SourceCacheConfig{
 			Directory: filepath.Join(filepath.Dir(DefaultPath()), "cache", "git"),
@@ -204,6 +227,14 @@ func Load(path string) (*Config, error) {
 			MaxAge    *Duration `yaml:"max_age"`
 			MaxBytes  *int64    `yaml:"max_bytes"`
 		} `yaml:"source_cache"`
+		Runner *struct {
+			DockerPIDs    *int      `yaml:"docker_pids"`
+			DockerMemory  *string   `yaml:"docker_memory"`
+			DockerCPUs    *string   `yaml:"docker_cpus"`
+			DockerUser    *string   `yaml:"docker_user"`
+			DockerNetwork *string   `yaml:"docker_network"`
+			CancelGrace   *Duration `yaml:"cancel_grace"`
+		} `yaml:"runner"`
 	}
 	if err := unmarshalYAML(data, &presence); err != nil {
 		return nil, fmt.Errorf("parse config presence: %w", err)
@@ -212,6 +243,14 @@ func Load(path string) (*Config, error) {
 		cfg.sourceCacheDirectorySet = presence.SourceCache.Directory != nil
 		cfg.sourceCacheMaxAgeSet = presence.SourceCache.MaxAge != nil
 		cfg.sourceCacheMaxBytesSet = presence.SourceCache.MaxBytes != nil
+	}
+	if presence.Runner != nil {
+		cfg.runnerDockerPIDsSet = presence.Runner.DockerPIDs != nil
+		cfg.runnerDockerMemorySet = presence.Runner.DockerMemory != nil
+		cfg.runnerDockerCPUsSet = presence.Runner.DockerCPUs != nil
+		cfg.runnerDockerUserSet = presence.Runner.DockerUser != nil
+		cfg.runnerDockerNetworkSet = presence.Runner.DockerNetwork != nil
+		cfg.runnerCancelGraceSet = presence.Runner.CancelGrace != nil
 	}
 	if cfg.Webhook.HistoryLimit <= 0 {
 		cfg.Webhook.HistoryLimit = DefaultWebhookHistoryLimit
@@ -256,6 +295,37 @@ func (c *Config) ApplySourceCacheEnvironment(env *Environment) error {
 	}
 	if !c.sourceCacheMaxBytesSet && env.SourceCache.MaxBytes > 0 {
 		c.SourceCache.MaxBytes = env.SourceCache.MaxBytes
+	}
+	return nil
+}
+
+// ApplyRunnerEnvironment applies canonical Docker-hardening and cancel-grace
+// environment values only where the config file did not explicitly provide
+// the corresponding setting, mirroring ApplySourceCacheEnvironment.
+func (c *Config) ApplyRunnerEnvironment(env *Environment) error {
+	if env == nil {
+		return nil
+	}
+	if err := env.ValidationError(); err != nil {
+		return err
+	}
+	if !c.runnerDockerPIDsSet && env.RunnerDockerPIDs > 0 {
+		c.Runner.DockerPIDs = env.RunnerDockerPIDs
+	}
+	if !c.runnerDockerMemorySet && env.RunnerDockerMemory != "" {
+		c.Runner.DockerMemory = env.RunnerDockerMemory
+	}
+	if !c.runnerDockerCPUsSet && env.RunnerDockerCPUs != "" {
+		c.Runner.DockerCPUs = env.RunnerDockerCPUs
+	}
+	if !c.runnerDockerUserSet && env.RunnerDockerUser != "" {
+		c.Runner.DockerUser = env.RunnerDockerUser
+	}
+	if !c.runnerDockerNetworkSet && env.RunnerDockerNetwork != "" {
+		c.Runner.DockerNetwork = env.RunnerDockerNetwork
+	}
+	if !c.runnerCancelGraceSet {
+		c.Runner.CancelGrace = Duration(env.RunnerCancelGrace)
 	}
 	return nil
 }

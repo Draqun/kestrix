@@ -350,12 +350,14 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 		t.Fatalf("backend status=%d", w.Code)
 	}
 
-	// Docker variables are read from the startup environment snapshot.
+	// buildVarStore no longer seeds Docker registry credentials into a
+	// task's variables - a task must go through KESTRIX_RUNNER_ENV_PASSTHROUGH
+	// instead; see handler_helpers.go's buildVarStore doc comment.
 	srv.cfg.Docker = DockerConfig{Registry: "r", Image: "i", Username: "u", Password: "p"}
 	vs := srv.buildVarStore(nil)
 	vars := vs.Get("", "", "")
-	if vars["DOCKER_IMAGE"] != "i" || vars["DOCKER_USERNAME"] != "u" {
-		t.Fatalf("docker variables=%#v", vars)
+	if len(vars) != 0 {
+		t.Fatalf("buildVarStore(nil) leaked variables=%#v", vars)
 	}
 }
 
