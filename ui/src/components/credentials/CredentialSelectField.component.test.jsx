@@ -76,6 +76,9 @@ function ProjectDialogFields() {
 }
 
 test('inline creation preserves project fields, selects metadata, and submits only its reference', async () => {
+  // Two selects, two typed fields, and a submit: on a loaded CI runner this
+  // sequence of real userEvent interactions can exceed vitest's default
+  // 5000ms test timeout.
   const user = userEvent.setup();
   render(
     <MemoryRouter>
@@ -106,4 +109,39 @@ test('inline creation preserves project fields, selects metadata, and submits on
   assert.equal('token' in submitted, false);
   assert.equal('password' in submitted, false);
   assert.equal('private_key' in submitted, false);
+}, 20000);
+
+// TestCredentialSelectField hides secrets pins runtime-secrets spec.md
+// "Selector hides secrets": a `secret` credential is not offered while Git
+// credentials are.
+test('hides a secret credential from the selector while offering Git credentials', async () => {
+  credentialItems.push({ ref: 'cred_secret', name: 'Deploy secret', type: 'secret', revoked: false });
+  const user = userEvent.setup();
+  render(
+    <MemoryRouter>
+      <ProjectDialogFields />
+    </MemoryRouter>,
+  );
+
+  const credentialSelect = screen.getByRole('combobox', { name: 'Credential (optional)' });
+  await user.click(credentialSelect);
+  assert.ok(screen.getByRole('option', { name: /Existing active/ }));
+  assert.equal(screen.queryByRole('option', { name: /Deploy secret/ }), null);
+});
+
+// TestCredentialSelectField inline dialog hides secrets pins REVIEW.md R1: the
+// "Add credential" dialog embedded here must not offer `secret` either, since
+// created() auto-selects whatever it creates as the project's Git credential.
+test('inline "Add credential" dialog does not offer the runtime secret type', async () => {
+  const user = userEvent.setup();
+  render(
+    <MemoryRouter>
+      <ProjectDialogFields />
+    </MemoryRouter>,
+  );
+
+  await user.click(screen.getByRole('button', { name: 'Add credential' }));
+  await user.click(screen.getByRole('combobox', { name: 'Type' }));
+  assert.equal(screen.queryByRole('option', { name: 'Runtime secret' }), null);
+  assert.ok(screen.getByRole('option', { name: 'HTTPS token' }));
 });

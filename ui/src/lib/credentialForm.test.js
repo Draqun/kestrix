@@ -16,14 +16,14 @@ test('credential form defaults normalize unsupported types and omit stored secre
     name: 'GitLab', type: 'unsupported', provider: 'gitlab', host: 'gitlab.example', token: 'never-copy',
   }), {
     name: 'GitLab', type: 'token', provider: 'gitlab', host: 'gitlab.example',
-    username: '', password: '', token: '', private_key: '', known_hosts: '',
+    username: '', password: '', token: '', private_key: '', known_hosts: '', value: '',
   });
 });
 
 test('changing type clears every incompatible secret field', () => {
   const changed = changeCredentialType({
     ...credentialFormDefaults(), token: 'token', username: 'user', password: 'password',
-    private_key: 'key', known_hosts: 'host',
+    private_key: 'key', known_hosts: 'host', value: 'opaque',
   }, 'ssh');
   assert.equal(changed.type, 'ssh');
   assert.equal(changed.token, '');
@@ -31,6 +31,7 @@ test('changing type clears every incompatible secret field', () => {
   assert.equal(changed.password, '');
   assert.equal(changed.private_key, '');
   assert.equal(changed.known_hosts, '');
+  assert.equal(changed.value, '');
 });
 
 test('credential payload includes common metadata and only selected type fields', () => {
@@ -53,6 +54,23 @@ test('credential payload includes common metadata and only selected type fields'
   });
 });
 
+test('secret credential form defaults, payload, and type switch clear incompatible fields', () => {
+  assert.equal(normalizeCredentialType('secret'), 'secret');
+  const secretForm = { ...credentialFormDefaults(), type: 'secret', name: 'Deploy key', value: 'opaque-value' };
+  assert.deepEqual(credentialPayload(secretForm), {
+    name: 'Deploy key', provider: '', host: '', type: 'secret', value: 'opaque-value',
+  });
+
+  const switched = changeCredentialType({ ...secretForm }, 'token');
+  assert.equal(switched.type, 'token');
+  assert.equal(switched.value, '', 'switching away from secret must clear its value');
+
+  const switchedIn = changeCredentialType({ ...credentialFormDefaults(), token: 'old-token' }, 'secret');
+  assert.equal(switchedIn.type, 'secret');
+  assert.equal(switchedIn.value, '');
+  assert.equal(switchedIn.token, '', 'switching to secret must clear the token field');
+});
+
 test('field descriptors track type-specific requiredness and rotation labels', () => {
   const fields = credentialFieldDescriptors('basic', { editing: true });
   assert.deepEqual(fields.map(field => [field.key, field.required]), [
@@ -61,6 +79,12 @@ test('field descriptors track type-specific requiredness and rotation labels', (
   ]);
   assert.equal(fields.find(field => field.key === 'password').label, 'Replacement password');
   assert.ok(fields.every(field => field.helperText && field.tooltip));
+
+  const secretFields = credentialFieldDescriptors('secret', { editing: true });
+  assert.deepEqual(secretFields.map(field => [field.key, field.required]), [
+    ['name', true], ['type', true], ['provider', false], ['host', false], ['value', true],
+  ]);
+  assert.equal(secretFields.find(field => field.key === 'value').label, 'Replacement value');
 });
 
 test('credential errors redact every submitted secret value', () => {
@@ -72,4 +96,9 @@ test('credential errors redact every submitted secret value', () => {
     form,
   );
   assert.equal(message, 'Rejected [REDACTED], [REDACTED], and [REDACTED]');
+});
+
+test('credential errors redact a submitted runtime-secret value', () => {
+  const message = redactCredentialError('Rejected opaque-runtime-value', { value: 'opaque-runtime-value' });
+  assert.equal(message, 'Rejected [REDACTED]');
 });

@@ -368,6 +368,8 @@ func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
 			v.Value = val
 		case "default":
 			v.Default = val
+		case "secret_ref":
+			v.SecretRef = val
 		case "scope":
 			v.Scope = val
 		case "repo":
@@ -380,6 +382,29 @@ func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
 			v.Protected = val == "true"
 		case "masked":
 			v.Masked = val == "true"
+		}
+	}
+	if v.SecretRef != "" {
+		var conflicts []string
+		if v.Value != "" {
+			conflicts = append(conflicts, "value")
+		}
+		if v.Default != "" {
+			conflicts = append(conflicts, "default")
+		}
+		if len(conflicts) > 0 {
+			return model.Variable{}, fmt.Errorf("variable %q: secret_ref cannot be combined with %s", v.Key, strings.Join(conflicts, ", "))
+		}
+		v.Masked = true
+	}
+	switch v.Scope {
+	case "repo":
+		if strings.TrimSpace(v.Repo) == "" {
+			return model.Variable{}, fmt.Errorf("variable %q: scope \"repo\" requires repo", v.Key)
+		}
+	case "job":
+		if strings.TrimSpace(v.Repo) == "" || strings.TrimSpace(v.Job) == "" {
+			return model.Variable{}, fmt.Errorf("variable %q: scope \"job\" requires repo and job", v.Key)
 		}
 	}
 	return v, nil

@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	TypeToken = "token"
-	TypeBasic = "basic"
-	TypeSSH   = "ssh"
+	TypeToken  = "token"
+	TypeBasic  = "basic"
+	TypeSSH    = "ssh"
+	TypeSecret = "secret"
 )
 
 type normalized struct {
@@ -44,6 +45,14 @@ func Normalize(ref string, input domain.CredentialInput) (normalized, error) {
 			return normalized{}, fmt.Errorf("ssh credential requires private_key")
 		}
 		secret.PrivateKey, secret.KnownHosts = input.PrivateKey, input.KnownHosts
+	case TypeSecret:
+		if input.Value == "" {
+			return normalized{}, fmt.Errorf("secret credential requires value")
+		}
+		if input.Username != "" || input.Password != "" || input.Token != "" || input.PrivateKey != "" || input.KnownHosts != "" {
+			return normalized{}, fmt.Errorf("secret credential must not set username, password, token, private_key, or known_hosts")
+		}
+		secret.Value = input.Value
 	default:
 		return normalized{}, fmt.Errorf("unsupported credential type %q", input.Type)
 	}

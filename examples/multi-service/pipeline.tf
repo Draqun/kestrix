@@ -145,8 +145,20 @@ project "multi-service" {
     manual     = true
     execute {
       repo   = "infra"
-      script = "tofu apply -auto-approve -var-file=environments/staging.tfvars"
+      script = "TF_VAR_deploy_token=$DEPLOY_TOKEN tofu apply -auto-approve -var-file=environments/staging.tfvars"
     }
+  }
+
+  # DEPLOY_TOKEN is never written here: secret_ref names a `secret`
+  # credential in Kestrix's encrypted store, created ahead of time with
+  # `POST /api/credentials {"type":"secret",...}`. Kestrix resolves it when
+  # infra_apply_staging is approved and injects it as this job's DEPLOY_TOKEN
+  # environment variable; it is redacted from run and task output.
+  variable "DEPLOY_TOKEN" {
+    secret_ref = "cred_deploy_token"
+    scope      = "job"
+    repo       = "infra"
+    job        = "infra_apply_staging"
   }
 
   # ─── Full deploy (infra triggers all services) ─────────────

@@ -21,16 +21,37 @@ import {
 } from '../../lib/credentialForm.js';
 import CredentialField from './CredentialField.jsx';
 
-export default function CredentialFormDialog({ open, credential, onClose, onSuccess }) {
-  const [form, setForm] = useState(() => credentialFormDefaults(credential));
+// MIN_REDACTED_SECRET_LENGTH mirrors the service layer's redaction floor
+// (see runtime-secrets design.md D5): a value shorter than this is still
+// injected into a task but is not guaranteed to be redacted from output.
+const MIN_REDACTED_SECRET_LENGTH = 8;
+
+export default function CredentialFormDialog({ open, credential, onClose, onSuccess, allowedTypes }) {
+  // allowedTypes restricts which types this dialog instance offers - e.g. the
+  // project credential selector's inline "Add credential" only wants Git
+  // types, since a `secret` credential is never usable as a
+  // repo_credential_ref (design D4). Omit the prop to offer every type.
+  const availableTypes = allowedTypes
+    ? CREDENTIAL_TYPES.filter(type => allowedTypes.includes(type.value))
+    : CREDENTIAL_TYPES;
+  const defaultsFor = (cred) => {
+    const defaults = credentialFormDefaults(cred);
+    if (allowedTypes && !allowedTypes.includes(defaults.type)) {
+      return changeCredentialType(defaults, availableTypes[0]?.value);
+    }
+    return defaults;
+  };
+
+  const [form, setForm] = useState(() => defaultsFor(credential));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const editing = Boolean(credential?.ref);
   const descriptors = credentialFieldDescriptors(form.type, { editing });
+  const showShortSecretWarning = form.type === 'secret' && form.value.length > 0 && form.value.length < MIN_REDACTED_SECRET_LENGTH;
 
   useEffect(() => {
     if (open) {
-      setForm(credentialFormDefaults(credential));
+      setForm(defaultsFor(credential));
       setError(null);
     }
   }, [open, credential]);
@@ -41,7 +62,7 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
 
   const close = () => {
     if (busy) return;
-    setForm(credentialFormDefaults());
+    setForm(defaultsFor());
     setError(null);
     onClose?.();
   };
@@ -56,7 +77,7 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
         ? await rotateCredential(credential.ref, payload)
         : await createCredential(payload);
       await onSuccess?.(metadata);
-      setForm(credentialFormDefaults());
+      setForm(defaultsFor());
       onClose?.();
     } catch (cause) {
       setError(redactCredentialError(cause.message, form));
@@ -86,6 +107,12 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
           <Stack spacing={2} sx={{ mt: 1 }}>
             <CredentialScopeNotice />
             {error && <Alert severity="error">{error}</Alert>}
+            {showShortSecretWarning && (
+              <Alert severity="warning">
+                Values under {MIN_REDACTED_SECRET_LENGTH} characters are not guaranteed to be
+                redacted from run output.
+              </Alert>
+            )}
             {descriptors.map(descriptor => (
               <CredentialField
                 key={descriptor.key}
@@ -96,7 +123,7 @@ export default function CredentialFormDialog({ open, credential, onClose, onSucc
                   : update(descriptor.key)}
                 autoFocus={descriptor.key === 'name'}
               >
-                {descriptor.key === 'type' && CREDENTIAL_TYPES.map(type => (
+                {descriptor.key === 'type' && availableTypes.map(type => (
                   <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>
                 ))}
               </CredentialField>

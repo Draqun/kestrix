@@ -1,11 +1,6 @@
 package web
 
-import (
-	"net/http"
-
-	"kestrix/internal/model"
-	"kestrix/internal/variables"
-)
+import "net/http"
 
 // actorFrom returns the authenticated account that made the request, as
 // "user:<name>", or "" if the request carries no verified claims. It never
@@ -19,14 +14,10 @@ func actorFrom(r *http.Request) string {
 	return "user:" + claims.UserName
 }
 
-func addEnvironmentVariables(vs *variables.Store, entries []variables.Variable) {
-	for _, v := range entries {
-		vs.SetProject(v.Key, v.Value)
-	}
-}
-
-// buildVarStore constructs a variables.Store from a project's own declared
-// variables only.
+// buildVarStore used to construct a variables.Store from a project's own
+// declared variables, duplicating service.BuildVarStore. It never resolved a
+// secret_ref, so it is gone; every caller now calls service.BuildVarStore
+// with this server's credential resolver - see runtime-secrets design.md D3.
 //
 // It used to also seed every KESTRIX_* environment variable (prefix
 // stripped) and the configured Docker registry credentials unconditionally,
@@ -40,30 +31,3 @@ func addEnvironmentVariables(vs *variables.Store, entries []variables.Variable) 
 // variables, regardless of KESTRIX_RUNNER_ENV_PASSTHROUGH. An operator who
 // needs a task to see a Docker credential or another host variable now
 // lists it explicitly in KESTRIX_RUNNER_ENV_PASSTHROUGH instead.
-func (s *Server) buildVarStore(proj *model.Project) *variables.Store {
-	vs := variables.New()
-	if proj != nil {
-		for _, v := range proj.Variables {
-			val := v.Value
-			if val == "" {
-				val = v.Default
-			}
-			opts := []variables.Option{}
-			if v.Protected {
-				opts = append(opts, variables.WithProtected(true))
-			}
-			if v.Masked {
-				opts = append(opts, variables.WithMasked(true))
-			}
-			switch v.Scope {
-			case "repo":
-				vs.SetRepo(v.Repo, v.Key, val, opts...)
-			case "job":
-				vs.SetJob(v.Repo, v.Job, v.Key, val, opts...)
-			default:
-				vs.SetProject(v.Key, val, opts...)
-			}
-		}
-	}
-	return vs
-}

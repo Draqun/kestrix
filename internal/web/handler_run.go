@@ -46,7 +46,14 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	varStore := s.buildVarStore(&proj)
+	actor := actorFrom(r)
+	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
+	if err != nil {
+		primary.Cleanup()
+		s.failRunOnSecretError(name, &proj, executionChanged, req.IncludeManual, actor, err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	runService := s.runService
 	if runService == nil {
 		primary.Cleanup()
@@ -55,11 +62,12 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	}
 	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
 		WorkDir: primary.Root, IncludeManual: req.IncludeManual, Variables: varStore,
-		CredentialResolver: s.credentialResolver(),
-		SourceSessions:     s.sourceSessions,
-		InitialSources:     []domain.AcquiredSource{primary.Source},
-		WorkspaceCleanup:   primary.Cleanup,
-		Actor:              actorFrom(r),
+		CredentialResolver:   s.credentialResolver(),
+		SourceSessions:       s.sourceSessions,
+		InitialSources:       []domain.AcquiredSource{primary.Source},
+		WorkspaceCleanup:     primary.Cleanup,
+		Actor:                actor,
+		ResolvedSecretValues: resolvedSecrets,
 	})
 	if err != nil {
 		primary.Cleanup()
@@ -107,7 +115,6 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	varStore := s.buildVarStore(&proj)
 	runService := s.runService
 	if runService == nil {
 		primary.Cleanup()
@@ -115,9 +122,17 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	actor := actorFrom(r)
+	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
+	if err != nil {
+		primary.Cleanup()
+		s.failRunOnSecretError(name, &proj, []string{taskName}, false, actor, err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	var runID int
 	snap := &proj
-	actor := actorFrom(r)
 	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap, actor)
 	if err != nil {
 		primary.Cleanup()
@@ -126,15 +141,16 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tr, err := runService.RunTask(r.Context(), runID, name, &proj, taskName, domain.RunnerOptions{
-		WorkDir:            primary.Root,
-		Variables:          varStore,
-		CredentialResolver: s.credentialResolver(),
-		SourceSessions:     s.sourceSessions,
-		InitialSources:     []domain.AcquiredSource{primary.Source},
-		WorkspaceCleanup:   primary.Cleanup,
-		Stdout:             io.Discard,
-		Stderr:             io.Discard,
-		Actor:              actor,
+		WorkDir:              primary.Root,
+		Variables:            varStore,
+		CredentialResolver:   s.credentialResolver(),
+		SourceSessions:       s.sourceSessions,
+		InitialSources:       []domain.AcquiredSource{primary.Source},
+		WorkspaceCleanup:     primary.Cleanup,
+		Stdout:               io.Discard,
+		Stderr:               io.Discard,
+		Actor:                actor,
+		ResolvedSecretValues: resolvedSecrets,
 	})
 	status := "passed"
 	errMsg := ""
@@ -279,11 +295,18 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
+	if err != nil {
+		cleanup()
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if _, err := runService.ApproveManualTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
 		WorkDir: workDir, RepoPaths: repoPaths, SourcesPrepared: true,
-		Variables: s.buildVarStore(&proj), CredentialResolver: s.credentialResolver(),
+		Variables: varStore, CredentialResolver: s.credentialResolver(),
 		SourceSessions: s.sourceSessions, WorkspaceCleanup: cleanup,
-		Actor: actorFrom(r),
+		Actor: actorFrom(r), ResolvedSecretValues: resolvedSecrets,
 	}); err != nil {
 		cleanup()
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -346,4 +369,29 @@ func (s *Server) handleListAllRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(runs)
+}
+
+// failRunOnSecretError records a run that never executed a single task
+// because service.BuildVarStore could not resolve one of its secret
+// variables (runtime-secrets design.md D3/D6): the run is created, every one
+// of its tasks is recorded skipped, and the run finishes failed with
+// secretErr's message - so the failure is visible in run history and not
+// only in this request's 400 response, and the pipeline runner is never
+// invoked.
+func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, changed []string, includeManual bool, actor string, secretErr error) {
+	if s.runStore == nil {
+		return
+	}
+	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj, actor)
+	if err != nil {
+		log.Printf("warning: could not record run for secret resolution failure: %v", err)
+		return
+	}
+	taskResults := make([]domain.TaskResult, 0, len(proj.Tasks))
+	for _, t := range proj.Tasks {
+		taskResults = append(taskResults, domain.TaskResult{Name: t.Name, Status: "skipped", Error: secretErr.Error()})
+	}
+	if err := s.runStore.FinishRun(runID, "failed", "", secretErr.Error(), taskResults); err != nil {
+		log.Printf("warning: could not finish run record for secret resolution failure: %v", err)
+	}
 }

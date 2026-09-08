@@ -117,7 +117,7 @@ describe('CredentialFormDialog', () => {
 
     const type = screen.getByRole('combobox', { name: 'Type' });
     await user.click(type);
-    await user.keyboard('{End}{Enter}');
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
 
     assert.ok(await screen.findByLabelText(/Private key/));
     assert.ok(screen.getByLabelText(/Known hosts/));
@@ -182,6 +182,38 @@ describe('CredentialFormDialog', () => {
     assert.ok(alert);
     assert.match(alert.textContent, /Credential validation failed/);
     assert.doesNotMatch(alert.textContent, /top-secret-token/);
+  });
+
+  test('warns on a short runtime-secret value and clears the warning at the 8-character boundary', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await chooseType(user, 'Runtime secret');
+    assert.equal(screen.queryByText(/not guaranteed to be/i), null);
+
+    const value = screen.getByLabelText(/^Value/);
+    await user.type(value, '1234567');
+    assert.ok(screen.getByText(/not guaranteed to be/i));
+
+    await user.type(value, '8');
+    assert.equal(screen.queryByText(/not guaranteed to be/i), null);
+  });
+
+  test('submits only the value field for a runtime secret', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.type(screen.getByLabelText(/Display name/), 'Deploy secret');
+    await chooseType(user, 'Runtime secret');
+    await user.type(screen.getByLabelText(/^Value/), 'opaque-runtime-value');
+    await user.click(screen.getByRole('button', { name: 'Create credential' }));
+
+    await waitFor(() => assert.equal(requests.length, 1));
+    const payload = JSON.parse(requests[0].options.body);
+    assert.equal(payload.type, 'secret');
+    assert.equal(payload.value, 'opaque-runtime-value');
+    assert.equal('token' in payload, false);
+    assert.equal('username' in payload, false);
   });
 
   test('keeps source-only guidance and actions usable at 375px', () => {
