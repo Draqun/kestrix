@@ -181,7 +181,9 @@ run detail can always answer "who did this":
 
 - Starting a run sets the run's `started_by`.
 - Approving a manual task sets that task's result entry `approved_by` and
-  `approved_at`.
+  `approved_at`. Re-running a task directly by name (rather than through the
+  approval gate) sets the same two fields, since both routes share the same
+  execution path.
 - Canceling a running run sets the run's `canceled_by`.
 
 Each value is the actor string `user:<account name>`, taken from the signed
