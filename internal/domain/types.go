@@ -165,4 +165,10 @@ type TaskResult struct {
 	Output   string        `json:"output"`
 	Error    string        `json:"error,omitempty"`
 	Duration time.Duration `json:"duration" swaggertype:"primitive,integer"`
+	// ApprovedBy is the actor that approved this manual task, "user:<name>".
+	// Empty for a task never approved - see run-attribution D4.
+	ApprovedBy string `json:"approved_by,omitempty"`
+	// ApprovedAt is when ApprovedBy approved the task. nil for a task never
+	// approved.
+	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 }

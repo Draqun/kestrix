@@ -51,6 +51,12 @@ definitions:
         type: string
       gitlab_project_id:
         type: integer
+      has_webhook_secret:
+        description: |-
+          HasWebhookSecret reports whether a webhook secret is stored, without
+          disclosing it. Only publicProject sets this on an outgoing copy; the
+          stored struct itself does not populate it.
+        type: boolean
       name:
         type: string
       pipeline_dir:
@@ -64,6 +70,12 @@ definitions:
       repo_url:
         type: string
       webhook_secret:
+        description: |-
+          WebhookSecret is write-only: it is accepted on create and update but
+          SHALL NOT appear in any response - see webhook-ingress-hardening D4.
+          Responses carry HasWebhookSecret instead; callers encoding a
+          ProjectConfig for the wire MUST go through the web package's
+          publicProject helper first.
         type: string
     type: object
   domain.ProjectGrant:
@@ -107,6 +119,16 @@ definitions:
     type: object
   domain.TaskResult:
     properties:
+      approved_at:
+        description: |-
+          ApprovedAt is when ApprovedBy approved the task. nil for a task never
+          approved.
+        type: string
+      approved_by:
+        description: |-
+          ApprovedBy is the actor that approved this manual task, "user:<name>".
+          Empty for a task never approved - see run-attribution D4.
+        type: string
       duration:
         type: integer
       error:
@@ -161,6 +183,11 @@ definitions:
     type: object
   store.Run:
     properties:
+      canceled_by:
+        description: |-
+          CanceledBy is the actor that canceled the run. Empty unless the run
+          was canceled while running - see run-attribution D3.
+        type: string
       changed:
         items:
           type: string
@@ -184,6 +211,11 @@ definitions:
           $ref: '#/definitions/domain.AcquiredSource'
         type: array
       started_at:
+        type: string
+      started_by:
+        description: |-
+          StartedBy is the actor that started the run, "user:<name>". Empty for
+          a run recorded before run-attribution existed.
         type: string
       status:
         type: string

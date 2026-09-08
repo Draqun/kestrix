@@ -1,9 +1,23 @@
 package web
 
 import (
+	"net/http"
+
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
+
+// actorFrom returns the authenticated account that made the request, as
+// "user:<name>", or "" if the request carries no verified claims. It never
+// reads the request body, a header, or a query parameter for the actor -
+// only claims RequireAuth placed on the context - see run-attribution D5.
+func actorFrom(r *http.Request) string {
+	claims, ok := claimsFromContext(r.Context())
+	if !ok {
+		return ""
+	}
+	return "user:" + claims.UserName
+}
 
 func addEnvironmentVariables(vs *variables.Store, entries []variables.Variable) {
 	for _, v := range entries {

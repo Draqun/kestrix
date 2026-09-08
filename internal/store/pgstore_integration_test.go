@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
@@ -79,7 +80,7 @@ func mustUpsert(t *testing.T, pg *PGStore, name, _ string) {
 // mustCreateRun creates a run and fails the test on error.
 func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *model.Project) int {
 	t.Helper()
-	id, err := pg.CreateRun(projectName, nil, false, snap)
+	id, err := pg.CreateRun(projectName, nil, false, snap, "")
 	if err != nil {
 		t.Fatalf("CreateRun(%q): %v", projectName, err)
 	}
@@ -402,7 +403,7 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rp2", "/rp2")
 	snap := &model.Project{Name: "rp2"}
-	id, err := pg.CreateRun("rp2", []string{"main"}, false, snap)
+	id, err := pg.CreateRun("rp2", []string{"main"}, false, snap, "user:alice")
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -416,6 +417,34 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	}
 	if run.PipelineDef == nil || run.PipelineDef.Name != "rp2" {
 		t.Errorf("PipelineDef not set correctly: %+v", run.PipelineDef)
+	}
+	if run.StartedBy != "user:alice" {
+		t.Errorf("GetRun: StartedBy = %q, want user:alice", run.StartedBy)
+	}
+
+	runs, err := pg.ListRuns("rp2", 10, 0)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].StartedBy != "user:alice" {
+		t.Errorf("ListRuns: StartedBy = %+v, want user:alice", runs)
+	}
+
+	all, err := pg.ListAllRuns(50)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	found := false
+	for _, r := range all {
+		if r.ID == id {
+			found = true
+			if r.StartedBy != "user:alice" {
+				t.Errorf("ListAllRuns: StartedBy = %q, want user:alice", r.StartedBy)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("ListAllRuns: run %d not found", id)
 	}
 }
 
@@ -575,6 +604,44 @@ func TestPG_ApplyTaskResult_Passed(t *testing.T) {
 	}
 	if len(run2.TaskResults) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(run2.TaskResults))
+	}
+}
+
+func TestPG_ApplyTaskResult_ApprovalSurvivesTerminalEntry(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "apr", "/apr")
+	id := mustCreateRun(t, pg, "apr", nil)
+	approvedAt := time.Now().Truncate(time.Millisecond)
+
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{
+		Name: "deploy", Status: "running", ApprovedBy: "user:alice", ApprovedAt: &approvedAt,
+	}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(running): %v", err)
+	}
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{
+		Name: "deploy", Status: "passed", Output: "ok", ApprovedBy: "user:alice", ApprovedAt: &approvedAt,
+	}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(passed): %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	var latest *domain.TaskResult
+	for i := range run.TaskResults {
+		if run.TaskResults[i].Name == "deploy" {
+			latest = &run.TaskResults[i]
+		}
+	}
+	if latest == nil {
+		t.Fatal("deploy task result not found")
+	}
+	if latest.ApprovedBy != "user:alice" {
+		t.Errorf("ApprovedBy = %q, want user:alice", latest.ApprovedBy)
+	}
+	if latest.ApprovedAt == nil || !latest.ApprovedAt.Equal(approvedAt) {
+		t.Errorf("ApprovedAt = %v, want %v", latest.ApprovedAt, approvedAt)
 	}
 }
 
@@ -746,7 +813,7 @@ func TestPG_CancelRun_Running(t *testing.T) {
 		t.Fatalf("AppendTaskResult: %v", err)
 	}
 
-	if err := pg.CancelRun(id); err != nil {
+	if err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 	run, err := pg.GetRun(id)
@@ -755,6 +822,9 @@ func TestPG_CancelRun_Running(t *testing.T) {
 	}
 	if run.Status != "canceled" {
 		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+	if run.CanceledBy != "user:bob" {
+		t.Errorf("CanceledBy = %q, want user:bob", run.CanceledBy)
 	}
 }
 
@@ -766,7 +836,7 @@ func TestPG_CancelRun_AlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	if err := pg.CancelRun(id); err != nil {
+	if err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun on finished: %v", err)
 	}
 	run, err := pg.GetRun(id)
@@ -775,6 +845,9 @@ func TestPG_CancelRun_AlreadyFinished(t *testing.T) {
 	}
 	if run.Status != "passed" {
 		t.Errorf("Status = %q, finished run should not be canceled", run.Status)
+	}
+	if run.CanceledBy != "" {
+		t.Errorf("CanceledBy = %q, want empty on a finished run", run.CanceledBy)
 	}
 }
 
@@ -796,7 +869,7 @@ func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 		t.Fatalf("AppendTaskResult: %v", err)
 	}
 
-	if err := pg.CancelRun(id); err != nil {
+	if err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 

@@ -944,6 +944,10 @@ const docTemplate = `{
                 "gitlab_project_id": {
                     "type": "integer"
                 },
+                "has_webhook_secret": {
+                    "description": "HasWebhookSecret reports whether a webhook secret is stored, without\ndisclosing it. Only publicProject sets this on an outgoing copy; the\nstored struct itself does not populate it.",
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -963,6 +967,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "webhook_secret": {
+                    "description": "WebhookSecret is write-only: it is accepted on create and update but\nSHALL NOT appear in any response - see webhook-ingress-hardening D4.\nResponses carry HasWebhookSecret instead; callers encoding a\nProjectConfig for the wire MUST go through the web package's\npublicProject helper first.",
                     "type": "string"
                 }
             }
@@ -1030,6 +1035,14 @@ const docTemplate = `{
         "domain.TaskResult": {
             "type": "object",
             "properties": {
+                "approved_at": {
+                    "description": "ApprovedAt is when ApprovedBy approved the task. nil for a task never\napproved.",
+                    "type": "string"
+                },
+                "approved_by": {
+                    "description": "ApprovedBy is the actor that approved this manual task, \"user:\u003cname\u003e\".\nEmpty for a task never approved - see run-attribution D4.",
+                    "type": "string"
+                },
                 "duration": {
                     "type": "integer"
                 },
@@ -1112,6 +1125,10 @@ const docTemplate = `{
         "store.Run": {
             "type": "object",
             "properties": {
+                "canceled_by": {
+                    "description": "CanceledBy is the actor that canceled the run. Empty unless the run\nwas canceled while running - see run-attribution D3.",
+                    "type": "string"
+                },
                 "changed": {
                     "type": "array",
                     "items": {
@@ -1146,6 +1163,10 @@ const docTemplate = `{
                     }
                 },
                 "started_at": {
+                    "type": "string"
+                },
+                "started_by": {
+                    "description": "StartedBy is the actor that started the run, \"user:\u003cname\u003e\". Empty for\na run recorded before run-attribution existed.",
                     "type": "string"
                 },
                 "status": {

@@ -51,6 +51,33 @@ func TestTaskResult_ErrorOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestTaskResult_ApprovalOmitEmpty(t *testing.T) {
+	tr := TaskResult{Name: "t", Status: "manual"}
+	data, _ := json.Marshal(tr)
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	if _, ok := m["approved_by"]; ok {
+		t.Error("empty ApprovedBy should be omitted from JSON")
+	}
+	if _, ok := m["approved_at"]; ok {
+		t.Error("nil ApprovedAt should be omitted from JSON")
+	}
+}
+
+func TestTaskResult_ApprovalPresentWhenSet(t *testing.T) {
+	now := time.Now()
+	tr := TaskResult{Name: "t", Status: "passed", ApprovedBy: "user:alice", ApprovedAt: &now}
+	data, _ := json.Marshal(tr)
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	if _, ok := m["approved_by"]; !ok {
+		t.Error("ApprovedBy should be present when set")
+	}
+	if _, ok := m["approved_at"]; !ok {
+		t.Error("ApprovedAt should be present when set")
+	}
+}
+
 func TestProject_JSONRoundTrip(t *testing.T) {
 	proj := Project{
 		Name:         "demo",

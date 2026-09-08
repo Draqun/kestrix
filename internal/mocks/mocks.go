@@ -114,7 +114,7 @@ type MockRunStore struct {
 	AppendTaskCalls     []domain.TaskResult
 	AppendTaskErr       error
 	FlushRunCalls       []string
-	CancelRunCalls      []int
+	CancelRunCalls      []cancelRunCall
 	CancelRunErr        error
 	ApplyTaskCalls      []applyTaskCall
 	ApplyTaskCh         chan struct{} // closed once after the first ApplyTaskResult call
@@ -139,6 +139,12 @@ type createRunCall struct {
 	Changed       []string
 	IncludeManual bool
 	Snap          *model.Project
+	StartedBy     string
+}
+
+type cancelRunCall struct {
+	ID         int
+	CanceledBy string
 }
 
 type finishRunCall struct {
@@ -155,9 +161,9 @@ type applyTaskCall struct {
 	OutputExtra string
 }
 
-func (m *MockRunStore) CreateRun(p string, c []string, im bool, snap *model.Project) (int, error) {
+func (m *MockRunStore) CreateRun(p string, c []string, im bool, snap *model.Project, startedBy string) (int, error) {
 	m.mu.Lock()
-	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, im, snap})
+	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, im, snap, startedBy})
 	m.mu.Unlock()
 	return m.CreateRunID, m.CreateRunErr
 }
@@ -189,9 +195,9 @@ func (m *MockRunStore) UpdateRunSources(_ int, sources []domain.AcquiredSource) 
 	m.UpdateSourcesCalls = append(m.UpdateSourcesCalls, copySources)
 	return m.UpdateSourcesErr
 }
-func (m *MockRunStore) CancelRun(id int) error {
+func (m *MockRunStore) CancelRun(id int, canceledBy string) error {
 	m.mu.Lock()
-	m.CancelRunCalls = append(m.CancelRunCalls, id)
+	m.CancelRunCalls = append(m.CancelRunCalls, cancelRunCall{id, canceledBy})
 	m.mu.Unlock()
 	return m.CancelRunErr
 }
@@ -286,16 +292,18 @@ type MockPipelineRunner struct {
 type runCall struct {
 	Project domain.Project
 	Changed map[string]bool
+	Actor   string
 }
 
 type taskRunCall struct {
 	Project  domain.Project
 	TaskName string
+	Actor    string
 }
 
 func (m *MockPipelineRunner) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	m.mu.Lock()
-	m.RunCalls = append(m.RunCalls, runCall{project, changed})
+	m.RunCalls = append(m.RunCalls, runCall{project, changed, opts.Actor})
 	m.mu.Unlock()
 	if m.PanicMsg != nil {
 		panic(m.PanicMsg)
@@ -310,7 +318,7 @@ func (m *MockPipelineRunner) Run(ctx context.Context, project domain.Project, ch
 
 func (m *MockPipelineRunner) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	m.mu.Lock()
-	m.TaskRunCalls = append(m.TaskRunCalls, taskRunCall{Project: project, TaskName: taskName})
+	m.TaskRunCalls = append(m.TaskRunCalls, taskRunCall{Project: project, TaskName: taskName, Actor: opts.Actor})
 	m.mu.Unlock()
 	if m.PanicMsg != nil {
 		panic(m.PanicMsg)

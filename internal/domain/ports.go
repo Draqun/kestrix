@@ -129,11 +129,11 @@ type ProjectStore interface {
 // RunStore is the port for run lifecycle persistence.
 // Only PostgreSQL implements this.
 type RunStore interface {
-	CreateRun(projectName string, changed []string, includeManual bool, snap *Project) (int, error)
+	CreateRun(projectName string, changed []string, includeManual bool, snap *Project, startedBy string) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
-	CancelRun(id int) error
+	CancelRun(id int, canceledBy string) error
 	ApplyTaskResult(id int, tr TaskResult, outputExtra string) error
 	GetRun(id int) (*Run, error)
 	CountRuns(projectName string) (int, error)
@@ -188,6 +188,10 @@ type RunnerOptions struct {
 	WorkspaceCleanup      func()
 	RepoPaths             map[string]string
 	SourcesPrepared       bool
+	// Actor is the account that requested this run, task run, or approval,
+	// "user:<name>". Set by the handler from authenticated claims, never
+	// from client input - see run-attribution D2, D5. The runner ignores it.
+	Actor string
 }
 
 // WebhookEvent is a single processed webhook delivery, recorded in webhook
@@ -336,4 +340,10 @@ type Run struct {
 	Sources       []AcquiredSource `json:"sources,omitempty"`
 	StartedAt     time.Time        `json:"started_at"`
 	FinishedAt    *time.Time       `json:"finished_at,omitempty"`
+	// StartedBy is the actor that started the run, "user:<name>". Empty for
+	// a run recorded before run-attribution existed.
+	StartedBy string `json:"started_by"`
+	// CanceledBy is the actor that canceled the run. Empty unless the run
+	// was canceled while running - see run-attribution D3.
+	CanceledBy string `json:"canceled_by,omitempty"`
 }
