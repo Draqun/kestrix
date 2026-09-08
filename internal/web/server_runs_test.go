@@ -494,6 +494,70 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	}
 }
 
+// TestHandleRunTask_SecretResolutionError pins runtime-secrets design.md D3:
+// a secret_ref that cannot be resolved fails the run before the task runner
+// is ever invoked, records the run failed with the task skipped, and
+// answers 400 with the D6 error.
+func TestHandleRunTask_SecretResolutionError(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "deploy" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo deploying"
+    }
+  }
+  variable "REGISTRY_PASSWORD" {
+    secret_ref = "cred_missing"
+    scope      = "project"
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mocks.MockRunStore{CreateRunID: 9}
+	cfg := &domain.ProjectConfig{
+		Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main",
+		PipelineDir: "ci", PipelineFile: "pipeline.tf",
+	}
+	srv := runTaskServer(t, cfg, mock)
+	pipeline := srv.taskRunner.(*mocks.MockPipelineRunner)
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/deploy/run", strings.NewReader(`{}`)), "name", "demo", "task", "deploy")
+	srv.handleRunTask(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "cred_missing") {
+		t.Fatalf("response leaked the credential reference: %s", w.Body.String())
+	}
+	if len(pipeline.TaskRunCalls) != 0 {
+		t.Fatalf("task runner was invoked despite an unresolved secret: %+v", pipeline.TaskRunCalls)
+	}
+	if len(mock.CreateRunCalls) != 1 {
+		t.Fatalf("CreateRunCalls = %d, want 1", len(mock.CreateRunCalls))
+	}
+	if len(mock.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(mock.FinishRunCalls))
+	}
+	finish := mock.FinishRunCalls[0]
+	if finish.Status != "failed" {
+		t.Errorf("finish status = %q, want failed", finish.Status)
+	}
+	if len(finish.TaskResults) != 1 || finish.TaskResults[0].Status != "skipped" {
+		t.Fatalf("task results = %+v, want 1 skipped task", finish.TaskResults)
+	}
+}
+
 // ── handleApproveManualTask ──────────────────────────────────────
 
 func TestHandleApproveManualTask_UnknownRun(t *testing.T) {
@@ -595,6 +659,40 @@ func TestHandleApproveManualTaskSnapshotAndSourceErrors(t *testing.T) {
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "1", "task", "deploy"))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "exact source") {
 		t.Fatalf("source status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleApproveManualTask_SecretResolutionError pins runtime-secrets
+// tasks.md 3.5: a resolution error leaves run and task state unchanged -
+// no ApplyTaskResult call - and answers 400 with the D6 error.
+func TestHandleApproveManualTask_SecretResolutionError(t *testing.T) {
+	run := &domain.Run{
+		ID: 3, ProjectName: "demo",
+		PipelineDef: &domain.Project{
+			Name:      "demo",
+			Tasks:     []domain.Task{{Name: "deploy", Manual: true}},
+			Variables: []domain.Variable{{Key: "REGISTRY_PASSWORD", SecretRef: "cred_missing", Scope: "project"}},
+		},
+		TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+		Sources:     []domain.AcquiredSource{{RepoName: "demo", URL: "https://git.test/demo.git", RequestedRef: "main", ResolvedRevision: "sha", Primary: true}},
+	}
+	store := &mocks.MockRunStore{GetRunResult: run}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
+	pipeline := srv.taskRunner.(*mocks.MockPipelineRunner)
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "3", "task", "deploy"))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "cred_missing") {
+		t.Fatalf("response leaked the credential reference: %s", w.Body.String())
+	}
+	if len(pipeline.TaskRunCalls) != 0 {
+		t.Fatalf("task runner was invoked despite an unresolved secret: %+v", pipeline.TaskRunCalls)
+	}
+	if len(store.ApplyTaskCalls) != 0 {
+		t.Fatalf("ApplyTaskResult was called despite an unresolved secret: %+v", store.ApplyTaskCalls)
 	}
 }
 
@@ -721,6 +819,57 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 	}
 }
 
+// capturingTaskRunner implements domain.TaskRunner and domain.PipelineRunner,
+// recording the resolved project-scope variables it was given so a test can
+// assert on injected secret values without a real runner.
+type capturingTaskRunner struct {
+	capturedVars map[string]string
+}
+
+func (c *capturingTaskRunner) Run(context.Context, domain.Project, map[string]bool, domain.RunnerOptions) ([]domain.TaskResult, error) {
+	return nil, nil
+}
+
+func (c *capturingTaskRunner) RunTask(_ context.Context, _ domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	if opts.Variables != nil {
+		c.capturedVars = opts.Variables.Get("", "", "")
+	}
+	return domain.TaskResult{Name: taskName, Status: "passed"}, nil
+}
+
+// TestManualApproval_ResolvesRotatedSecret pins runtime-secrets spec.md
+// "Manual approval resolves fresh": approving a manual task re-resolves its
+// secret_ref, so a value rotated after the run started is what the task
+// receives - not whatever was current when the run was created.
+func TestManualApproval_ResolvesRotatedSecret(t *testing.T) {
+	run := &domain.Run{
+		ID: 5, ProjectName: "demo",
+		PipelineDef: &domain.Project{
+			Name:      "demo",
+			Tasks:     []domain.Task{{Name: "deploy", Manual: true}},
+			Variables: []domain.Variable{{Key: "REGISTRY_PASSWORD", SecretRef: "cred_x", Scope: "project"}},
+		},
+		TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}},
+		Sources:     []domain.AcquiredSource{{RepoName: "demo", URL: "https://git.test/demo.git", RequestedRef: "main", ResolvedRevision: "sha", Primary: true}},
+	}
+	store := &mocks.MockRunStore{GetRunResult: run}
+	runner := &capturingTaskRunner{}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
+	srv.taskRunner = runner
+	srv.runService = service.NewRunService(store, runner, runner)
+	credStore := &fakeCredentialStore{items: map[string]domain.CredentialMetadata{}, resolveResult: domain.Credential{Type: "secret", Value: "rotated-value"}}
+	srv.credentialStore = credStore
+
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "5", "task", "deploy"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if got := runner.capturedVars["REGISTRY_PASSWORD"]; got != "rotated-value" {
+		t.Fatalf("REGISTRY_PASSWORD = %q, want the freshly resolved rotated-value", got)
+	}
+}
+
 func TestManualApprovalUsesStoredSnapshotAndExactRecordedSources(t *testing.T) {
 	root := t.TempDir()
 	snapshot := &domain.Project{
@@ -838,6 +987,110 @@ func TestHandleRunProject_Happy(t *testing.T) {
 	}
 	if len(mockRun.CreateRunCalls) != 1 || mockRun.CreateRunCalls[0].StartedBy != "user:frank" {
 		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:frank", mockRun.CreateRunCalls)
+	}
+}
+
+func TestFailRunOnSecretError_NoRunStore(t *testing.T) {
+	srv := &Server{}
+	// Must not panic when no run store is configured.
+	srv.failRunOnSecretError("demo", &domain.Project{}, nil, false, "", errors.New("boom"))
+}
+
+func TestFailRunOnSecretError_CreateRunError(t *testing.T) {
+	buf := captureLog(t)
+	store := &mocks.MockRunStore{CreateRunErr: errors.New("create failed")}
+	srv := &Server{runStore: store}
+	srv.failRunOnSecretError("demo", &domain.Project{}, nil, false, "", errors.New("boom"))
+	if len(store.FinishRunCalls) != 0 {
+		t.Fatalf("FinishRun should not be called when CreateRun fails: %+v", store.FinishRunCalls)
+	}
+	if !strings.Contains(buf.String(), "could not record run") {
+		t.Fatalf("expected a warning log naming the failure, got %q", buf.String())
+	}
+}
+
+func TestFailRunOnSecretError_FinishRunError(t *testing.T) {
+	buf := captureLog(t)
+	store := &mocks.MockRunStore{CreateRunID: 5, FinishRunErr: errors.New("finish failed")}
+	srv := &Server{runStore: store}
+	srv.failRunOnSecretError("demo", &domain.Project{Tasks: []domain.Task{{Name: "t"}}}, nil, false, "", errors.New("boom"))
+	if !strings.Contains(buf.String(), "could not finish run record") {
+		t.Fatalf("expected a warning log naming the failure, got %q", buf.String())
+	}
+}
+
+// TestHandleRunProject_SecretResolutionError pins runtime-secrets design.md
+// D3/D6 and tasks.md 3.4: a resolution error creates the run, finishes it
+// failed with every task skipped, answers 400, and never invokes the
+// pipeline runner.
+func TestHandleRunProject_SecretResolutionError(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "build" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo build"
+    }
+  }
+  ci_task "deploy" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo deploy"
+    }
+  }
+  variable "REGISTRY_PASSWORD" {
+    secret_ref = "cred_missing"
+    scope      = "project"
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRun := &mocks.MockRunStore{CreateRunID: 7}
+	mockProj := &mocks.MockProjectStore{
+		GetResult: &domain.ProjectConfig{
+			Name: "demo", RepoURL: "file://" + tmp, RepoRef: "main",
+			PipelineDir: ".", PipelineFile: "pipeline.tf",
+		},
+	}
+	srv := setupRunServer(t, mockProj, mockRun)
+	srv.sourceSessions = &testSourceSessions{root: tmp}
+	pipeline := srv.pipelineRunner.(*mocks.MockPipelineRunner)
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{}`)), "name", "demo")
+	srv.handleRunProject(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "cred_missing") {
+		t.Fatalf("response leaked the credential reference: %s", w.Body.String())
+	}
+	if len(pipeline.RunCalls) != 0 {
+		t.Fatalf("pipeline runner was invoked despite an unresolved secret: %+v", pipeline.RunCalls)
+	}
+	if len(mockRun.CreateRunCalls) != 1 {
+		t.Fatalf("CreateRunCalls = %d, want 1", len(mockRun.CreateRunCalls))
+	}
+	if len(mockRun.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(mockRun.FinishRunCalls))
+	}
+	finish := mockRun.FinishRunCalls[0]
+	if finish.Status != "failed" {
+		t.Errorf("finish status = %q, want failed", finish.Status)
+	}
+	if len(finish.TaskResults) != 2 {
+		t.Fatalf("task results = %+v, want 2 skipped tasks", finish.TaskResults)
+	}
+	for _, tr := range finish.TaskResults {
+		if tr.Status != "skipped" {
+			t.Errorf("task %q status = %q, want skipped", tr.Name, tr.Status)
+		}
 	}
 }
 

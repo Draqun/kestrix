@@ -103,6 +103,85 @@ func TestWebhookDispatchIntegration(t *testing.T) {
 	}
 }
 
+// TestWebhookDispatchExcludesSecretVariables pins runtime-secrets spec.md
+// "Dispatch never carries a secret": a definition declaring a secret
+// variable still dispatches, and the GitLab pipeline variables it receives
+// carry no key or value belonging to that secret variable.
+func TestWebhookDispatchExcludesSecretVariables(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	var capturedKeys []string
+	mockGitLab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v4/projects/12345/pipeline" && r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": 1, "iid": 1, "status": "created", "ref": "main",
+				"web_url": "https://gitlab.com/project/-/pipelines/1",
+			})
+			return
+		}
+		if r.URL.Path == "/api/v4/projects/12345/pipelines/1/variables" && r.Method == "POST" {
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			capturedKeys = append(capturedKeys, body["key"])
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]interface{}{})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer mockGitLab.Close()
+
+	tmpDir := t.TempDir()
+	os.WriteFile(filepath.Join(tmpDir, "pipeline.tf"), []byte(testPipeline), 0o644)
+	secretVariable := `
+project "test-app" {
+  variable "REGISTRY_PASSWORD" {
+    secret_ref = "cred_registry"
+    scope      = "project"
+  }
+}
+`
+	os.WriteFile(filepath.Join(tmpDir, "secrets.tf"), []byte(secretVariable), 0o644)
+
+	server := NewServer(Config{
+		ListenAddr:  ":0",
+		PipelineDir: tmpDir,
+		StorePath:   filepath.Join(tmpDir, "projects.json"),
+		Signature:   SignatureConfig{Secret: "tok"},
+		Dispatch: DispatchConfig{
+			Enabled:     true,
+			ProjectID:   "12345",
+			GitLabURL:   mockGitLab.URL,
+			GitLabToken: "glpat-x",
+		},
+	})
+
+	body := `{"object_kind":"push","ref":"refs/heads/main","commits":[{"id":"a","message":"feat:auth","added":[],"modified":["auth_service/main.go"],"removed":[]}],"repository":{"name":"test-app"},"changes":["auth_service/main.go"]}`
+	req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))
+	req.Header.Set("X-Gitlab-Token", "tok")
+	rec := httptest.NewRecorder()
+	server.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["dispatched"] != true {
+		t.Fatalf("dispatched=%v, want true", resp["dispatched"])
+	}
+	if len(capturedKeys) == 0 {
+		t.Fatal("expected dispatch to set at least the KESTRIX_* metadata variables")
+	}
+	for _, key := range capturedKeys {
+		if key == "REGISTRY_PASSWORD" {
+			t.Fatalf("dispatched variables leaked the secret variable key: %v", capturedKeys)
+		}
+	}
+}
+
 func TestWebhookNoDispatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")

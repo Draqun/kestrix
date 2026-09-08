@@ -610,9 +610,15 @@ func TestRunService_prepareRunExecution_InvokesCallbacks(t *testing.T) {
 	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	out := &bytes.Buffer{}
 	opts := domain.RunnerOptions{}
-	svc.prepareRunExecution(9, out, &opts)
-	if opts.Stdout != out || opts.Stderr != out {
-		t.Fatal("expected stdio to be wired to buffer")
+	redactor := svc.prepareRunExecution(9, out, &opts)
+	if opts.Stdout != redactor || opts.Stderr != redactor {
+		t.Fatal("expected stdio to be wired to the redacting writer")
+	}
+	if _, err := opts.Stdout.Write([]byte("stdout line")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !strings.Contains(out.String(), "stdout line") {
+		t.Fatalf("expected stdio to reach the underlying buffer, got %q", out.String())
 	}
 	if opts.OnTaskStart == nil || opts.OnTaskComplete == nil {
 		t.Fatal("expected callbacks to be set")

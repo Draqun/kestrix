@@ -199,6 +199,82 @@ func TestPG_CredentialLifecycleStoresCiphertextOnly(t *testing.T) {
 	}
 }
 
+// TestPG_SecretCredentialLifecycleStoresCiphertextOnly pins runtime-secrets
+// spec.md "Store a run-time secret": a `secret` credential goes through the
+// same create/list/rotate/revoke lifecycle as a Git credential, its
+// ciphertext never contains the plaintext, and metadata responses never
+// carry the value.
+func TestPG_SecretCredentialLifecycleStoresCiphertextOnly(t *testing.T) {
+	pg := testPG(t)
+	meta, err := pg.CreateCredential(domain.CredentialInput{Type: "secret", Name: "Deploy key", Value: "super-secret-runtime-value"})
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+	if meta.Ref == "" || meta.Type != "secret" {
+		t.Fatalf("metadata=%+v", meta)
+	}
+	var ciphertext []byte
+	if err := pg.db.QueryRow(`SELECT encrypted_payload FROM credentials WHERE credential_ref=$1`, meta.Ref).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ciphertext), "super-secret-runtime-value") {
+		t.Fatal("database contains plaintext secret value")
+	}
+
+	list, err := pg.ListCredentialMetadata()
+	if err != nil {
+		t.Fatalf("ListCredentialMetadata: %v", err)
+	}
+	for _, m := range list {
+		encoded := m.Ref + m.Name + m.Type + m.Provider + m.Host
+		if strings.Contains(encoded, "super-secret-runtime-value") {
+			t.Fatalf("credential metadata exposed the secret value: %+v", m)
+		}
+	}
+
+	resolved, err := pg.ResolveCredential(context.Background(), meta.Ref)
+	if err != nil || resolved.Value != "super-secret-runtime-value" {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+
+	rotated, err := pg.RotateCredential(meta.Ref, domain.CredentialInput{Type: "secret", Name: "Deploy key", Value: "rotated-value"})
+	if err != nil {
+		t.Fatalf("RotateCredential: %v", err)
+	}
+	if rotated.Type != "secret" {
+		t.Fatalf("rotated metadata=%+v", rotated)
+	}
+	resolved, err = pg.ResolveCredential(context.Background(), meta.Ref)
+	if err != nil || resolved.Value != "rotated-value" {
+		t.Fatalf("rotated resolved=%+v err=%v", resolved, err)
+	}
+
+	if err := pg.RevokeCredential(meta.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ResolveCredential(context.Background(), meta.Ref); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("resolve revoked err=%v", err)
+	}
+}
+
+// TestPG_CredentialTypeSwapFailsToDecrypt pins design.md D1's consequence: the
+// AAD binds `credential_type`, so rewriting a stored row's type - as if
+// trying to repurpose a Git token as an injectable secret, or vice versa -
+// makes the ciphertext undecryptable rather than reinterpretable.
+func TestPG_CredentialTypeSwapFailsToDecrypt(t *testing.T) {
+	pg := testPG(t)
+	meta, err := pg.CreateCredential(domain.CredentialInput{Type: "token", Name: "GitHub", Token: "gh-token"})
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+	if _, err := pg.db.Exec(`UPDATE credentials SET credential_type='secret' WHERE credential_ref=$1`, meta.Ref); err != nil {
+		t.Fatalf("swap credential_type: %v", err)
+	}
+	if _, err := pg.ResolveCredential(context.Background(), meta.Ref); err == nil {
+		t.Fatal("expected decrypt failure after a row-level type swap")
+	}
+}
+
 func TestPG_ListCredentialMetadataExcludesSecrets(t *testing.T) {
 	pg := testPG(t)
 	first, err := pg.CreateCredential(domain.CredentialInput{Type: "token", Name: "GitHub", Provider: "github", Host: "github.com", Token: "github-secret"})

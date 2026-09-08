@@ -289,6 +289,86 @@ func TestProjectService_FindByGitLabID(t *testing.T) {
 	_ = p
 }
 
+// TestProjectService_CheckRepoCredential pins runtime-secrets design.md D4:
+// a `secret` credential is rejected as a repo_credential_ref, a Git
+// credential type is accepted, and an empty ref is unchanged behavior even
+// when a lookup is configured.
+func TestProjectService_CheckRepoCredential(t *testing.T) {
+	lookup := func(ref string) (domain.CredentialMetadata, error) {
+		switch ref {
+		case "cred_git":
+			return domain.CredentialMetadata{Ref: ref, Type: "token"}, nil
+		case "cred_secret":
+			return domain.CredentialMetadata{Ref: ref, Type: "secret"}, nil
+		default:
+			return domain.CredentialMetadata{}, errors.New("not found")
+		}
+	}
+
+	t.Run("accepts token", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		svc.SetCredentialLookup(lookup)
+		cfg := &domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", RepoCredentialRef: "cred_git"}
+		if err := svc.Create(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects secret", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		svc.SetCredentialLookup(lookup)
+		cfg := &domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", RepoCredentialRef: "cred_secret"}
+		err := svc.Create(cfg)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("error = %v, want ErrValidation", err)
+		}
+		if len(mock.UpsertCalls) != 0 {
+			t.Fatalf("expected Upsert not called, got %d calls", len(mock.UpsertCalls))
+		}
+	})
+
+	t.Run("empty ref unaffected", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		svc.SetCredentialLookup(lookup)
+		cfg := &domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main"}
+		if err := svc.Create(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("lookup error is left for source acquisition", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		svc.SetCredentialLookup(lookup)
+		cfg := &domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", RepoCredentialRef: "cred_unknown"}
+		if err := svc.Create(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("no lookup configured is unaffected", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		cfg := &domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", RepoCredentialRef: "cred_secret"}
+		if err := svc.Create(cfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("update rejects secret", func(t *testing.T) {
+		mock := &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"}}
+		svc := NewProjectService(mock)
+		svc.SetCredentialLookup(lookup)
+		update := &domain.ProjectConfig{RepoURL: "https://git.example/demo.git", RepoRef: "main", RepoCredentialRef: "cred_secret"}
+		if err := svc.Update("demo", update); !errors.Is(err, ErrValidation) {
+			t.Fatalf("error = %v, want ErrValidation", err)
+		}
+	})
+}
+
 func TestProjectService_Create_DefaultsMissingFields(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)

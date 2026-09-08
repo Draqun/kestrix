@@ -10,6 +10,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,6 +189,125 @@ func TestParseSource_VariableAllAttributes(t *testing.T) {
 		v.Scope != "repo" || v.Repo != "auth" || v.Job != "t" ||
 		v.Env != "prod" || !v.Protected || !v.Masked {
 		t.Fatalf("variable decode: %+v", v)
+	}
+}
+
+// TestParseSource_VariableSecretRef pins runtime-secrets spec.md "Secret
+// variable is accepted": a job-scoped secret_ref parses with the reference,
+// its scope, and Masked forced true even though `masked` was never set.
+func TestParseSource_VariableSecretRef(t *testing.T) {
+	src := `project "p" {
+		variable "REGISTRY_PASSWORD" {
+			secret_ref = "cred_abc"
+			scope      = "job"
+			repo       = "app"
+			job        = "publish"
+		}
+	}`
+	proj, err := ParseSource([]byte(src), "x.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if len(proj.Variables) != 1 {
+		t.Fatalf("variables = %d, want 1", len(proj.Variables))
+	}
+	v := proj.Variables[0]
+	if v.SecretRef != "cred_abc" || v.Scope != "job" || v.Repo != "app" || v.Job != "publish" {
+		t.Fatalf("variable decode: %+v", v)
+	}
+	if !v.Masked {
+		t.Fatal("expected secret_ref to imply masked=true")
+	}
+	if v.Value != "" || v.Default != "" {
+		t.Fatalf("expected no value for a secret variable: %+v", v)
+	}
+}
+
+// TestParseSource_VariableSecretRefConflictsWithLiteral pins spec.md "Secret
+// reference with a literal": secret_ref combined with value or default fails
+// validation and names both the variable and the conflicting attributes.
+func TestParseSource_VariableSecretRefConflictsWithLiteral(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{"value", "secret_ref = \"cred_abc\"\nvalue = \"literal\""},
+		{"default", "secret_ref = \"cred_abc\"\ndefault = \"literal\""},
+		{"both", "secret_ref = \"cred_abc\"\nvalue = \"literal\"\ndefault = \"fallback\""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := "project \"p\" {\nvariable \"FOO\" {\n" + tt.body + "\n}\n}"
+			_, err := ParseSource([]byte(src), "x.tf")
+			if err == nil {
+				t.Fatal("expected validation error for secret_ref combined with a literal")
+			}
+			if !strings.Contains(err.Error(), "FOO") || !strings.Contains(err.Error(), "secret_ref") {
+				t.Fatalf("error = %v, want it to name the variable and secret_ref", err)
+			}
+		})
+	}
+}
+
+// TestParseSource_VariableScopeRequiresTarget pins spec.md "Scope without its
+// target": scope=repo requires repo, scope=job requires repo and job.
+func TestParseSource_VariableScopeRequiresTarget(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{"repo missing repo", "value = \"v\"\nscope = \"repo\""},
+		{"job missing repo and job", "value = \"v\"\nscope = \"job\""},
+		{"job missing job", "value = \"v\"\nscope = \"job\"\nrepo = \"app\""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := "project \"p\" {\nvariable \"FOO\" {\n" + tt.body + "\n}\n}"
+			_, err := ParseSource([]byte(src), "x.tf")
+			if err == nil {
+				t.Fatal("expected validation error for scope missing its target")
+			}
+		})
+	}
+}
+
+// TestParseSource_VariableLiteralUnaffectedBySecretValidation confirms an
+// ordinary literal variable - no secret_ref, no scope - still parses exactly
+// as before the runtime-secrets validation was added.
+func TestParseSource_VariableLiteralUnaffectedBySecretValidation(t *testing.T) {
+	src := "project \"p\" {\nvariable \"PLAIN\" {\nvalue = \"v\"\n}\n}"
+	proj, err := ParseSource([]byte(src), "x.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if len(proj.Variables) != 1 || proj.Variables[0].Value != "v" || proj.Variables[0].Masked {
+		t.Fatalf("variable decode: %+v", proj.Variables)
+	}
+}
+
+// TestParseSource_VariableSecretJSONRoundTrip pins spec.md "Snapshot carries
+// the reference only": a secret variable serialized as JSON the way
+// runs.pipeline_def stores it carries secret_ref and no value.
+func TestParseSource_VariableSecretJSONRoundTrip(t *testing.T) {
+	src := `project "p" {
+		variable "REGISTRY_PASSWORD" {
+			secret_ref = "cred_abc"
+			scope      = "job"
+			repo       = "app"
+			job        = "publish"
+		}
+	}`
+	proj, err := ParseSource([]byte(src), "x.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	data, err := json.Marshal(proj)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"secret_ref":"cred_abc"`) {
+		t.Fatalf("snapshot missing secret_ref: %s", data)
+	}
+	if strings.Contains(string(data), `"value"`) {
+		t.Fatalf("snapshot must not carry a value field: %s", data)
 	}
 }
 

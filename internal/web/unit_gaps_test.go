@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -357,14 +358,18 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 		t.Fatalf("backend status=%d", w.Code)
 	}
 
-	// buildVarStore no longer seeds Docker registry credentials into a
-	// task's variables - a task must go through KESTRIX_RUNNER_ENV_PASSTHROUGH
-	// instead; see handler_helpers.go's buildVarStore doc comment.
+	// service.BuildVarStore no longer seeds Docker registry credentials into
+	// a task's variables - a task must go through
+	// KESTRIX_RUNNER_ENV_PASSTHROUGH instead; see handler_helpers.go's
+	// former buildVarStore doc comment.
 	srv.cfg.Docker = DockerConfig{Registry: "r", Image: "i", Username: "u", Password: "p"}
-	vs := srv.buildVarStore(nil)
+	vs, _, err := service.BuildVarStore(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildVarStore(nil): %v", err)
+	}
 	vars := vs.Get("", "", "")
 	if len(vars) != 0 {
-		t.Fatalf("buildVarStore(nil) leaked variables=%#v", vars)
+		t.Fatalf("BuildVarStore(nil) leaked variables=%#v", vars)
 	}
 }
 

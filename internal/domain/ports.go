@@ -2,8 +2,20 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
+)
+
+// Errors a CredentialStore's ResolveCredential and GetCredentialMetadata may
+// return for a missing or revoked reference. Adapters wrap these with
+// fmt.Errorf("%w: ...", ...) so callers - including the service layer's
+// secret-resolution error messages (runtime-secrets design.md D6) - can
+// match them with errors.Is without depending on adapter-specific error
+// types.
+var (
+	ErrCredentialNotFound = errors.New("credential not found")
+	ErrCredentialRevoked  = errors.New("credential is revoked")
 )
 
 // SourceAcquirer obtains a repository in an isolated workspace before task
@@ -55,6 +67,9 @@ type Credential struct {
 	Token      string
 	PrivateKey string
 	KnownHosts string
+	// Value is the opaque payload of a `secret` credential (see
+	// runtime-secrets). It is unused by every Git credential type.
+	Value string `json:"value,omitempty"`
 }
 
 // CredentialInput is accepted only by secret-bearing create/rotate operations.
@@ -69,6 +84,9 @@ type CredentialInput struct {
 	Token      string `json:"token,omitempty"`
 	PrivateKey string `json:"private_key,omitempty"`
 	KnownHosts string `json:"known_hosts,omitempty"`
+	// Value is the opaque payload of a `secret` credential (see
+	// runtime-secrets). It is unused by every Git credential type.
+	Value string `json:"value,omitempty"`
 }
 
 // CredentialMetadata is safe to return to callers.
@@ -192,6 +210,11 @@ type RunnerOptions struct {
 	// "user:<name>". Set by the handler from authenticated claims, never
 	// from client input - see run-attribution D2, D5. The runner ignores it.
 	Actor string
+	// ResolvedSecretValues holds every runtime-secret value BuildVarStore
+	// resolved for this run or task, in resolution order. The service layer
+	// uses it to redact these values from output before persisting or
+	// returning it - see runtime-secrets design.md D5. The runner ignores it.
+	ResolvedSecretValues []string
 }
 
 // WebhookEvent is a single processed webhook delivery, recorded in webhook

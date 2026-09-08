@@ -15,6 +15,7 @@ func TestNormalizeProviderNeutralForms(t *testing.T) {
 		{"token", TypeToken, domain.CredentialInput{Type: TypeToken, Name: "gh", Token: "tok"}, func(c domain.Credential) bool { return c.Token == "tok" }},
 		{"basic", TypeBasic, domain.CredentialInput{Type: TypeBasic, Name: "bb", Username: "user", Password: "app-pass"}, func(c domain.Credential) bool { return c.Username == "user" && c.Password == "app-pass" }},
 		{"ssh", TypeSSH, domain.CredentialInput{Type: TypeSSH, Name: "ssh", PrivateKey: "PRIVATE", KnownHosts: "KNOWN"}, func(c domain.Credential) bool { return c.PrivateKey == "PRIVATE" && c.KnownHosts == "KNOWN" }},
+		{"secret", TypeSecret, domain.CredentialInput{Type: TypeSecret, Name: "deploy-key", Value: "opaque-value"}, func(c domain.Credential) bool { return c.Value == "opaque-value" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -27,7 +28,7 @@ func TestNormalizeProviderNeutralForms(t *testing.T) {
 }
 
 func TestNormalizeRejectsMissingSecrets(t *testing.T) {
-	for _, input := range []domain.CredentialInput{{Type: TypeToken, Name: "x"}, {Type: TypeBasic, Name: "x", Username: "u"}, {Type: TypeSSH, Name: "x"}} {
+	for _, input := range []domain.CredentialInput{{Type: TypeToken, Name: "x"}, {Type: TypeBasic, Name: "x", Username: "u"}, {Type: TypeSSH, Name: "x"}, {Type: TypeSecret, Name: "x"}} {
 		if _, err := Normalize("ref", input); err == nil {
 			t.Fatalf("Normalize(%+v) unexpectedly succeeded", input)
 		}
@@ -40,5 +41,25 @@ func TestNormalizeRejectsMissingSecrets(t *testing.T) {
 	}
 	if _, err := Normalize("ref", domain.CredentialInput{Type: TypeToken, Token: "t"}); err == nil {
 		t.Fatal("expected missing name error")
+	}
+}
+
+// TestNormalizeSecretRejectsGitFields pins design.md D1: a `secret`
+// credential can never carry a Git-only field, so a stored row can never
+// hold both a value and a username/password/token/private_key by accident.
+func TestNormalizeSecretRejectsGitFields(t *testing.T) {
+	base := domain.CredentialInput{Type: TypeSecret, Name: "x", Value: "opaque"}
+	for _, mutate := range []func(*domain.CredentialInput){
+		func(i *domain.CredentialInput) { i.Username = "u" },
+		func(i *domain.CredentialInput) { i.Password = "p" },
+		func(i *domain.CredentialInput) { i.Token = "t" },
+		func(i *domain.CredentialInput) { i.PrivateKey = "k" },
+		func(i *domain.CredentialInput) { i.KnownHosts = "h" },
+	} {
+		input := base
+		mutate(&input)
+		if _, err := Normalize("ref", input); err == nil {
+			t.Fatalf("Normalize(%+v) unexpectedly succeeded", input)
+		}
 	}
 }

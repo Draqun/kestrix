@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
@@ -36,6 +37,40 @@ var ErrRunCancelTimedOut = errors.New("run did not terminate in time")
 // ProjectService handles project CRUD with validation.
 type ProjectService struct {
 	store domain.ProjectStore
+	// credentialLookup resolves a repo_credential_ref's metadata so
+	// CreateValidated/UpdateValidated can reject a `secret` credential as a
+	// repository credential (see runtime-secrets design.md D4). Nil (the
+	// default) performs no type check, so callers that never wire a
+	// credential store keep their prior behavior.
+	credentialLookup func(ref string) (domain.CredentialMetadata, error)
+}
+
+// SetCredentialLookup configures how CreateValidated and UpdateValidated
+// look up a repo_credential_ref's type. A domain.CredentialStore's
+// GetCredentialMetadata method satisfies this signature directly.
+func (s *ProjectService) SetCredentialLookup(lookup func(ref string) (domain.CredentialMetadata, error)) {
+	s.credentialLookup = lookup
+}
+
+// checkRepoCredential rejects a repo_credential_ref that names a `secret`
+// credential - see runtime-secrets design.md D4 and repository-credentials
+// spec.md "Secret rejected for source acquisition". A lookup error (unknown
+// ref, store unavailable) is left for source acquisition to report later,
+// as before this check existed; only a confirmed `secret` type is rejected
+// here.
+func (s *ProjectService) checkRepoCredential(cfg *domain.ProjectConfig) error {
+	ref := strings.TrimSpace(cfg.RepoCredentialRef)
+	if ref == "" || s.credentialLookup == nil {
+		return nil
+	}
+	meta, err := s.credentialLookup(ref)
+	if err != nil {
+		return nil
+	}
+	if meta.Type == credentials.TypeSecret {
+		return fmt.Errorf("%w: repo_credential_ref %q is a secret credential and cannot be used for Git access", ErrValidation, ref)
+	}
+	return nil
 }
 
 // ErrValidation identifies invalid project configuration supplied by a client.
@@ -159,6 +194,9 @@ func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSour
 	if cfg.PipelineDir == "" {
 		cfg.PipelineDir = "ci"
 	}
+	if err := s.checkRepoCredential(cfg); err != nil {
+		return err
+	}
 	if validateSource != nil {
 		if err := validateSource(cfg); err != nil {
 			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
@@ -202,6 +240,9 @@ func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig,
 		cfg.WebhookSecret = existing.WebhookSecret
 	}
 	if err := validateProject(cfg); err != nil {
+		return err
+	}
+	if err := s.checkRepoCredential(cfg); err != nil {
 		return err
 	}
 	if validateSource != nil {
@@ -276,7 +317,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	}
 	log.Printf("run: started actor=%q project=%q run=%d", opts.Actor, projectName, runID)
 	output := &bytes.Buffer{}
-	s.prepareRunExecution(runID, output, &opts)
+	redactor := s.prepareRunExecution(runID, output, &opts)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	doneCh := make(chan struct{})
@@ -294,7 +335,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 			delete(s.done, runID)
 			s.mu.Unlock()
 		}()
-		s.executeRun(runCtx, runID, proj, changed, opts, output)
+		s.executeRun(runCtx, runID, proj, changed, opts, output, redactor)
 	}()
 	return runID, nil
 }
@@ -368,16 +409,23 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 	return runID, nil
 }
 
-func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) {
+// prepareRunExecution wires runID's lifecycle callbacks onto opts and wraps
+// its output in a redactingWriter built from opts.ResolvedSecretValues, so
+// opts.Stdout/Stderr, FlushRunOutput, and FinishRun all see redacted text
+// (see runtime-secrets design.md D5). It returns that redactor so the
+// caller can Flush it before the run's final output is persisted.
+func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) *redactingWriter {
 	previousSourcesAcquired := opts.OnSourcesAcquired
-	opts.Stdout = output
-	opts.Stderr = output
+	redactor := newRedactingWriter(output, opts.ResolvedSecretValues)
+	opts.Stdout = redactor
+	opts.Stderr = redactor
 	opts.OnTaskStart = func(name string) {
 		if s.runStore != nil {
 			_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: name, Status: "running"})
 		}
 	}
 	opts.OnTaskComplete = func(tr domain.TaskResult) {
+		tr.Output = redactValues(tr.Output, opts.ResolvedSecretValues)
 		if s.runStore != nil {
 			_ = s.runStore.AppendTaskResult(runID, tr)
 			_ = s.runStore.FlushRunOutput(runID, output.String())
@@ -402,11 +450,13 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 		}
 		return nil
 	}
+	return redactor
 }
 
-func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer) {
+func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter) {
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
+			_ = redactor.Flush()
 			_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
 			if opts.SourceSessions != nil {
 				_ = opts.SourceSessions.Release(context.Background(), runID)
@@ -419,7 +469,30 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 		changedSet[c] = true
 	}
 	taskResults, err := s.pipeline.Run(ctx, *proj, changedSet, opts)
+	// Flush before reading output.String() so a secret value sitting in the
+	// redactor's cross-write buffer at run end is redacted before it is
+	// persisted - see design.md D5.
+	_ = redactor.Flush()
+	// FinishRun persists taskResults wholesale, overwriting whatever
+	// AppendTaskResult wrote incrementally via OnTaskComplete during the
+	// run, so this slice must be redacted independently rather than relying
+	// on that earlier pass.
+	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues)
 	s.finishRun(runID, output.String(), taskResults, err, opts.SourceSessions)
+}
+
+// redactTaskResults returns a copy of results with each Output field
+// redacted (see design.md D5); results itself is left unmodified.
+func redactTaskResults(results []domain.TaskResult, values []string) []domain.TaskResult {
+	if len(results) == 0 {
+		return results
+	}
+	out := make([]domain.TaskResult, len(results))
+	for i, tr := range results {
+		tr.Output = redactValues(tr.Output, values)
+		out[i] = tr
+	}
+	return out
 }
 
 func (s *RunService) finishRun(runID int, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager) {
@@ -528,6 +601,9 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 		tr.ApprovedBy = approvedBy
 		tr.ApprovedAt = approvedAt
 	}
+	// Redact before persisting, whether this task ran directly or through
+	// ApproveManualTask - see design.md D5.
+	tr.Output = redactValues(tr.Output, opts.ResolvedSecretValues)
 	if s.runStore != nil {
 		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
 	}
@@ -644,14 +720,38 @@ func (s *WebhookService) Record(event domain.WebhookEvent) {
 	}
 }
 
-// BuildVarStore constructs a variables.Store from project config, model, and env.
-func BuildVarStore(proj *model.Project, cfg *domain.ProjectConfig) *variables.Store {
+// Errors BuildVarStore returns for an unresolvable secret variable; see
+// design.md D6. Each is wrapped as `variable "<key>": <this>` and never
+// carries the value, the credential name, or the wrapped resolver error.
+var (
+	ErrSecretNotFound   = errors.New("secret credential not found")
+	ErrSecretRevoked    = errors.New("secret credential is revoked")
+	ErrSecretWrongType  = errors.New("reference is not a secret credential")
+	ErrSecretUnresolved = errors.New("secret credential could not be resolved")
+)
+
+// BuildVarStore constructs a variables.Store from a project's declared
+// variables, resolving every secret_ref through resolver. It returns the
+// resolved secret values (for the output redactor, see D5) and a resolution
+// error - see design.md D3 - that MUST abort the run or task before it
+// starts: a missing, revoked, wrong-type, or otherwise unresolvable
+// reference fails closed rather than injecting an empty or stale value.
+func BuildVarStore(ctx context.Context, proj *model.Project, resolver domain.CredentialResolver) (*variables.Store, []string, error) {
 	vs := variables.New()
+	var resolvedValues []string
 	if proj != nil {
 		for _, v := range proj.Variables {
 			val := v.Value
 			if val == "" {
 				val = v.Default
+			}
+			if v.SecretRef != "" {
+				secretVal, err := resolveSecretValue(ctx, resolver, v.SecretRef)
+				if err != nil {
+					return nil, nil, fmt.Errorf("variable %q: %w", v.Key, err)
+				}
+				val = secretVal
+				resolvedValues = append(resolvedValues, val)
 			}
 			opts := []variables.Option{}
 			if v.Protected {
@@ -670,5 +770,32 @@ func BuildVarStore(proj *model.Project, cfg *domain.ProjectConfig) *variables.St
 			}
 		}
 	}
-	return vs
+	return vs, resolvedValues, nil
+}
+
+// resolveSecretValue resolves ref through resolver and requires it to name a
+// live `secret` credential. Every failure is one of the four D6 error shapes;
+// the underlying resolver error is logged with the reference only, never
+// returned to the caller.
+func resolveSecretValue(ctx context.Context, resolver domain.CredentialResolver, ref string) (string, error) {
+	if resolver == nil {
+		log.Printf("secret resolution: no credential resolver configured, ref=%q", ref)
+		return "", ErrSecretUnresolved
+	}
+	cred, err := resolver.Resolve(ctx, ref)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrCredentialNotFound):
+			return "", ErrSecretNotFound
+		case errors.Is(err, domain.ErrCredentialRevoked):
+			return "", ErrSecretRevoked
+		default:
+			log.Printf("secret resolution: ref=%q: %v", ref, err)
+			return "", ErrSecretUnresolved
+		}
+	}
+	if cred.Type != credentials.TypeSecret {
+		return "", ErrSecretWrongType
+	}
+	return cred.Value, nil
 }

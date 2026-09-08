@@ -13,7 +13,7 @@ test('credential helpers normalize empty metadata and all payload types', () => 
   assert.equal(normalizeCredentialType('unknown'), 'token');
   assert.deepEqual(credentialFormDefaults(null), {
     name: '', type: 'token', provider: '', host: '', username: '', password: '',
-    token: '', private_key: '', known_hosts: '',
+    token: '', private_key: '', known_hosts: '', value: '',
   });
 
   const changed = changeCredentialType({ token: 'old', username: 'old', password: 'old' }, 'ssh');
@@ -56,6 +56,10 @@ test('credential descriptors define visible and supplemental guidance for every 
   assert.deepEqual(
     credentialFieldDescriptors('ssh').map(field => field.key),
     ['name', 'type', 'provider', 'host', 'private_key', 'known_hosts'],
+  );
+  assert.deepEqual(
+    credentialFieldDescriptors('secret').map(field => field.key),
+    ['name', 'type', 'provider', 'host', 'value'],
   );
   const rotation = credentialFieldDescriptors('ssh', { editing: true });
   assert.equal(rotation.find(field => field.key === 'private_key').label, 'Replacement private key');

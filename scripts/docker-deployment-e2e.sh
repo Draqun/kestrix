@@ -439,6 +439,122 @@ if ! grep -q 'KESTRIX_TEST_DATABASE_URL=' "${ENV_TASK_RESPONSE}"; then
 fi
 echo "Task environment allowlist verified: no control-plane secret leaked."
 
+# runtime-secrets: a `secret` credential resolved for a pipeline variable
+# must reach the task as an environment value, and its value must never
+# appear in run output, task result output, or the API - only `***` in its
+# place. See runtime-secrets design.md D5.
+echo "Verifying a runtime secret is injected and redacted from task output..."
+RUNTIME_SECRET_VALUE="e2e-runtime-secret-do-not-log-$$"
+RUNTIME_SECRET_RESPONSE="${TEMP_DIR}/runtime-secret-credential.json"
+status="$(curl -sS -o "${RUNTIME_SECRET_RESPONSE}" -w '%{http_code}' --max-time 10 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/credentials" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Docker E2E runtime secret\",\"type\":\"secret\",\"value\":\"${RUNTIME_SECRET_VALUE}\"}")"
+if [[ "${status}" != "201" ]]; then
+  echo "Runtime secret credential creation returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${RUNTIME_SECRET_RESPONSE}" >&2
+  exit 1
+fi
+if grep -q "${RUNTIME_SECRET_VALUE}" "${RUNTIME_SECRET_RESPONSE}"; then
+  echo "Runtime secret credential response exposed the value." >&2
+  exit 1
+fi
+RUNTIME_SECRET_REF="$(sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' "${RUNTIME_SECRET_RESPONSE}")"
+if [[ -z "${RUNTIME_SECRET_REF}" ]]; then
+  echo "Runtime secret credential response did not contain a reference." >&2
+  exit 1
+fi
+
+# Amend the registered project's pipeline with a task that echoes the
+# secret variable, and push it - handleRunTask reads the current HEAD of
+# the project's configured ref, so this new commit is what the task run
+# below executes.
+printf '%s\n' \
+  'project "docker-remote" {' \
+  '  ci_repo "app" { path = "." }' \
+  '  ci_task "verify" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "test -f version.txt"' \
+  '    }' \
+  '  }' \
+  '  ci_task "print_env" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "env | sort"' \
+  '    }' \
+  '  }' \
+  '  ci_task "sleep_task" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "sleep 120"' \
+  '    }' \
+  '  }' \
+  '  ci_task "echo_secret" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "echo DEPLOY_SECRET=$DEPLOY_SECRET"' \
+  '    }' \
+  '  }' \
+  '  variable "DEPLOY_SECRET" {' \
+  "    secret_ref = \"${RUNTIME_SECRET_REF}\"" \
+  '    scope      = "project"' \
+  '  }' \
+  '}' > "${REMOTE_WORK}/ci/pipeline.tf"
+git -C "${REMOTE_WORK}" add ci/pipeline.tf
+git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m 'add runtime secret task'
+git -C "${REMOTE_WORK}" push --quiet origin main
+
+ECHO_SECRET_RESPONSE="${TEMP_DIR}/echo-secret.json"
+status="$(curl -sS -o "${ECHO_SECRET_RESPONSE}" -w '%{http_code}' --max-time 30 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/projects/docker-remote/tasks/echo_secret/run" \
+  -H 'Content-Type: application/json' -d '{}')"
+if [[ "${status}" != "200" ]]; then
+  echo "echo_secret task run returned HTTP ${status}:" >&2
+  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
+  exit 1
+fi
+if grep -q "${RUNTIME_SECRET_VALUE}" "${ECHO_SECRET_RESPONSE}"; then
+  echo "Task run response (run output via API) leaked the runtime secret value:" >&2
+  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
+  exit 1
+fi
+if ! grep -q '\*\*\*' "${ECHO_SECRET_RESPONSE}"; then
+  echo "Task run response did not contain the redaction marker:" >&2
+  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
+  exit 1
+fi
+
+RUN_LIST_RESPONSE="${TEMP_DIR}/echo-secret-run-list.json"
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs?limit=10" > "${RUN_LIST_RESPONSE}"
+# Runs are ordered newest-first and "id" is domain.Run's first JSON field, so
+# it is also the first field of the first (newest) array element - anchor on
+# that exact literal rather than a bare `.*"id":`, which a greedy match would
+# otherwise satisfy at the *last* "id" in the array (the oldest run).
+ECHO_SECRET_RUN_ID="$(sed -n 's/.*"items":\[{"id":\([0-9]*\).*/\1/p' "${RUN_LIST_RESPONSE}")"
+if [[ -z "${ECHO_SECRET_RUN_ID}" ]]; then
+  echo "Could not determine the echo_secret run's id:" >&2
+  sed -n '1,200p' "${RUN_LIST_RESPONSE}" >&2
+  exit 1
+fi
+ECHO_SECRET_RUN_RESPONSE="${TEMP_DIR}/echo-secret-run.json"
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs/${ECHO_SECRET_RUN_ID}" > "${ECHO_SECRET_RUN_RESPONSE}"
+if grep -q "${RUNTIME_SECRET_VALUE}" "${ECHO_SECRET_RUN_RESPONSE}"; then
+  echo "Persisted run record (task result output) leaked the runtime secret value:" >&2
+  sed -n '1,200p' "${ECHO_SECRET_RUN_RESPONSE}" >&2
+  exit 1
+fi
+if ! grep -q '\*\*\*' "${ECHO_SECRET_RUN_RESPONSE}"; then
+  echo "Persisted run record did not contain the redaction marker:" >&2
+  sed -n '1,200p' "${ECHO_SECRET_RUN_RESPONSE}" >&2
+  exit 1
+fi
+echo "Runtime secret verified: injected into the task, redacted everywhere it is returned."
+
 # task-execution-isolation: cancelling a run must stop its docker-mode
 # task's container - see the "Cancel a running Docker task" scenario.
 echo "Verifying cancellation stops a docker-mode task's container..."
@@ -551,6 +667,10 @@ if grep -R -q "${WEBHOOK_SECRET_VALUE}" "${TEMP_DIR}/compose.log"; then
 fi
 if grep -R -q "${ADMIN_PASSWORD}" "${TEMP_DIR}/compose.log"; then
   echo "Administrator password was found in the deployment log." >&2
+  exit 1
+fi
+if grep -R -q "${RUNTIME_SECRET_VALUE}" "${RUNTIME_SECRET_RESPONSE}" "${ECHO_SECRET_RESPONSE}" "${ECHO_SECRET_RUN_RESPONSE}" "${TEMP_DIR}/compose.log"; then
+  echo "Runtime secret value was found in an API response or the deployment/container log." >&2
   exit 1
 fi
 

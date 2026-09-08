@@ -93,6 +93,32 @@ func TestHandleCreateProject_Happy(t *testing.T) {
 	}
 }
 
+// TestHandleCreateProject_RejectsSecretRepoCredential pins runtime-secrets
+// spec.md "Secret rejected for source acquisition": a project create naming
+// a `secret` credential as its repo_credential_ref is rejected with 400 and
+// the project is never persisted.
+func TestHandleCreateProject_RejectsSecretRepoCredential(t *testing.T) {
+	srv := systemHandlerServer(t)
+	credStore := &fakeCredentialStore{items: map[string]domain.CredentialMetadata{
+		"cred_secret": {Ref: "cred_secret", Name: "Deploy secret", Type: "secret"},
+	}}
+	srv.credentialStore = credStore
+	srv.projectService.SetCredentialLookup(credStore.GetCredentialMetadata)
+
+	body := `{"name":"demo","repo_url":"https://git.example/demo.git","repo_ref":"main","repo_credential_ref":"cred_secret"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/projects", strings.NewReader(body))
+	srv.handleCreateProject(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	mockStore := srv.projectStore.(*mocks.MockProjectStore)
+	if len(mockStore.UpsertCalls) != 0 {
+		t.Fatalf("expected project not persisted, got %d Upsert calls", len(mockStore.UpsertCalls))
+	}
+}
+
 func TestHandleCreateProjectRejectsRepoPath(t *testing.T) {
 	srv := systemHandlerServer(t)
 	body := `{"name":"demo","repo_path":"/tmp/demo","repo_url":"https://git.example/demo.git","repo_ref":"main"}`

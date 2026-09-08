@@ -15,8 +15,11 @@ import (
 	"kestrix/internal/domain"
 )
 
-var ErrCredentialNotFound = errors.New("credential not found")
-var ErrCredentialRevoked = errors.New("credential is revoked")
+// ErrCredentialNotFound and ErrCredentialRevoked alias the domain-level
+// sentinels so existing references to the store package's names keep
+// working; see domain.ErrCredentialNotFound / domain.ErrCredentialRevoked.
+var ErrCredentialNotFound = domain.ErrCredentialNotFound
+var ErrCredentialRevoked = domain.ErrCredentialRevoked
 
 func newCredentialRef() (string, error) {
 	b := make([]byte, 16)

@@ -135,18 +135,61 @@ variable "DEPLOY_TARGET" {
   scope   = "repo"
   repo    = "gateway"
 }
+
+variable "REGISTRY_PASSWORD" {
+  secret_ref = "cred_registry"
+  scope      = "job"
+  repo       = "gateway"
+  job        = "publish"
+}
 ```
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `value` | string | Static value for the variable |
 | `default` | string | Default value when not overridden |
+| `secret_ref` | string | Reference to a `secret` credential; resolved at run start (see below) |
 | `scope` | string | Visibility: `project`, `repo`, or `job` |
-| `repo` | string | Required when `scope = "repo"` |
+| `repo` | string | Required when `scope = "repo"` or `scope = "job"` |
 | `job` | string | Required when `scope = "job"` |
 | `env` | string | Environment variable name override |
 | `protected` | bool | Only available on protected branches/tags |
 | `masked` | bool | Hidden in job logs |
+
+A variable supplies its value in exactly one of three ways: `value`,
+`default`, or `secret_ref`. `secret_ref` cannot be combined with `value` or
+`default` - declaring both fails validation and the pipeline does not start.
+
+### Runtime secrets (`secret_ref`)
+
+`secret_ref` names a `secret` credential in the encrypted credential store
+(see [Repository credentials](repository-credentials.md)). A variable with
+`secret_ref` is always masked, regardless of the `masked` attribute, and its
+value is never written to Git: the HCL carries only the reference.
+
+Kestrix resolves every `secret_ref` once, when a run starts or when an
+approved manual task starts - never at any other time. A missing, revoked, or
+non-`secret` reference fails the run before any task starts, naming the
+variable and never the value; every task of that run is recorded `skipped`.
+Approving a manual task re-resolves its secrets, so a task approved after a
+secret was rotated receives the rotated value, not whatever was current when
+the run started.
+
+A resolved secret value of at least 8 bytes is redacted (replaced with `***`)
+from run and task output before it is persisted or returned by any API. A
+value shorter than 8 bytes is still injected into the task but is **not**
+guaranteed to be redacted - avoid short runtime secrets in output-producing
+tasks.
+
+A literal `value` with `masked = true` is **not** a secret: `masked` on a
+literal is accepted but is a no-op today. A plaintext value committed to Git
+is never redacted from output and is visible to anyone who can read the
+repository or the pipeline definition. Use `secret_ref` for anything that
+must not appear in Git or in run history.
+
+A `secret_ref` variable is resolved and injected as a normal pipeline
+variable, subject to the same `scope`/`repo`/`job` rules as a literal one. It
+is never forwarded to a dispatched GitLab pipeline.
 
 ## Multi-File Pipelines
 
@@ -179,5 +222,6 @@ The parser validates pipeline files at parse time:
 ## Further Reading
 
 - `openspec/specs/pipeline-definition/spec.md` — full specification and test scenarios.
+- `openspec/specs/runtime-secrets/spec.md` — `secret_ref` resolution, injection, and redaction.
 - `internal/parser/hcl_parser.go` — parser implementation.
 - `ci/pipeline.tf` — example pipeline used by the project itself.

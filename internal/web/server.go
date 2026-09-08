@@ -221,6 +221,30 @@ func (s *Server) credentialResolver() domain.CredentialResolver {
 	return &source.CredentialStoreResolver{Store: s.credentialStore}
 }
 
+// secretResolver returns the domain.CredentialResolver used to resolve a
+// pipeline variable's secret_ref (see runtime-secrets design.md D3). Unlike
+// credentialResolver, it does not go through source.CredentialStoreResolver:
+// that adapter refuses a `secret` credential (D4, for Git source
+// acquisition), which is exactly the type BuildVarStore needs to resolve.
+// BuildVarStore performs its own type check the other way - requiring
+// Type == "secret" - so no Git credential can be injected as a variable.
+func (s *Server) secretResolver() domain.CredentialResolver {
+	if s.credentialStore == nil {
+		return nil
+	}
+	return secretCredentialResolver{store: s.credentialStore}
+}
+
+// secretCredentialResolver adapts domain.CredentialStore directly to
+// domain.CredentialResolver, with no credential-type gate of its own.
+type secretCredentialResolver struct {
+	store domain.CredentialStore
+}
+
+func (r secretCredentialResolver) Resolve(ctx context.Context, ref string) (domain.Credential, error) {
+	return r.store.ResolveCredential(ctx, ref)
+}
+
 // NewServerE creates a server and returns persistence initialization errors
 // before any HTTP listener is started.
 func NewServerE(cfg Config) (*Server, error) {
@@ -244,6 +268,7 @@ func NewServerE(cfg Config) (*Server, error) {
 	}
 	if credentials, ok := projectStore.(domain.CredentialStore); ok {
 		s.credentialStore = credentials
+		s.projectService.SetCredentialLookup(credentials.GetCredentialMetadata)
 	}
 	if users, ok := projectStore.(domain.UserStore); ok {
 		s.userStore = users

@@ -36,9 +36,13 @@ type Task struct {
 
 // Variable is a pipeline variable with optional repository/job scope.
 type Variable struct {
-	Key       string `hcl:"key,label" json:"key"`
-	Value     string `hcl:"value,optional" json:"value,omitempty"`
-	Default   string `hcl:"default,optional" json:"default,omitempty"`
+	Key     string `hcl:"key,label" json:"key"`
+	Value   string `hcl:"value,optional" json:"value,omitempty"`
+	Default string `hcl:"default,optional" json:"default,omitempty"`
+	// SecretRef names a `secret` credential to resolve at run start and
+	// inject as this variable's value; see runtime-secrets. Mutually
+	// exclusive with Value and Default, and always masked.
+	SecretRef string `hcl:"secret_ref,optional" json:"secret_ref,omitempty"`
 	Scope     string `hcl:"scope,optional" json:"scope,omitempty"`
 	Repo      string `hcl:"repo,optional" json:"repo,omitempty"`
 	Job       string `hcl:"job,optional" json:"job,omitempty"`

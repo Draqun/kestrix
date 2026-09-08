@@ -76,6 +76,9 @@ function ProjectDialogFields() {
 }
 
 test('inline creation preserves project fields, selects metadata, and submits only its reference', async () => {
+  // Two selects, two typed fields, and a submit: on a loaded CI runner this
+  // sequence of real userEvent interactions can exceed vitest's default
+  // 5000ms test timeout.
   const user = userEvent.setup();
   render(
     <MemoryRouter>
@@ -106,7 +109,7 @@ test('inline creation preserves project fields, selects metadata, and submits on
   assert.equal('token' in submitted, false);
   assert.equal('password' in submitted, false);
   assert.equal('private_key' in submitted, false);
-});
+}, 20000);
 
 // TestCredentialSelectField hides secrets pins runtime-secrets spec.md
 // "Selector hides secrets": a `secret` credential is not offered while Git

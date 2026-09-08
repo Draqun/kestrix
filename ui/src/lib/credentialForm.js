@@ -2,6 +2,7 @@ export const CREDENTIAL_TYPES = Object.freeze([
   { value: 'token', label: 'HTTPS token' },
   { value: 'basic', label: 'Username / app password' },
   { value: 'ssh', label: 'SSH private key' },
+  { value: 'secret', label: 'Runtime secret' },
 ]);
 
 const validTypes = new Set(CREDENTIAL_TYPES.map(item => item.value));
@@ -110,6 +111,19 @@ export const TYPE_CREDENTIAL_FIELDS = Object.freeze({
       tooltip: 'Paste known_hosts entries to pin and strictly verify the Git server key. When omitted, Kestrix uses StrictHostKeyChecking=accept-new (trust on first use), which accepts the first key and rejects a later changed key.',
     }),
   ]),
+  secret: Object.freeze([
+    Object.freeze({
+      key: 'value',
+      label: 'Value',
+      replacementLabel: 'Replacement value',
+      infoLabel: 'Value',
+      required: true,
+      multiline: true,
+      minRows: 3,
+      helperText: 'Required. Injected into tasks as a pipeline variable; this is not a Git credential.',
+      tooltip: 'Kestrix encrypts this value at rest and never returns it through read APIs. A pipeline references it by name with secret_ref and Kestrix injects the decrypted value into a task as a pipeline variable when a run starts - it is never used to authenticate Git.',
+    }),
+  ]),
 });
 
 export function normalizeCredentialType(value) {
@@ -137,6 +151,7 @@ export function credentialFormDefaults(metadata = {}) {
     token: '',
     private_key: '',
     known_hosts: '',
+    value: '',
   };
 }
 
@@ -149,6 +164,7 @@ export function changeCredentialType(form, nextType) {
     token: '',
     private_key: '',
     known_hosts: '',
+    value: '',
   };
 }
 
@@ -166,6 +182,8 @@ export function credentialPayload(form) {
   } else if (type === 'ssh') {
     payload.private_key = form.private_key || '';
     payload.known_hosts = form.known_hosts || '';
+  } else if (type === 'secret') {
+    payload.value = form.value || '';
   } else {
     if (form.username) payload.username = form.username;
     payload.token = form.token || '';
@@ -175,7 +193,7 @@ export function credentialPayload(form) {
 
 export function redactCredentialError(message, form = {}) {
   let redacted = String(message || 'Credential operation failed');
-  for (const key of ['token', 'password', 'private_key']) {
+  for (const key of ['token', 'password', 'private_key', 'value']) {
     const secret = form?.[key];
     if (secret) redacted = redacted.replaceAll(secret, '[REDACTED]');
   }

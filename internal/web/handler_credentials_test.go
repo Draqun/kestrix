@@ -21,15 +21,25 @@ type fakeCredentialStore struct {
 	secret                                  string
 	err                                     error
 	createErr, rotateErr, getErr, revokeErr error
+	// resolveResult and resolveErr control ResolveCredential, so tests can
+	// simulate a runtime-secrets resolution (including a rotated value
+	// returned by a later call) without a real credential store.
+	resolveResult domain.Credential
+	resolveErr    error
 }
 
 func (f *fakeCredentialStore) CreateCredential(input domain.CredentialInput) (domain.CredentialMetadata, error) {
 	if f.createErr != nil {
 		return domain.CredentialMetadata{}, f.createErr
 	}
-	m := domain.CredentialMetadata{Ref: "cred_test", Name: input.Name, Type: input.Type, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	normalized, err := credentials.Normalize("cred_test", input)
+	if err != nil {
+		return domain.CredentialMetadata{}, err
+	}
+	m := normalized.Metadata
+	m.CreatedAt, m.UpdatedAt = time.Now(), time.Now()
 	f.items[m.Ref] = m
-	f.secret = input.Token + input.Password
+	f.secret = input.Token + input.Password + input.Value
 	return m, nil
 }
 func (f *fakeCredentialStore) RotateCredential(ref string, input domain.CredentialInput) (domain.CredentialMetadata, error) {
@@ -64,7 +74,10 @@ func (f *fakeCredentialStore) RevokeCredential(ref string) error {
 	return nil
 }
 func (f *fakeCredentialStore) ResolveCredential(context.Context, string) (domain.Credential, error) {
-	return domain.Credential{}, nil
+	if f.resolveErr != nil {
+		return domain.Credential{}, f.resolveErr
+	}
+	return f.resolveResult, nil
 }
 
 func credentialRequest(method, path, body string) *http.Request {
@@ -177,6 +190,44 @@ func TestCredentialCreateResponseIsMetadataOnly(t *testing.T) {
 	var metadata domain.CredentialMetadata
 	if err := json.Unmarshal(w.Body.Bytes(), &metadata); err != nil || metadata.Ref == "" {
 		t.Fatalf("metadata=%+v err=%v", metadata, err)
+	}
+}
+
+// TestCreateSecretCredential_RoleAndValidation pins runtime-secrets spec.md
+// "Non-administrator is refused" and "Empty value is rejected": an operator
+// is refused before a `secret` credential is created, an admin can create
+// one, and an empty value is rejected with no value echoed in the response.
+func TestCreateSecretCredential_RoleAndValidation(t *testing.T) {
+	srv := NewServer(Config{})
+	srv.credentialStore = &fakeCredentialStore{items: map[string]domain.CredentialMetadata{}}
+	admin := authToken(t, srv, domain.RoleAdmin)
+	operator := authToken(t, srv, domain.RoleOperator)
+
+	req := httptest.NewRequest("POST", "/api/credentials", strings.NewReader(`{"name":"Deploy","type":"secret","value":"opaque-value"}`))
+	req.Header.Set("Authorization", operator)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("operator status = %d, want 403", w.Code)
+	}
+
+	req = httptest.NewRequest("POST", "/api/credentials", strings.NewReader(`{"name":"Deploy","type":"secret","value":"opaque-value"}`))
+	req.Header.Set("Authorization", admin)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("admin status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("POST", "/api/credentials", strings.NewReader(`{"name":"Deploy","type":"secret","value":""}`))
+	req.Header.Set("Authorization", admin)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty value status = %d, want 400", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "opaque-value") {
+		t.Fatalf("response echoed a value: %s", w.Body.String())
 	}
 }
 
