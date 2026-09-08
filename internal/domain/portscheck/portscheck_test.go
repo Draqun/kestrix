@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"kestrix/internal/auth"
 	"kestrix/internal/domain"
 	"kestrix/internal/runner"
 	"kestrix/internal/store"
@@ -52,4 +53,8 @@ func TestCompileTime_UserStore_PGStore(t *testing.T) {
 
 func TestCompileTime_GrantStore_PGStore(t *testing.T) {
 	var _ domain.GrantStore = (*store.PGStore)(nil)
+}
+
+func TestCompileTime_IdentityCache_InMemoryIdentityCache(t *testing.T) {
+	var _ domain.IdentityCache = (*auth.InMemoryIdentityCache)(nil)
 }

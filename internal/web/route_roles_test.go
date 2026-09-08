@@ -109,7 +109,8 @@ func TestRouteRoles_ProjectGrantDoesNotAuthorizeAccountRoutes(t *testing.T) {
 	const collidingName = "shared-name"
 	srv.grantStore.(*mocks.MockGrantStore).Grants[[2]string{"caller", collidingName}] = domain.RoleAdmin
 
-	token, _, err := srv.tokenIssuer.Issue(domain.User{Name: "caller", Role: domain.RoleViewer})
+	user := ensureTestUser(t, srv, "caller", domain.RoleViewer)
+	token, _, err := srv.tokenIssuer.Issue(user)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

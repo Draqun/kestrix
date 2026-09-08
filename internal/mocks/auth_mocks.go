@@ -33,7 +33,7 @@ func (m *MockUserStore) CreateUser(name string, role domain.Role, passwordHash s
 		return domain.User{}, fmt.Errorf("%w: %s", store.ErrUserExists, name)
 	}
 	now := time.Now().UTC()
-	u := domain.User{Name: name, Role: role, CreatedAt: now, UpdatedAt: now}
+	u := domain.User{Name: name, Role: role, TokenVersion: 1, CreatedAt: now, UpdatedAt: now}
 	m.Users[name] = domain.UserCredential{User: u, PasswordHash: passwordHash}
 	return u, nil
 }
@@ -82,6 +82,7 @@ func (m *MockUserStore) UpdateUserRole(name string, role domain.Role) error {
 		return fmt.Errorf("%w: %s", store.ErrUserNotFound, name)
 	}
 	uc.Role = role
+	uc.TokenVersion++
 	uc.UpdatedAt = time.Now().UTC()
 	m.Users[name] = uc
 	return nil
@@ -95,6 +96,22 @@ func (m *MockUserStore) UpdateUserPassword(name string, passwordHash string) err
 		return fmt.Errorf("%w: %s", store.ErrUserNotFound, name)
 	}
 	uc.PasswordHash = passwordHash
+	uc.TokenVersion++
+	uc.UpdatedAt = time.Now().UTC()
+	m.Users[name] = uc
+	return nil
+}
+
+// BumpTokenVersion invalidates every token already issued for name without
+// changing its role or password.
+func (m *MockUserStore) BumpTokenVersion(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	uc, ok := m.Users[name]
+	if !ok {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, name)
+	}
+	uc.TokenVersion++
 	uc.UpdatedAt = time.Now().UTC()
 	m.Users[name] = uc
 	return nil

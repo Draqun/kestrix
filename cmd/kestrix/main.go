@@ -259,13 +259,18 @@ func cmdServe(args []string) {
 
 	// Convert to web.Config.
 	webCfg := web.Config{
-		ListenAddr:        cfg.ListenAddr,
-		PipelineDir:       cfg.Pipeline.Dir,
-		StaticDir:         *staticDir,
-		DatabaseURL:       *dbURL,
-		MasterKeyPath:     env.MasterKeyPath,
-		JWTSigningKeyPath: env.JWTSigningKeyPath,
-		Branch:            cfg.Branch,
+		ListenAddr:            cfg.ListenAddr,
+		PipelineDir:           cfg.Pipeline.Dir,
+		StaticDir:             *staticDir,
+		DatabaseURL:           *dbURL,
+		MasterKeyPath:         env.MasterKeyPath,
+		JWTSigningKeyPath:     env.JWTSigningKeyPath,
+		IdentityCacheTTL:      env.IdentityCacheTTL,
+		LoginMaxAttempts:      env.LoginMaxAttempts,
+		LoginWindow:           env.LoginWindow,
+		TrustProxyHeader:      env.TrustProxyHeader,
+		ContentSecurityPolicy: env.ContentSecurityPolicy,
+		Branch:                cfg.Branch,
 		SourceCache: web.SourceCacheConfig{
 			Directory: cfg.SourceCache.Directory,
 			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),

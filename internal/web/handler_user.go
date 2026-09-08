@@ -113,6 +113,11 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A request naming this account (a valid or forged bearer token) may
+	// have cached a negative identity result before it existed; without
+	// this, the new account would be rejected as unknown until that cache
+	// entry expires. See resolveIdentity in middleware.go.
+	s.invalidateIdentity(u.Name)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(s.userViewFor(u))
@@ -156,6 +161,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.invalidateIdentity(name)
 	u, err := userStore.GetUser(name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -263,5 +269,6 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.invalidateIdentity(name)
 	w.WriteHeader(http.StatusNoContent)
 }

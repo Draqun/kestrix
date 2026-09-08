@@ -42,6 +42,75 @@ func TestJWTIssuer_IssueAndVerify(t *testing.T) {
 	}
 }
 
+func TestJWTIssuer_IssueAndVerify_RoundTripsTokenVersion(t *testing.T) {
+	issuer := JWTIssuer{Key: fixedKey}
+	user := domain.User{Name: "alice", Role: domain.RoleOperator, TokenVersion: 7}
+
+	token, _, err := issuer.Issue(user)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	claims, err := issuer.Verify(token)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.TokenVersion != 7 {
+		t.Fatalf("claims.TokenVersion = %d, want 7", claims.TokenVersion)
+	}
+}
+
+func TestJWTIssuer_Verify_RejectsTokenWithNoVersionClaim(t *testing.T) {
+	key, _ := fixedKey()
+	// Built without a ver field at all, distinct from a token that carries
+	// ver: 0 - jwt.MapClaims omits an unset key rather than defaulting it.
+	claims := jwt.MapClaims{
+		"sub":  "legacy-user",
+		"role": string(domain.RoleViewer),
+		"iat":  jwt.NewNumericDate(time.Now()),
+		"exp":  jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	issuer := JWTIssuer{Key: fixedKey}
+	if _, err := issuer.Verify(signed); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("Verify(no ver claim) error = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestJWTIssuer_Verify_AcceptsExplicitZeroVersion(t *testing.T) {
+	// ver: 0 is a present-but-zero claim, distinct from an absent one, and
+	// must decode to TokenVersion 0 rather than being treated as missing.
+	key, _ := fixedKey()
+	zero := 0
+	claims := jwtClaims{
+		Role: domain.RoleViewer,
+		Ver:  &zero,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "zero-version-user",
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	issuer := JWTIssuer{Key: fixedKey}
+	got, err := issuer.Verify(signed)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.TokenVersion != 0 {
+		t.Fatalf("claims.TokenVersion = %d, want 0 (present, not absent)", got.TokenVersion)
+	}
+}
+
 func TestJWTIssuer_Verify_Expired(t *testing.T) {
 	key, _ := fixedKey()
 	claims := jwtClaims{

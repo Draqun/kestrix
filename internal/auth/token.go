@@ -22,9 +22,13 @@ const TokenTTL = time.Hour
 var ErrInvalidToken = errors.New("auth: invalid or expired token")
 
 // jwtClaims is the on-the-wire claim set. Role travels as a private claim
-// alongside the registered subject and expiry.
+// for the interface's display use only - see design.md D1: authorization
+// decisions use the stored role, never this one. Ver is a pointer so an
+// absent claim (an older or malformed token) is distinguishable from the
+// zero value; see AbsentTokenVersion.
 type jwtClaims struct {
 	Role domain.Role `json:"role"`
+	Ver  *int        `json:"ver,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -39,7 +43,8 @@ type JWTIssuer struct {
 
 var _ domain.TokenIssuer = JWTIssuer{}
 
-// Issue signs a token carrying user.Name and user.Role, valid for TokenTTL.
+// Issue signs a token carrying user.Name, user.Role, and user.TokenVersion,
+// valid for TokenTTL.
 func (j JWTIssuer) Issue(user domain.User) (string, time.Time, error) {
 	key, err := j.Key()
 	if err != nil {
@@ -47,8 +52,10 @@ func (j JWTIssuer) Issue(user domain.User) (string, time.Time, error) {
 	}
 	now := time.Now()
 	expiresAt := now.Add(TokenTTL)
+	ver := user.TokenVersion
 	claims := jwtClaims{
 		Role: user.Role,
+		Ver:  &ver,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.Name,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -66,7 +73,11 @@ func (j JWTIssuer) Issue(user domain.User) (string, time.Time, error) {
 // Verify parses and validates tokenString, requiring HS256 as the signing
 // algorithm - an "alg" of "none" or any asymmetric algorithm is refused
 // before any claim is read, closing the classic algorithm-confusion attack.
-// A verification, algorithm, or expiry failure returns ErrInvalidToken.
+// A verification, algorithm, or expiry failure returns ErrInvalidToken. A
+// token that carries no ver claim is rejected here, since that check needs
+// no store lookup; a ver claim that does not match the account's current
+// stored version is rejected by RequireAuth, which is the layer that has
+// that value - see design.md D2.
 func (j JWTIssuer) Verify(tokenString string) (domain.Claims, error) {
 	key, err := j.Key()
 	if err != nil {
@@ -79,9 +90,13 @@ func (j JWTIssuer) Verify(tokenString string) (domain.Claims, error) {
 	if err != nil {
 		return domain.Claims{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}
+	if claims.Ver == nil {
+		return domain.Claims{}, fmt.Errorf("%w: missing token version", ErrInvalidToken)
+	}
 	return domain.Claims{
-		UserName:  claims.Subject,
-		Role:      claims.Role,
-		ExpiresAt: claims.ExpiresAt.Time,
+		UserName:     claims.Subject,
+		Role:         claims.Role,
+		TokenVersion: *claims.Ver,
+		ExpiresAt:    claims.ExpiresAt.Time,
 	}, nil
 }

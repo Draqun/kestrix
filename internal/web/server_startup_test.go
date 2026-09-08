@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
@@ -198,6 +199,52 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 	if server.webhookService == nil {
 		t.Fatal("webhook service was not wired")
+	}
+}
+
+func TestNewServerEWiresLoginThrottleWhenConfigured(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+		LoginMaxAttempts:  5,
+		LoginWindow:       time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+	if server.loginThrottle == nil {
+		t.Fatal("loginThrottle was not wired despite LoginMaxAttempts/LoginWindow being configured")
+	}
+}
+
+func TestNewServerELeavesLoginThrottleNilWhenUnconfigured(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+	})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+	if server.loginThrottle != nil {
+		t.Fatal("loginThrottle was wired despite LoginMaxAttempts/LoginWindow being unset")
 	}
 }
 

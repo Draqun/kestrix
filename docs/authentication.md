@@ -55,6 +55,69 @@ curl -X PUT http://localhost:8080/api/users/alice/grants \
 The request replaces the account's full grant set: a project omitted from the
 list loses its grant.
 
+## Revocation
+
+Every request re-checks the caller's account against the database, not
+against the token: the token proves identity, but the database is the
+authority on what that account may currently do. A changed role, a changed
+password, or a deleted account therefore takes effect immediately for the
+process that made the change, and within `KESTRIX_IDENTITY_CACHE_TTL`
+(default `5s`) for every other Kestrix process - `0` disables the cache
+entirely, so every request resolves fresh. That bound is the revocation
+latency: worst case, how long a session can act on since-revoked access
+before Kestrix notices.
+
+A role change or a password change also invalidates every token issued
+before it (its stored token version moves), so the account authenticates
+again to get a token usable at all - a lowered role does not quietly limit
+what an old token can do, it stops the old token from working. Deleting an
+account has the same effect for the same reason: the account no longer
+resolves.
+
+## Failure behavior
+
+An authorization decision that cannot read the account or grant it needs
+fails closed: Kestrix answers `503`, not a silently reduced role and not
+`403`. A grant-store or user-store outage is therefore visible immediately as
+`503` responses across the API, distinct from `401` (bad or absent
+credentials) and `403` (a real, successful permission check that came out
+too low). If you see `503` from an authenticated route, treat it as a
+database-reachability incident, not a permissions problem - check the
+database connection before checking any account's role or grants.
+
+## Login throttling
+
+`POST /api/auth/login` limits failed attempts per account name and per
+client address independently: `KESTRIX_LOGIN_MAX_ATTEMPTS` (default `10`)
+failures within `KESTRIX_LOGIN_WINDOW` (default `1m`) trip a `429` with a
+`Retry-After` header, and a throttled attempt never runs password
+verification. An unknown account name is throttled exactly like a real one,
+so the response never discloses which accounts exist. A successful login
+clears that account's own counter; a client address's counter is unaffected
+by any one account's success, since other accounts may still be under attack
+from it.
+
+The throttle is per Kestrix process, not shared across replicas - running
+more than one API process behind a load balancer multiplies the effective
+limit by the replica count. `KESTRIX_TRUST_PROXY_HEADER` (default `false`)
+controls whether the client-address key comes from the connection's peer
+address or from the first hop of `X-Forwarded-For`; enable it only behind a
+reverse proxy that sets that header itself; leaving it on elsewhere lets any
+client forge its own throttle key.
+
+## Security response headers
+
+Every response carries `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and a
+`Content-Security-Policy` tuned for the bundled UI (same-origin scripts and
+styles, no framing). `KESTRIX_CONTENT_SECURITY_POLICY` overrides the policy
+for the application routes if you serve the UI from elsewhere; `/docs/*`
+keeps its own, separately relaxed policy for Swagger UI's inline script
+regardless of that setting. These headers narrow, but do not remove, the
+exposure from keeping the session token in `sessionStorage` rather than an
+`HttpOnly` cookie - see [design.md D8](../openspec/changes/rbac-hardening/design.md)
+for that trade-off.
+
 ## Provisioning the signing key
 
 Kestrix signs tokens with the file named by `KESTRIX_JWT_SIGNING_KEY_PATH` -
@@ -102,3 +165,8 @@ Deploying this version is not backward compatible: `KESTRIX_JWT_SIGNING_KEY_PATH
 must be provisioned before start, and an administrator account must exist
 before the UI or API is usable. See the [Usage guide](usage.md) for the
 Compose key-file mount and the `.env.template` entry.
+
+Deploying rbac-hardening is also breaking on its own: every token issued
+before the upgrade carries no token version and is rejected, so every
+signed-in session must log in again once. Nothing else about an existing
+deployment's accounts, roles, or grants changes.

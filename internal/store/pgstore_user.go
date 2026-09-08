@@ -30,9 +30,9 @@ func (s *PGStore) CreateUser(name string, role domain.Role, passwordHash string)
 	u.Name = name
 	u.Role = role
 	err := s.db.QueryRow(
-		`INSERT INTO users (name, password_hash, role) VALUES ($1, $2, $3) RETURNING created_at, updated_at`,
+		`INSERT INTO users (name, password_hash, role) VALUES ($1, $2, $3) RETURNING token_version, created_at, updated_at`,
 		name, passwordHash, string(role),
-	).Scan(&u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.TokenVersion, &u.CreatedAt, &u.UpdatedAt)
 	if isUniqueViolation(err) {
 		return domain.User{}, fmt.Errorf("%w: %s", ErrUserExists, name)
 	}
@@ -47,8 +47,8 @@ func (s *PGStore) GetUser(name string) (domain.User, error) {
 	var u domain.User
 	var role string
 	err := s.db.QueryRow(
-		`SELECT name, role, created_at, updated_at FROM users WHERE name = $1`, name,
-	).Scan(&u.Name, &role, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT name, role, token_version, created_at, updated_at FROM users WHERE name = $1`, name,
+	).Scan(&u.Name, &role, &u.TokenVersion, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, fmt.Errorf("%w: %s", ErrUserNotFound, name)
 	}
@@ -66,8 +66,8 @@ func (s *PGStore) GetUserCredential(name string) (domain.UserCredential, error) 
 	var uc domain.UserCredential
 	var role string
 	err := s.db.QueryRow(
-		`SELECT name, role, created_at, updated_at, password_hash FROM users WHERE name = $1`, name,
-	).Scan(&uc.Name, &role, &uc.CreatedAt, &uc.UpdatedAt, &uc.PasswordHash)
+		`SELECT name, role, token_version, created_at, updated_at, password_hash FROM users WHERE name = $1`, name,
+	).Scan(&uc.Name, &role, &uc.TokenVersion, &uc.CreatedAt, &uc.UpdatedAt, &uc.PasswordHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.UserCredential{}, fmt.Errorf("%w: %s", ErrUserNotFound, name)
 	}
@@ -80,7 +80,7 @@ func (s *PGStore) GetUserCredential(name string) (domain.UserCredential, error) 
 
 // ListUsers returns every account without password hashes, ordered by name.
 func (s *PGStore) ListUsers() ([]domain.User, error) {
-	rows, err := s.db.Query(`SELECT name, role, created_at, updated_at FROM users ORDER BY name`)
+	rows, err := s.db.Query(`SELECT name, role, token_version, created_at, updated_at FROM users ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -89,7 +89,7 @@ func (s *PGStore) ListUsers() ([]domain.User, error) {
 	for rows.Next() {
 		var u domain.User
 		var role string
-		if err := rows.Scan(&u.Name, &role, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.Name, &role, &u.TokenVersion, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.Role = domain.Role(role)
@@ -98,20 +98,42 @@ func (s *PGStore) ListUsers() ([]domain.User, error) {
 	return result, rows.Err()
 }
 
-// UpdateUserRole changes an account's global role.
+// UpdateUserRole changes an account's global role and bumps its token
+// version in the same statement, so a token issued before the change stops
+// verifying on its next use; see domain.UserStore.
 func (s *PGStore) UpdateUserRole(name string, role domain.Role) error {
-	result, err := s.db.Exec(`UPDATE users SET role = $2, updated_at = now() WHERE name = $1`, name, string(role))
+	result, err := s.db.Exec(
+		`UPDATE users SET role = $2, token_version = token_version + 1, updated_at = now() WHERE name = $1`,
+		name, string(role),
+	)
 	if err != nil {
 		return fmt.Errorf("update user role: %w", err)
 	}
 	return requireRowAffected(result, ErrUserNotFound, name)
 }
 
-// UpdateUserPassword replaces an account's stored password hash.
+// UpdateUserPassword replaces an account's stored password hash and bumps
+// its token version in the same statement, ending any session issued before
+// the change.
 func (s *PGStore) UpdateUserPassword(name string, passwordHash string) error {
-	result, err := s.db.Exec(`UPDATE users SET password_hash = $2, updated_at = now() WHERE name = $1`, name, passwordHash)
+	result, err := s.db.Exec(
+		`UPDATE users SET password_hash = $2, token_version = token_version + 1, updated_at = now() WHERE name = $1`,
+		name, passwordHash,
+	)
 	if err != nil {
 		return fmt.Errorf("update user password: %w", err)
+	}
+	return requireRowAffected(result, ErrUserNotFound, name)
+}
+
+// BumpTokenVersion invalidates every token already issued for name without
+// changing its role or password.
+func (s *PGStore) BumpTokenVersion(name string) error {
+	result, err := s.db.Exec(
+		`UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE name = $1`, name,
+	)
+	if err != nil {
+		return fmt.Errorf("bump user token version: %w", err)
 	}
 	return requireRowAffected(result, ErrUserNotFound, name)
 }

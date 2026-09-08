@@ -49,6 +49,121 @@ func TestLoadEnvironmentAllowsEmptyJWTSigningKeyPathForStartupValidation(t *test
 	}
 }
 
+func TestLoadEnvironmentIdentityCacheTTLDefault(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.IdentityCacheTTL != 5*time.Second {
+		t.Fatalf("IdentityCacheTTL = %v, want 5s default", env.IdentityCacheTTL)
+	}
+}
+
+func TestLoadEnvironmentIdentityCacheTTLExplicitValue(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_IDENTITY_CACHE_TTL=30s"})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.IdentityCacheTTL != 30*time.Second {
+		t.Fatalf("IdentityCacheTTL = %v, want 30s", env.IdentityCacheTTL)
+	}
+}
+
+func TestLoadEnvironmentIdentityCacheTTLZeroDisablesCache(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_IDENTITY_CACHE_TTL=0s"})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.IdentityCacheTTL != 0 {
+		t.Fatalf("IdentityCacheTTL = %v, want 0 (explicit disable)", env.IdentityCacheTTL)
+	}
+}
+
+func TestLoadEnvironmentIdentityCacheTTLRejectsNegative(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_IDENTITY_CACHE_TTL=-5s"})
+	if err := env.ValidationError(); err == nil {
+		t.Fatal("ValidationError() = nil, want error for a negative TTL")
+	}
+}
+
+func TestLoadEnvironmentLoginThrottleDefaults(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.LoginMaxAttempts != 10 {
+		t.Fatalf("LoginMaxAttempts = %d, want 10 default", env.LoginMaxAttempts)
+	}
+	if env.LoginWindow != time.Minute {
+		t.Fatalf("LoginWindow = %v, want 1m default", env.LoginWindow)
+	}
+	if env.TrustProxyHeader {
+		t.Fatal("TrustProxyHeader = true, want false default")
+	}
+}
+
+func TestLoadEnvironmentLoginThrottleExplicitValues(t *testing.T) {
+	env := LoadEnvironment([]string{
+		"KESTRIX_LOGIN_MAX_ATTEMPTS=3",
+		"KESTRIX_LOGIN_WINDOW=30s",
+		"KESTRIX_TRUST_PROXY_HEADER=true",
+	})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.LoginMaxAttempts != 3 {
+		t.Fatalf("LoginMaxAttempts = %d, want 3", env.LoginMaxAttempts)
+	}
+	if env.LoginWindow != 30*time.Second {
+		t.Fatalf("LoginWindow = %v, want 30s", env.LoginWindow)
+	}
+	if !env.TrustProxyHeader {
+		t.Fatal("TrustProxyHeader = false, want true")
+	}
+}
+
+func TestLoadEnvironmentLoginMaxAttemptsRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_LOGIN_MAX_ATTEMPTS=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_LOGIN_MAX_ATTEMPTS=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentLoginWindowRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0s", "-5s", "not-a-duration"} {
+		env := LoadEnvironment([]string{"KESTRIX_LOGIN_WINDOW=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_LOGIN_WINDOW=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentTrustProxyHeaderRejectsNonBoolean(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_TRUST_PROXY_HEADER=maybe"})
+	if err := env.ValidationError(); err == nil {
+		t.Fatal("ValidationError() = nil, want error for a non-boolean value")
+	}
+}
+
+func TestLoadEnvironmentContentSecurityPolicyDefaultsEmpty(t *testing.T) {
+	// Environment carries the raw operator value only; internal/web applies
+	// the bundled-UI default when this is empty - see design.md D8.
+	env := LoadEnvironment(nil)
+	if env.ContentSecurityPolicy != "" {
+		t.Fatalf("ContentSecurityPolicy = %q, want empty (default resolved downstream)", env.ContentSecurityPolicy)
+	}
+}
+
+func TestLoadEnvironmentContentSecurityPolicyExplicitValueReplacesDefault(t *testing.T) {
+	const custom = "default-src 'none'"
+	env := LoadEnvironment([]string{"KESTRIX_CONTENT_SECURITY_POLICY=" + custom})
+	if env.ContentSecurityPolicy != custom {
+		t.Fatalf("ContentSecurityPolicy = %q, want %q", env.ContentSecurityPolicy, custom)
+	}
+}
+
 func TestLoadEnvironmentParsesTypedSourceCacheSettings(t *testing.T) {
 	env := LoadEnvironment([]string{
 		"KESTRIX_SOURCE_CACHE_DIR=/var/cache/kestrix",
