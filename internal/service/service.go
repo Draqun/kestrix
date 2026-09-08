@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -44,29 +45,94 @@ func validateProject(cfg *domain.ProjectConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("%w: project name is required", ErrValidation)
 	}
-	url := strings.TrimSpace(cfg.RepoURL)
+	raw := strings.TrimSpace(cfg.RepoURL)
 	ref := strings.TrimSpace(cfg.RepoRef)
-	if url == "" {
+	if raw == "" {
 		return fmt.Errorf("%w: repo_url is required", ErrValidation)
 	}
 	if ref == "" {
 		return fmt.Errorf("%w: repo_ref is required", ErrValidation)
 	}
-	parsed, parseErr := urlpkg(url)
-	if parseErr != nil && url != "" {
+	return validateRepoURL(raw)
+}
+
+// validateRepoURL accepts only an https:// URL, an ssh:// URL, or an
+// scp-like [user@]host:path address, and rejects a host that is a literal
+// loopback, link-local, or unspecified address. See
+// webhook-ingress-hardening design.md D6. The checks are syntactic only -
+// no DNS resolution and no network access.
+func validateRepoURL(raw string) error {
+	if host, _, ok := splitSCPLikeAddress(raw); ok {
+		if isDisallowedRepoHost(host) {
+			return fmt.Errorf("%w: repo_url host is not allowed", ErrValidation)
+		}
+		return nil
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
 		return fmt.Errorf("%w: repo_url is invalid", ErrValidation)
 	}
-	if parsed != nil && parsed.User != nil {
+	switch parsed.Scheme {
+	case "https", "ssh":
+	default:
+		return fmt.Errorf("%w: repo_url scheme is not allowed", ErrValidation)
+	}
+	if parsed.User != nil {
 		_, hasPassword := parsed.User.Password()
 		if parsed.Scheme != "ssh" || hasPassword {
 			return fmt.Errorf("%w: repo_url must not contain embedded credentials", ErrValidation)
 		}
 	}
+	if isDisallowedRepoHost(parsed.Hostname()) {
+		return fmt.Errorf("%w: repo_url host is not allowed", ErrValidation)
+	}
 	return nil
 }
 
-func urlpkg(raw string) (*url.URL, error) {
-	return url.Parse(raw)
+// splitSCPLikeAddress recognizes the scp-like "[user@]host:path" form: no
+// "://" anywhere, and the first ":" precedes any "/". A double colon (as in
+// the "ext::" transport helper) is rejected by requiring a non-empty path
+// that does not itself start with ":".
+func splitSCPLikeAddress(raw string) (host, path string, ok bool) {
+	if strings.Contains(raw, "://") {
+		return "", "", false
+	}
+	firstColon := strings.Index(raw, ":")
+	if firstColon < 0 {
+		return "", "", false
+	}
+	if firstSlash := strings.Index(raw, "/"); firstSlash >= 0 && firstColon > firstSlash {
+		return "", "", false
+	}
+	rest := raw
+	if at := strings.Index(raw[:firstColon], "@"); at >= 0 {
+		rest = raw[at+1:]
+	}
+	// rest still contains raw's first colon (any "@" found above precedes
+	// it), so this always finds one.
+	colonIdx := strings.Index(rest, ":")
+	host = rest[:colonIdx]
+	path = rest[colonIdx+1:]
+	if host == "" || path == "" || strings.HasPrefix(path, ":") {
+		return "", "", false
+	}
+	return host, path, true
+}
+
+// isDisallowedRepoHost reports whether host is a literal loopback,
+// link-local, or unspecified address, or the name "localhost". A hostname
+// that is none of those is allowed without resolving it - see D6.
+func isDisallowedRepoHost(host string) bool {
+	h := strings.Trim(host, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(h)
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsUnspecified()
 }
 
 // NewProjectService creates a ProjectService backed by the given store.
@@ -128,6 +194,12 @@ func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig,
 	}
 	if cfg.PipelineDir == "" {
 		cfg.PipelineDir = "ci"
+	}
+	// An update whose webhook_secret is absent or empty keeps the stored
+	// secret unchanged; rotation requires a non-empty value. See
+	// webhook-ingress-hardening design.md D4.
+	if cfg.WebhookSecret == "" {
+		cfg.WebhookSecret = existing.WebhookSecret
 	}
 	if err := validateProject(cfg); err != nil {
 		return err

@@ -25,17 +25,40 @@ import (
 
 var absPath = filepath.Abs
 
-func decodeProjectConfig(body io.Reader, cfg *domain.ProjectConfig) error {
-	data, err := io.ReadAll(body)
+// decodeProjectConfig reads and decodes r's body into cfg, answering 413 when
+// the body exceeded the route's configured bound (see maxBody) and 400 on any
+// other read or parse failure. It reports whether decoding succeeded; on
+// false the caller must return without running its business logic - the
+// response has already been written.
+func decodeProjectConfig(w http.ResponseWriter, r *http.Request, cfg *domain.ProjectConfig) bool {
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		return err
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(cfg); err != nil {
-		return err
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return false
 	}
-	return nil
+	return true
+}
+
+// publicProject returns a copy of cfg fit for the wire: WebhookSecret
+// blanked and HasWebhookSecret set to whether a secret is stored. Every
+// project encode site (create, list, detail, update) MUST go through this -
+// see design.md D4.
+func publicProject(cfg *domain.ProjectConfig) domain.ProjectConfig {
+	pub := *cfg
+	pub.HasWebhookSecret = cfg.WebhookSecret != ""
+	pub.WebhookSecret = ""
+	return pub
 }
 
 // ─── Project Handlers (use PostgreSQL) ─────────────────────────
@@ -78,9 +101,13 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		end = total
 	}
 	paged := list[start:end]
+	items := make([]domain.ProjectConfig, len(paged))
+	for i, p := range paged {
+		items[i] = publicProject(p)
+	}
 	next, prev := pagination.Links(offset, limit, total, "/api/projects")
 	resp := map[string]interface{}{
-		"items":      paged,
+		"items":      items,
 		"pagination": pagination.Meta{Total: total, Limit: limit, Offset: offset, Next: next, Prev: prev},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -97,8 +124,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 // @Router /api/projects [post]
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProjectConfig
-	if err := decodeProjectConfig(r.Body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if !decodeProjectConfig(w, r, &req) {
 		return
 	}
 
@@ -115,7 +141,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(req)
+	json.NewEncoder(w).Encode(publicProject(&req))
 }
 
 // handleGetProject godoc
@@ -137,7 +163,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(p)
+	json.NewEncoder(w).Encode(publicProject(p))
 }
 
 // handleUpdateProject godoc
@@ -152,8 +178,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	var update domain.ProjectConfig
-	if err := decodeProjectConfig(r.Body, &update); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if !decodeProjectConfig(w, r, &update) {
 		return
 	}
 	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) error {
@@ -175,7 +200,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(update)
+	json.NewEncoder(w).Encode(publicProject(&update))
 }
 
 // handleDeleteProject godoc
@@ -354,8 +379,7 @@ func (s *Server) handleResolveProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Changed []string `json:"changed"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	proj, session, err := s.loadProjectPipeline(r.Context(), p, "", "project-resolve")

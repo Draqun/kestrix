@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -51,20 +52,40 @@ func writeWebhookErrorResponse(w http.ResponseWriter, entry domain.WebhookEvent)
 // @Success 200 {object} map[string]interface{}
 // @Router /webhook [post]
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Signature.Enabled && s.cfg.Signature.Secret != "" {
-		token := r.Header.Get("X-Gitlab-Token")
-		if token != s.cfg.Signature.Secret {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-	}
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
 	defer r.Body.Close()
+
+	// ─── Authenticate before anything in the body is trusted ─────
+	// The project ID is probed from the raw body - not the parsed event -
+	// so a per-project secret can be consulted before the payload is
+	// otherwise trusted or fully parsed; see design.md D1.
+	probeID := probeGitLabProjectID(body)
+	var projCfg *domain.ProjectConfig
+	if probeID > 0 && s.projectStore != nil {
+		projCfg, err = s.projectStore.FindByGitLabID(probeID)
+		if err != nil {
+			log.Printf("webhook: store lookup error: %v", err)
+			writeError(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
+	}
+	projectSecret := ""
+	if projCfg != nil {
+		projectSecret = projCfg.WebhookSecret
+	}
+	if !verifyDelivery(s.cfg.Signature.Method, r.Header, body, projectSecret, s.cfg.Signature.Secret) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 
 	event, err := ParseGitLabPushEvent(body)
 	if err != nil {
@@ -83,18 +104,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// ─── Look up project by GitLab project ID ────────────────
 	var proj model.Project
-	var projCfg *domain.ProjectConfig
 	cleanup := func() {}
 	if event.GitLabProjectID > 0 && s.projectStore != nil {
-		projCfg, err = s.projectStore.FindByGitLabID(event.GitLabProjectID)
-		if err != nil {
-			log.Printf("webhook: store lookup error: %v", err)
-			logEntry.Status = domain.WebhookStatusError
-			logEntry.Error = err.Error()
-			s.logWebhook(logEntry)
-			writeWebhookErrorResponse(w, logEntry)
-			return
-		}
 		if projCfg == nil {
 			log.Printf("webhook: unknown project gitlab_id=%d", event.GitLabProjectID)
 			logEntry.Status = domain.WebhookStatusIgnored

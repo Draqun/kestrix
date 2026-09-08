@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,10 +18,17 @@ import (
 	"kestrix/internal/web/pagination"
 )
 
-// postWebhook sends a push payload through the router and returns the recorder.
+// historyWebhookSecret is the global secret historyServer configures, so a
+// delivery through postWebhook verifies (webhook-ingress-hardening fails
+// closed - see design.md D1) without every test in this file wiring its own.
+const historyWebhookSecret = "history-webhook-secret"
+
+// postWebhook sends a push payload through the router, presenting the
+// historyServer global secret, and returns the recorder.
 func postWebhook(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))
+	req.Header.Set("X-Gitlab-Token", historyWebhookSecret)
 	rec := httptest.NewRecorder()
 	srv.router.ServeHTTP(rec, req)
 	return rec
@@ -32,7 +40,7 @@ func historyServer(t *testing.T) (*Server, *mocks.MockWebhookLogSink, string) {
 	if err := os.WriteFile(filepath.Join(dir, "pipeline.tf"), []byte(pipelineWithTaskTF), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: dir})
+	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: dir, Signature: SignatureConfig{Secret: historyWebhookSecret}})
 	return srv, testWebhookLog(t, srv), dir
 }
 
@@ -509,28 +517,125 @@ func TestWebhookErrorResponseKeepsItsShape(t *testing.T) {
 	}
 }
 
-// A store lookup failure takes the other path through the same response.
+// A store lookup failure during project-secret resolution fails closed with
+// 503 and records nothing - see design.md D1/rbac-hardening's fail-closed
+// precedent - rather than the recorded-event response shape, since nothing
+// was recorded.
 func TestWebhookStoreFailureResponseKeepsItsShape(t *testing.T) {
-	srv, _, _ := historyServer(t)
+	srv, log, _ := historyServer(t)
 	srv.projectStore = &mocks.MockProjectStore{FindByGitLabIDErr: errors.New("database unavailable")}
 
 	rec := postWebhook(t, srv, `{"object_kind":"push","ref":"refs/heads/main","checkout_sha":"abc123",
 		"project":{"id":4242,"path_with_namespace":"org/web","default_branch":"main"},
 		"commits":[{"id":"abc123","added":[],"modified":["svc/main.go"],"removed":[]}]}`)
 
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
 	var resp map[string]interface{}
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, ok := resp["timestamp"]; !ok {
-		t.Errorf("response is missing timestamp: %v", resp)
+	// The underlying store error is logged, not disclosed to the caller.
+	if resp["error"] != "service unavailable" {
+		t.Errorf("error = %v, want service unavailable", resp["error"])
 	}
-	if _, ok := resp["received_at"]; ok {
-		t.Errorf("response carries the history field received_at: %v", resp)
+	if len(log.List()) != 0 {
+		t.Errorf("recorded %d events, want 0", len(log.List()))
 	}
-	if resp["error"] != "database unavailable" {
-		t.Errorf("error = %v, want database unavailable", resp["error"])
+}
+
+// TestWebhookUnauthorizedResponsesAreUniform pins design.md D3: an unknown
+// project, a wrong secret, and no secret configured anywhere all answer the
+// same 401 body and status, and none of the three is recorded.
+func TestWebhookUnauthorizedResponsesAreUniform(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.tf"), []byte(pipelineWithTaskTF), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	knownProjectPayload := `{"object_kind":"push","ref":"refs/heads/main","checkout_sha":"abc123",
+		"project":{"id":4242,"path_with_namespace":"org/known","default_branch":"main"},
+		"commits":[{"id":"abc123","added":[],"modified":["svc/main.go"],"removed":[]}]}`
+	unknownProjectPayload := `{"object_kind":"push","ref":"refs/heads/main","checkout_sha":"abc123",
+		"project":{"id":9999,"path_with_namespace":"org/unknown","default_branch":"main"},
+		"commits":[{"id":"abc123","added":[],"modified":["svc/main.go"],"removed":[]}]}`
+
+	newSrv := func(secret string) (*Server, *mocks.MockWebhookLogSink) {
+		srv := NewServer(Config{ListenAddr: ":0", PipelineDir: dir, Signature: SignatureConfig{Secret: secret}})
+		srv.projectStore = &mocks.MockProjectStore{FindByGitLabIDResult: &domain.ProjectConfig{
+			Name: "known", GitLabProjectID: 4242, RepoURL: "https://git.example.test/known.git", RepoRef: "main",
+		}}
+		return srv, testWebhookLog(t, srv)
+	}
+
+	post := func(srv *Server, body string, header string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))
+		if header != "" {
+			req.Header.Set("X-Gitlab-Token", header)
+		}
+		rec := httptest.NewRecorder()
+		srv.router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Unknown project, no global secret configured: no secret verifies.
+	srv, log := newSrv("")
+	unknown := post(srv, unknownProjectPayload, "")
+	if len(log.List()) != 0 {
+		t.Fatalf("unknown project recorded %d events, want 0", len(log.List()))
+	}
+
+	// Known project, wrong secret presented, global secret configured.
+	srv, log = newSrv("global-secret")
+	wrong := post(srv, knownProjectPayload, "not-the-secret")
+	if len(log.List()) != 0 {
+		t.Fatalf("wrong secret recorded %d events, want 0", len(log.List()))
+	}
+
+	// No secret configured anywhere, no header presented.
+	srv, log = newSrv("")
+	none := post(srv, knownProjectPayload, "")
+	if len(log.List()) != 0 {
+		t.Fatalf("no secret configured recorded %d events, want 0", len(log.List()))
+	}
+
+	for _, rec := range []*httptest.ResponseRecorder{unknown, wrong, none} {
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	}
+	if unknown.Body.String() != wrong.Body.String() || wrong.Body.String() != none.Body.String() {
+		t.Fatalf("rejection bodies differ: unknown=%q wrong=%q none=%q", unknown.Body.String(), wrong.Body.String(), none.Body.String())
+	}
+}
+
+// TestWebhookFailedVerificationWinsOverInvalidPayload pins the "Verification
+// precedes parsing" scenario: a delivery that fails verification and whose
+// body is also not a valid GitLab push event answers 401, never 400.
+func TestWebhookFailedVerificationWinsOverInvalidPayload(t *testing.T) {
+	srv, log := historyServerWithSecret(t, "configured-secret")
+	req := httptest.NewRequest("POST", "/webhook", strings.NewReader("not a push event"))
+	req.Header.Set("X-Gitlab-Token", "wrong-secret")
+	rec := httptest.NewRecorder()
+	srv.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (not 400)", rec.Code)
+	}
+	if len(log.List()) != 0 {
+		t.Fatalf("recorded %d events, want 0", len(log.List()))
+	}
+}
+
+// historyServerWithSecret is historyServer with an explicit global secret,
+// for tests that must control what does or does not verify.
+func historyServerWithSecret(t *testing.T, secret string) (*Server, *mocks.MockWebhookLogSink) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.tf"), []byte(pipelineWithTaskTF), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: dir, Signature: SignatureConfig{Secret: secret}})
+	return srv, testWebhookLog(t, srv)
 }
 
 // Without a registered project the pipeline directory still names the project,

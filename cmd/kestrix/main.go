@@ -276,6 +276,11 @@ func cmdServe(args []string) {
 			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),
 			MaxBytes:  cfg.SourceCache.MaxBytes,
 		},
+		HTTPReadTimeout:     env.HTTPReadTimeout,
+		HTTPWriteTimeout:    env.HTTPWriteTimeout,
+		HTTPIdleTimeout:     env.HTTPIdleTimeout,
+		MaxBodyBytes:        env.HTTPMaxBodyBytes,
+		WebhookMaxBodyBytes: env.WebhookMaxBodyBytes,
 		Docker: web.DockerConfig{
 			Registry: cfg.Docker.Registry,
 			Image:    cfg.Docker.Image,
@@ -283,9 +288,8 @@ func cmdServe(args []string) {
 			Password: cfg.Docker.Password,
 		},
 		Signature: web.SignatureConfig{
-			Enabled: cfg.Webhook.Secret != "",
-			Secret:  cfg.Webhook.Secret,
-			Method:  *method,
+			Secret: cfg.Webhook.Secret,
+			Method: *method,
 		},
 		WebhookHistoryLimit: cfg.Webhook.HistoryLimit,
 		Dispatch: web.DispatchConfig{

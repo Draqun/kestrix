@@ -220,13 +220,15 @@ func TestRunListNilAndApprovalBranches(t *testing.T) {
 func TestWebhookUnitBranches(t *testing.T) {
 	store, project := runHandlerProject(t, true)
 	srv := setupRunServer(t, store, nil)
-	srv.cfg.Signature = SignatureConfig{Enabled: true, Secret: "secret"}
-	// Signature and malformed payload errors.
+	srv.cfg.Signature = SignatureConfig{Secret: "secret"}
+	// No secret presented and no project matched: unauthorized.
 	w := httptest.NewRecorder()
 	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(`{}`)))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d", w.Code)
 	}
+	// A delivery that verifies against the global secret but carries a
+	// malformed payload fails parsing, not verification.
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewBufferString("bad"))
 	req.Header.Set("X-Gitlab-Token", "secret")
 	w = httptest.NewRecorder()
@@ -235,25 +237,30 @@ func TestWebhookUnitBranches(t *testing.T) {
 		t.Fatalf("bad payload status=%d", w.Code)
 	}
 
-	// Unknown project is ignored, lookup failures are reported, and a valid
-	// project reaches DAG resolution without any external service.
-	srv.cfg.Signature.Enabled = false
+	// Unknown project verified by the global secret is ignored, a store
+	// lookup failure fails closed with 503, and a valid project reaches DAG
+	// resolution without any external service.
 	payload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"id":"abc","modified":["x.go"]}]}`
+	newWebhookReq := func() *http.Request {
+		r := httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload))
+		r.Header.Set("X-Gitlab-Token", "secret")
+		return r
+	}
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload)))
+	srv.handleWebhook(w, newWebhookReq())
 	if w.Code != http.StatusOK {
 		t.Fatalf("unknown project status=%d", w.Code)
 	}
 	store.FindByGitLabIDErr = errors.New("lookup")
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload)))
-	if w.Code != http.StatusOK {
+	srv.handleWebhook(w, newWebhookReq())
+	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("lookup error status=%d", w.Code)
 	}
 	store.FindByGitLabIDErr = nil
 	store.FindByGitLabIDResult = project
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload)))
+	srv.handleWebhook(w, newWebhookReq())
 	if w.Code != http.StatusOK {
 		t.Fatalf("valid webhook status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -484,17 +491,24 @@ func TestStaticRouterAndStoreFallback(t *testing.T) {
 		t.Fatalf("fake PG stores not returned")
 	}
 
-	oldListen := listenAndServe
-	listenAndServe = func(string, http.Handler) error { return errors.New("listen failed") }
-	t.Cleanup(func() { listenAndServe = oldListen })
+	oldServe := serveHTTP
+	serveHTTP = func(*http.Server) error { return errors.New("listen failed") }
+	t.Cleanup(func() { serveHTTP = oldServe })
 	if err := (&Server{cfg: Config{ListenAddr: ":0"}}).ListenAndServe(); err == nil {
 		t.Fatal("expected listen error")
 	}
 }
 
 func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
+	const wh = "wh-secret"
+	webhookReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/webhook", strings.NewReader(body))
+		r.Header.Set("X-Gitlab-Token", wh)
+		return r
+	}
+
 	// io.ReadAll failure.
-	srv := &Server{cfg: Config{PipelineDir: filepath.Join(t.TempDir(), "missing")}}
+	srv := &Server{cfg: Config{PipelineDir: filepath.Join(t.TempDir(), "missing"), Signature: SignatureConfig{Secret: wh}}}
 	r := httptest.NewRequest("POST", "/webhook", nil)
 	r.Body = failingReader{}
 	w := httptest.NewRecorder()
@@ -506,7 +520,7 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 	// Valid event with an invalid pipeline directory reaches the parse-error path.
 	payload := `{"object_kind":"push","ref":"refs/heads/main","project":{"path_with_namespace":"repo"},"commits":[{"modified":["x.go"]}]}`
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(payload)))
+	srv.handleWebhook(w, webhookReq(payload))
 	if w.Code != http.StatusOK {
 		t.Fatalf("parse error response=%d", w.Code)
 	}
@@ -540,9 +554,9 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer gitlab.Close()
-	srv = &Server{cfg: Config{PipelineDir: pipelineDir, Dispatch: DispatchConfig{Enabled: true, ProjectID: "12", GitLabURL: gitlab.URL}, Branch: "main"}}
+	srv = &Server{cfg: Config{PipelineDir: pipelineDir, Dispatch: DispatchConfig{Enabled: true, ProjectID: "12", GitLabURL: gitlab.URL}, Branch: "main", Signature: SignatureConfig{Secret: wh}}}
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(payload)))
+	srv.handleWebhook(w, webhookReq(payload))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "pipeline") {
 		t.Fatalf("dispatch response=%d body=%s", w.Code, w.Body.String())
 	}
@@ -554,7 +568,7 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 	srv.cfg.Branch = ""
 	projectPayload := `{"object_kind":"push","ref":"refs/heads/main","project":{"id":42,"path_with_namespace":"repo"},"commits":[{"id":"abc","modified":["x.go"]}]}`
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(projectPayload)))
+	srv.handleWebhook(w, webhookReq(projectPayload))
 	if w.Code != http.StatusOK {
 		t.Fatalf("project dispatch status=%d", w.Code)
 	}
@@ -563,7 +577,7 @@ func TestWebhookReadParseAndDispatchBranches(t *testing.T) {
 	defer failing.Close()
 	srv.cfg.Dispatch.GitLabURL = failing.URL
 	w = httptest.NewRecorder()
-	srv.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(payload)))
+	srv.handleWebhook(w, webhookReq(payload))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "dispatched") {
 		t.Fatalf("dispatch failure response=%d body=%s", w.Code, w.Body.String())
 	}

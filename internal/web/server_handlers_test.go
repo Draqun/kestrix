@@ -235,15 +235,19 @@ func TestHandleWebhook_UnknownProject(t *testing.T) {
 		findResult:       nil,
 	}
 	srv := &Server{
-		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir},
+		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir, Signature: SignatureConfig{Secret: "secret"}},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
 	}
 
+	// An unknown project is only ignored (not 401) when verified by the
+	// global secret - see the "Unknown project with a valid global secret
+	// is still ignored" scenario.
 	payload := pushPayload(42, "org/unknown", "main", []string{"main.go"})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/webhook", strings.NewReader(payload))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Gitlab-Token", "secret")
 	srv.handleWebhook(w, r)
 
 	if w.Code != http.StatusOK {
@@ -263,14 +267,18 @@ func TestHandleWebhook_UnknownProject(t *testing.T) {
 
 func TestHandleWebhook_NotPush(t *testing.T) {
 	srv := systemHandlerServer(t)
+	srv.cfg.Signature = SignatureConfig{Secret: "secret"}
 	payload := `{"object_kind":"merge_request","ref":"refs/heads/main","project":{},"commits":[]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/webhook", strings.NewReader(payload))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Gitlab-Token", "secret")
 	srv.handleWebhook(w, r)
 
-	// ParseGitLabPushEvent returns an error for non-push events, which
-	// the handler surfaces as 400 Bad Request.
+	// A delivery that verifies (against the global secret here) but whose
+	// payload is not a push event is a parse failure, not a verification
+	// failure: ParseGitLabPushEvent returns an error for non-push events,
+	// which the handler surfaces as 400 Bad Request.
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
 	}
@@ -293,7 +301,7 @@ func TestHandleWebhook_Happy(t *testing.T) {
 		},
 	}
 	srv := &Server{
-		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir},
+		cfg:            Config{ListenAddr: ":0", PipelineDir: tmpDir, Signature: SignatureConfig{Secret: "secret"}},
 		projectStore:   mockProj,
 		projectService: service.NewProjectService(mockProj),
 		sourceSessions: &testSourceSessions{},
@@ -306,6 +314,7 @@ func TestHandleWebhook_Happy(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/webhook", strings.NewReader(payload))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Gitlab-Token", "secret")
 	srv.handleWebhook(w, r)
 
 	if w.Code != http.StatusOK {

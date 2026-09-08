@@ -87,8 +87,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Name == "" || req.Password == "" {
@@ -145,8 +144,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 	name := chi.URLParam(r, "user")
 	var req updateUserRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if !req.Role.Valid() {
@@ -206,8 +204,7 @@ func (s *Server) handleSetUserGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req setGrantsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	for _, g := range req.Grants {

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -202,8 +203,26 @@ type failingProjectReader struct{}
 func (failingProjectReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 
 func TestDecodeProjectConfigReadFailure(t *testing.T) {
-	if err := decodeProjectConfig(failingProjectReader{}, &domain.ProjectConfig{}); err == nil || !strings.Contains(err.Error(), "read failed") {
-		t.Fatalf("decode error = %v", err)
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Body = io.NopCloser(failingProjectReader{})
+	w := httptest.NewRecorder()
+	if decodeProjectConfig(w, req, &domain.ProjectConfig{}) {
+		t.Fatal("expected decode to fail")
+	}
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "read failed") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDecodeProjectConfigOversizedBody(t *testing.T) {
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"name":"x"}`))
+	w := httptest.NewRecorder()
+	req.Body = http.MaxBytesReader(w, req.Body, 4)
+	if decodeProjectConfig(w, req, &domain.ProjectConfig{}) {
+		t.Fatal("expected decode to fail")
+	}
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want 413", w.Code)
 	}
 }
 
@@ -234,12 +253,18 @@ func TestWebhookLoadsPipelineAtImmutableEventRevision(t *testing.T) {
 	}
 	projectStore := &mocks.MockProjectStore{FindByGitLabIDResult: &domain.ProjectConfig{
 		Name: "demo", RepoURL: "https://git.example.test/demo.git", RepoRef: "main", PipelineDir: ".",
+		WebhookSecret: "secret",
 	}}
 	manager := &testSourceSessions{root: root}
 	s := &Server{projectStore: projectStore, projectService: service.NewProjectService(projectStore), sourceSessions: manager}
 	payload := `{"object_kind":"push","ref":"refs/heads/main","checkout_sha":"event-immutable-sha","project":{"id":42,"path_with_namespace":"demo"},"commits":[{"id":"event-immutable-sha","modified":["main.go"]}]}`
+	newReq := func() *http.Request {
+		r := httptest.NewRequest("POST", "/webhook", strings.NewReader(payload))
+		r.Header.Set("X-Gitlab-Token", "secret")
+		return r
+	}
 	w := httptest.NewRecorder()
-	s.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(payload)))
+	s.handleWebhook(w, newReq())
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -252,7 +277,7 @@ func TestWebhookLoadsPipelineAtImmutableEventRevision(t *testing.T) {
 
 	manager.err = errors.New("revision unavailable")
 	w = httptest.NewRecorder()
-	s.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(payload)))
+	s.handleWebhook(w, newReq())
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "revision unavailable") {
 		t.Fatalf("failed acquisition status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -261,10 +286,13 @@ func TestWebhookLoadsPipelineAtImmutableEventRevision(t *testing.T) {
 func TestWebhookRejectsRegisteredPushWithoutImmutableRevision(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{FindByGitLabIDResult: &domain.ProjectConfig{
 		Name: "demo", RepoURL: "https://git.test/demo.git", RepoRef: "main",
+		WebhookSecret: "secret",
 	}}
 	s := &Server{projectStore: projectStore, projectService: service.NewProjectService(projectStore)}
 	w := httptest.NewRecorder()
-	s.handleWebhook(w, httptest.NewRequest("POST", "/webhook", strings.NewReader(`{"object_kind":"push","ref":"refs/heads/main","project":{"id":42}}`)))
+	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(`{"object_kind":"push","ref":"refs/heads/main","project":{"id":42}}`))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	s.handleWebhook(w, req)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "immutable checkout SHA") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}

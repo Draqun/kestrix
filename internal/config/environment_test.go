@@ -387,3 +387,93 @@ func TestNilEnvironmentValidationIsValid(t *testing.T) {
 		t.Fatalf("nil environment validation = %v", err)
 	}
 }
+
+// TestLoadEnvironmentHTTPDurationSettings covers each of the three
+// KESTRIX_HTTP_*_TIMEOUT settings: default, explicit value, 0, negative, and
+// an unparseable string. See webhook-ingress-hardening design.md D5.
+func TestLoadEnvironmentHTTPDurationSettings(t *testing.T) {
+	cases := []struct {
+		name         string
+		want         time.Duration
+		envGetter    func(*Environment) time.Duration
+		defaultValue time.Duration
+	}{
+		{"KESTRIX_HTTP_READ_TIMEOUT", 30 * time.Second, func(e *Environment) time.Duration { return e.HTTPReadTimeout }, 30 * time.Second},
+		{"KESTRIX_HTTP_WRITE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPWriteTimeout }, 120 * time.Second},
+		{"KESTRIX_HTTP_IDLE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPIdleTimeout }, 120 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/default", func(t *testing.T) {
+			env := LoadEnvironment(nil)
+			if err := env.ValidationError(); err != nil {
+				t.Fatal(err)
+			}
+			if got := tc.envGetter(env); got != tc.defaultValue {
+				t.Fatalf("%s default = %v, want %v", tc.name, got, tc.defaultValue)
+			}
+		})
+		t.Run(tc.name+"/explicit", func(t *testing.T) {
+			env := LoadEnvironment([]string{tc.name + "=45s"})
+			if err := env.ValidationError(); err != nil {
+				t.Fatal(err)
+			}
+			if got := tc.envGetter(env); got != 45*time.Second {
+				t.Fatalf("%s = %v, want 45s", tc.name, got)
+			}
+		})
+		for _, bad := range []string{"0s", "-5s", "not-a-duration"} {
+			t.Run(tc.name+"/"+bad, func(t *testing.T) {
+				env := LoadEnvironment([]string{tc.name + "=" + bad})
+				if err := env.ValidationError(); err == nil {
+					t.Fatalf("%s=%q: ValidationError() = nil, want error naming the setting", tc.name, bad)
+				} else if !strings.Contains(err.Error(), tc.name) {
+					t.Fatalf("%s=%q: error = %v, want it to name %s", tc.name, bad, err, tc.name)
+				}
+			})
+		}
+	}
+}
+
+// TestLoadEnvironmentHTTPBodyByteSettings covers each of the two
+// KESTRIX_*_MAX_BODY_BYTES settings: default, explicit value, 0, negative,
+// and garbage. See webhook-ingress-hardening design.md D5.
+func TestLoadEnvironmentHTTPBodyByteSettings(t *testing.T) {
+	cases := []struct {
+		name         string
+		getter       func(*Environment) int64
+		defaultValue int64
+	}{
+		{"KESTRIX_HTTP_MAX_BODY_BYTES", func(e *Environment) int64 { return e.HTTPMaxBodyBytes }, 1048576},
+		{"KESTRIX_WEBHOOK_MAX_BODY_BYTES", func(e *Environment) int64 { return e.WebhookMaxBodyBytes }, 8388608},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/default", func(t *testing.T) {
+			env := LoadEnvironment(nil)
+			if err := env.ValidationError(); err != nil {
+				t.Fatal(err)
+			}
+			if got := tc.getter(env); got != tc.defaultValue {
+				t.Fatalf("%s default = %d, want %d", tc.name, got, tc.defaultValue)
+			}
+		})
+		t.Run(tc.name+"/explicit", func(t *testing.T) {
+			env := LoadEnvironment([]string{tc.name + "=2048"})
+			if err := env.ValidationError(); err != nil {
+				t.Fatal(err)
+			}
+			if got := tc.getter(env); got != 2048 {
+				t.Fatalf("%s = %d, want 2048", tc.name, got)
+			}
+		})
+		for _, bad := range []string{"0", "-1", "garbage"} {
+			t.Run(tc.name+"/"+bad, func(t *testing.T) {
+				env := LoadEnvironment([]string{tc.name + "=" + bad})
+				if err := env.ValidationError(); err == nil {
+					t.Fatalf("%s=%q: ValidationError() = nil, want error naming the setting", tc.name, bad)
+				} else if !strings.Contains(err.Error(), tc.name) {
+					t.Fatalf("%s=%q: error = %v, want it to name %s", tc.name, bad, err, tc.name)
+				}
+			})
+		}
+	}
+}

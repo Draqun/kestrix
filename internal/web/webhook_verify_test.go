@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,13 +13,23 @@ import (
 	"kestrix/internal/domain"
 )
 
+// errReader returns a synthetic error on every Read. Used by
+// login_throttle_test.go to verify that a body read failure is handled
+// (e.g. a broken pipe from the agent) rather than panicking.
+type errReader struct{}
+
+func (errReader) Read(p []byte) (int, error) {
+	_ = p
+	return 0, errors.New("synthetic body read failure")
+}
+
 // TestWebhookBearerTokenDoesNotSubstituteForSharedSecret pins
 // access-control's "Webhook secret is still enforced" scenario: a valid
 // Kestrix user token is not a substitute for the webhook's own shared
 // secret, and a wrong or missing secret is still rejected regardless of
 // what else the request carries.
 func TestWebhookBearerTokenDoesNotSubstituteForSharedSecret(t *testing.T) {
-	srv := NewServer(Config{Signature: SignatureConfig{Enabled: true, Secret: "correct"}})
+	srv := NewServer(Config{Signature: SignatureConfig{Secret: "correct"}})
 	body := `{"ref":"refs/heads/main","commits":[],"repository":{"name":"x"}}`
 	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(body))
 	req.Header.Set("Authorization", authToken(t, srv, domain.RoleAdmin))
@@ -33,174 +42,17 @@ func TestWebhookBearerTokenDoesNotSubstituteForSharedSecret(t *testing.T) {
 }
 
 func TestVerifyGitLabToken(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	middleware := VerifyGitLabSignature("my-secret")
-	wrapped := middleware(handler)
-
-	// Missing token → 403
-	req := httptest.NewRequest("POST", "/webhook", nil)
-	w := httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("missing token: status = %d, want 403", w.Code)
+	if verifyGitLabToken("", "my-secret") {
+		t.Error("missing token should not verify")
 	}
-
-	// Wrong token → 403
-	req = httptest.NewRequest("POST", "/webhook", nil)
-	req.Header.Set("X-Gitlab-Token", "wrong-secret")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("wrong token: status = %d, want 403", w.Code)
+	if verifyGitLabToken("wrong-secret", "my-secret") {
+		t.Error("wrong token should not verify")
 	}
-
-	// Correct token → 200
-	req = httptest.NewRequest("POST", "/webhook", nil)
-	req.Header.Set("X-Gitlab-Token", "my-secret")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("correct token: status = %d, want 200", w.Code)
+	if !verifyGitLabToken("my-secret", "my-secret") {
+		t.Error("correct token should verify")
 	}
-}
-
-func TestVerifyHMACSignature(t *testing.T) {
-	secret := "webhook-secret"
-	payload := []byte(`{"test":"data"}`)
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	middleware := VerifyHMACSignature(secret)
-	wrapped := middleware(handler)
-
-	// Compute correct signature
-	sig := computeHMAC(payload, secret)
-
-	// Missing signature → 403
-	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	w := httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("missing sig: status = %d, want 403", w.Code)
-	}
-
-	// Wrong signature → 403
-	req = httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("wrong sig: status = %d, want 403", w.Code)
-	}
-
-	// Correct signature → 200
-	req = httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	req.Header.Set("X-Hub-Signature-256", sig)
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("correct sig: status = %d, want 200", w.Code)
-	}
-
-	// Wrong algorithm prefix (sha1=<hex>) → 403 "invalid signature format".
-	// Exercises the `parts[0] != "sha256"` branch of VerifyHMACSignature.
-	req = httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	req.Header.Set("X-Hub-Signature-256", "sha1=deadbeef")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("sha1 prefix: status = %d, want 403", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "invalid signature format") {
-		t.Errorf("sha1 prefix: body = %q, want invalid signature format error", w.Body.String())
-	}
-
-	// Missing '=' separator entirely → 403 "invalid signature format".
-	req = httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	req.Header.Set("X-Hub-Signature-256", "garbage-no-equals")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("malformed signature: status = %d, want 403", w.Code)
-	}
-
-	// Valid prefix but invalid hex → 403 "invalid signature encoding".
-	// Exercises the `hex.DecodeString` error branch.
-	req = httptest.NewRequest("POST", "/webhook", bytes.NewReader(payload))
-	req.Header.Set("X-Hub-Signature-256", "sha256=zzz")
-	w = httptest.NewRecorder()
-	wrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("bad hex: status = %d, want 403", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "invalid signature encoding") {
-		t.Errorf("bad hex: body = %q, want invalid signature encoding error", w.Body.String())
-	}
-
-	// Body read error → 500. Inject a request whose body fails on Read so
-	// io.ReadAll returns an error, exercising that branch. The signature
-	// header itself must still be present and well-formed; reading the
-	// body happens after the hex decode, so a matching-but-non-decodable
-	// hash is what triggers the body stage.
-	failingHandler := VerifyHMACSignature(secret)
-	failingWrapped := failingHandler(handler)
-	req = httptest.NewRequest("POST", "/webhook", errReader{})
-	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
-	w = httptest.NewRecorder()
-	failingWrapped.ServeHTTP(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("body read failure: status = %d, want 500", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "failed to read body") {
-		t.Errorf("body read failure: body = %q, want failed to read body error", w.Body.String())
-	}
-}
-
-func TestSignatureConfig(t *testing.T) {
-	// Disabled → nil middleware
-	cfg := SignatureConfig{Enabled: false}
-	mw, err := cfg.Middleware()
-	if err != nil || mw != nil {
-		t.Error("disabled config should return nil")
-	}
-
-	// Enabled but no secret → error
-	cfg = SignatureConfig{Enabled: true}
-	_, err = cfg.Middleware()
-	if err == nil {
-		t.Error("enabled without secret should error")
-	}
-
-	// GitLab method
-	cfg = SignatureConfig{Enabled: true, Secret: "s", Method: "gitlab"}
-	mw, err = cfg.Middleware()
-	if err != nil || mw == nil {
-		t.Error("gitlab method should return middleware")
-	}
-
-	// Unknown method → error
-	cfg = SignatureConfig{Enabled: true, Secret: "s", Method: "unknown"}
-	_, err = cfg.Middleware()
-	if err == nil {
-		t.Error("unknown method should error")
-	}
-
-	// HMAC method → returns middleware. The hmac branch was uncovered
-	// because the existing test only exercised the gitlab method.
-	cfg = SignatureConfig{Enabled: true, Secret: "s", Method: "hmac"}
-	mw, err = cfg.Middleware()
-	if err != nil {
-		t.Errorf("hmac method should not error: %v", err)
-	}
-	if mw == nil {
-		t.Error("hmac method should return middleware")
+	if verifyGitLabToken("my-secret", "") {
+		t.Error("an empty secret should never verify")
 	}
 }
 
@@ -210,12 +62,119 @@ func computeHMAC(payload []byte, secret string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// errReader returns a synthetic error on every Read. Used to verify that
-// VerifyHMACSignature handles a body read failure (e.g. a broken pipe from
-// the agent) rather than panicking on the io.ReadAll path.
-type errReader struct{}
+func TestVerifyHMAC(t *testing.T) {
+	secret := "webhook-secret"
+	payload := []byte(`{"test":"data"}`)
+	sig := computeHMAC(payload, secret)
 
-func (errReader) Read(p []byte) (int, error) {
-	_ = p
-	return 0, errors.New("synthetic body read failure")
+	if verifyHMAC("", payload, secret) {
+		t.Error("missing signature should not verify")
+	}
+	if verifyHMAC("sha256=deadbeef", payload, secret) {
+		t.Error("wrong signature should not verify")
+	}
+	if !verifyHMAC(sig, payload, secret) {
+		t.Error("correct signature should verify")
+	}
+	// Wrong algorithm prefix.
+	if verifyHMAC("sha1=deadbeef", payload, secret) {
+		t.Error("sha1 prefix should not verify")
+	}
+	// Missing '=' separator entirely.
+	if verifyHMAC("garbage-no-equals", payload, secret) {
+		t.Error("malformed signature should not verify")
+	}
+	// Valid prefix but invalid hex.
+	if verifyHMAC("sha256=zzz", payload, secret) {
+		t.Error("bad hex should not verify")
+	}
+	if verifyHMAC(sig, payload, "") {
+		t.Error("an empty secret should never verify")
+	}
+}
+
+func TestVerifyOne(t *testing.T) {
+	payload := []byte(`{"test":"data"}`)
+	sig := computeHMAC(payload, "s")
+
+	h := http.Header{}
+	h.Set("X-Gitlab-Token", "s")
+	if !verifyOne("gitlab", h, payload, "s") {
+		t.Error("gitlab method should verify a matching token")
+	}
+	if !verifyOne("", h, payload, "s") {
+		t.Error("empty method should default to gitlab token comparison")
+	}
+
+	hmacHeader := http.Header{}
+	hmacHeader.Set("X-Hub-Signature-256", sig)
+	if !verifyOne("hmac", hmacHeader, payload, "s") {
+		t.Error("hmac method should verify a matching signature")
+	}
+	// A matching token under the wrong header name for the configured
+	// method must not verify - see the "HMAC method is honoured" scenario.
+	if verifyOne("hmac", h, payload, "s") {
+		t.Error("hmac method must not accept a matching X-Gitlab-Token")
+	}
+	if verifyOne("gitlab", hmacHeader, payload, "s") {
+		t.Error("gitlab method must not accept a matching X-Hub-Signature-256")
+	}
+	if verifyOne("gitlab", h, payload, "") {
+		t.Error("an empty secret should never verify")
+	}
+}
+
+// TestVerifyDelivery pins design.md D1/D2: the project secret is tried
+// first, the global secret is a fallback, and neither configured (or
+// neither matching) rejects the delivery.
+func TestVerifyDelivery(t *testing.T) {
+	payload := []byte(`{"test":"data"}`)
+	h := http.Header{}
+	h.Set("X-Gitlab-Token", "project-secret")
+
+	if !verifyDelivery("gitlab", h, payload, "project-secret", "global-secret") {
+		t.Error("project secret match should verify")
+	}
+
+	global := http.Header{}
+	global.Set("X-Gitlab-Token", "global-secret")
+	if !verifyDelivery("gitlab", global, payload, "project-secret", "global-secret") {
+		t.Error("global secret match should verify")
+	}
+	if !verifyDelivery("gitlab", global, payload, "", "global-secret") {
+		t.Error("global secret match should verify when no project secret is set")
+	}
+
+	wrong := http.Header{}
+	wrong.Set("X-Gitlab-Token", "wrong")
+	if verifyDelivery("gitlab", wrong, payload, "project-secret", "") {
+		t.Error("project set but wrong, and global absent, should not verify")
+	}
+	if verifyDelivery("gitlab", wrong, payload, "", "") {
+		t.Error("both empty should not verify")
+	}
+
+	sig := computeHMAC(payload, "project-secret")
+	hmacHeader := http.Header{}
+	hmacHeader.Set("X-Hub-Signature-256", sig)
+	if verifyDelivery("hmac", h, payload, "project-secret", "") {
+		t.Error("hmac method should reject a matching X-Gitlab-Token")
+	}
+	tokenOnly := http.Header{}
+	tokenOnly.Set("X-Gitlab-Token", "project-secret")
+	if verifyDelivery("gitlab", hmacHeader, payload, "project-secret", "") {
+		t.Error("gitlab method should reject a matching X-Hub-Signature-256")
+	}
+}
+
+func TestProbeGitLabProjectID(t *testing.T) {
+	if id := probeGitLabProjectID([]byte("not json")); id != 0 {
+		t.Errorf("non-JSON body: id = %d, want 0", id)
+	}
+	if id := probeGitLabProjectID([]byte(`{"ref":"refs/heads/main"}`)); id != 0 {
+		t.Errorf("body without an id: id = %d, want 0", id)
+	}
+	if id := probeGitLabProjectID([]byte(`{"project":{"id":42}}`)); id != 42 {
+		t.Errorf("id = %d, want 42", id)
+	}
 }

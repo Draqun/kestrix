@@ -66,9 +66,15 @@ curl -X POST http://localhost:8080/api/projects \
   -d '{"name":"my-app","repo_url":"https://git.example.test/team/my-app.git","repo_ref":"main","pipeline_dir":"ci","pipeline_file":"pipeline.tf","gitlab_project_id":12345}'
 ```
 
-All registered projects require `repo_url` and `repo_ref`. For a private
-remote, create a credential first and pass its non-secret
-`repo_credential_ref`:
+All registered projects require `repo_url` and `repo_ref`. `repo_url` must be
+an `https://` URL, an `ssh://` URL, or an scp-like `user@host:path` address;
+other schemes (plaintext `http://`, `file://`, `git://`, transport helpers
+like `ext::`) and a literal loopback, link-local, or unspecified host are
+rejected with `400` before any network access. An optional `webhook_secret`
+on create or update is write-only: it is never returned by the project API,
+which instead reports `has_webhook_secret`; an update that omits it (or sends
+it empty) keeps the stored secret unchanged. For a private remote, create a
+credential first and pass its non-secret `repo_credential_ref`:
 
 ```bash
 curl -X POST http://localhost:8080/api/projects \

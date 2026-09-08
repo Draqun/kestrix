@@ -89,6 +89,7 @@ printf '%s\n' 'docker-e2e-source' > "${REMOTE_WORK}/version.txt"
 git -C "${REMOTE_WORK}" add .
 git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
 git -C "${REMOTE_WORK}" push --quiet -u origin main
+REMOTE_COMMIT_SHA="$(git -C "${REMOTE_WORK}" rev-parse HEAD)"
 
 dd if=/dev/urandom of="${MASTER_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${MASTER_KEY_FILE}"
@@ -342,20 +343,67 @@ if [[ -z "${CREDENTIAL_REF}" ]]; then
   exit 1
 fi
 
+WEBHOOK_SECRET_VALUE="e2e-webhook-secret-$$"
+GITLAB_PROJECT_ID=424242
+
+# Registration goes straight into PostgreSQL rather than through
+# POST /api/projects: repo_url validation (webhook-ingress-hardening
+# design.md D6) accepts only https://, ssh://, and scp-like remotes, and
+# this project's file:// bare-repo mount exists to exercise the deployment
+# against a real Git remote without standing up a network transport, not
+# the create-time URL check (covered by internal/service's own tests).
+compose exec -T postgres psql -U kestrix -d kestrix -v ON_ERROR_STOP=1 -c \
+  "INSERT INTO projects (name, repo_url, repo_ref, repo_credential_ref, pipeline_dir, pipeline_file, gitlab_project_id, webhook_secret) VALUES ('docker-remote', 'file:///e2e/remote.git', 'main', '${CREDENTIAL_REF}', 'ci', 'pipeline.tf', ${GITLAB_PROJECT_ID}, '${WEBHOOK_SECRET_VALUE}');" \
+  >/dev/null
+
 PROJECT_RESPONSE="${TEMP_DIR}/project.json"
-status="$(curl -sS -o "${PROJECT_RESPONSE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" \
-  -X POST "${API_BASE}/api/projects" \
-  -H 'Content-Type: application/json' \
-  -d "{\"name\":\"docker-remote\",\"repo_url\":\"file:///e2e/remote.git\",\"repo_ref\":\"main\",\"repo_credential_ref\":\"${CREDENTIAL_REF}\",\"pipeline_dir\":\"ci\",\"pipeline_file\":\"pipeline.tf\"}")"
-if [[ "${status}" != "201" ]]; then
-  echo "Remote project creation returned HTTP ${status}:" >&2
+status="$(curl -sS -o "${PROJECT_RESPONSE}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote")"
+if [[ "${status}" != "200" ]]; then
+  echo "Reading the seeded remote project returned HTTP ${status}:" >&2
   sed -n '1,120p' "${PROJECT_RESPONSE}" >&2
   exit 1
 fi
-if grep -Eq "${SECRET_VALUE}|repo_path|source-session|/var/lib/kestrix/cache" "${PROJECT_RESPONSE}"; then
+if grep -Eq "${SECRET_VALUE}|${WEBHOOK_SECRET_VALUE}|\"webhook_secret\"|repo_path|source-session|/var/lib/kestrix/cache" "${PROJECT_RESPONSE}"; then
   echo "Project API response exposed secret or host/cache path data." >&2
   exit 1
 fi
+if ! grep -q '"has_webhook_secret":true' "${PROJECT_RESPONSE}"; then
+  echo "Project response did not report has_webhook_secret:true:" >&2
+  sed -n '1,120p' "${PROJECT_RESPONSE}" >&2
+  exit 1
+fi
+
+# webhook-ingress-hardening: verification fails closed. No global
+# KESTRIX_WEBHOOK_SECRET is configured for this deployment, so a delivery
+# for the registered project is authenticated by its own per-project secret
+# alone.
+echo "Verifying webhook delivery fails closed without a secret..."
+WEBHOOK_PAYLOAD="{\"object_kind\":\"push\",\"ref\":\"refs/heads/main\",\"checkout_sha\":\"${REMOTE_COMMIT_SHA}\",\"project\":{\"id\":${GITLAB_PROJECT_ID},\"path_with_namespace\":\"docker-remote\"},\"commits\":[{\"id\":\"${REMOTE_COMMIT_SHA}\",\"modified\":[\"version.txt\"]}]}"
+UNAUTHENTICATED_WEBHOOK_RESPONSE="${TEMP_DIR}/webhook-unauthenticated.json"
+status="$(curl -sS -o "${UNAUTHENTICATED_WEBHOOK_RESPONSE}" -w '%{http_code}' --max-time 20 \
+  -X POST "${API_BASE}/webhook" \
+  -H 'Content-Type: application/json' \
+  -d "${WEBHOOK_PAYLOAD}")"
+if [[ "${status}" != "401" ]]; then
+  echo "Unauthenticated webhook delivery returned HTTP ${status}, want 401:" >&2
+  sed -n '1,120p' "${UNAUTHENTICATED_WEBHOOK_RESPONSE}" >&2
+  exit 1
+fi
+echo "Unauthenticated webhook delivery correctly rejected with 401."
+
+echo "Verifying webhook delivery succeeds with the project's own secret..."
+AUTHENTICATED_WEBHOOK_RESPONSE="${TEMP_DIR}/webhook-authenticated.json"
+status="$(curl -sS -o "${AUTHENTICATED_WEBHOOK_RESPONSE}" -w '%{http_code}' --max-time 30 \
+  -X POST "${API_BASE}/webhook" \
+  -H 'Content-Type: application/json' \
+  -H "X-Gitlab-Token: ${WEBHOOK_SECRET_VALUE}" \
+  -d "${WEBHOOK_PAYLOAD}")"
+if [[ "${status}" != "200" ]]; then
+  echo "Webhook delivery with the project's secret returned HTTP ${status}, want 200:" >&2
+  sed -n '1,200p' "${AUTHENTICATED_WEBHOOK_RESPONSE}" >&2
+  exit 1
+fi
+echo "Webhook delivery with the project's own secret accepted with 200."
 
 # task-execution-isolation: a task process must never see a control-plane
 # secret, even running as a container in the deployment image.
@@ -491,6 +539,14 @@ curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-rem
 compose logs --no-color > "${TEMP_DIR}/compose.log"
 if grep -R -q "${SECRET_VALUE}" "${CREDENTIAL_RESPONSE}" "${PROJECT_RESPONSE}" "${TEMP_DIR}/credentials.json" "${TEMP_DIR}/project-read.json" "${TEMP_DIR}/revoked-read.json" "${TEMP_DIR}/compose.log"; then
   echo "Credential secret was found in an API response or deployment log." >&2
+  exit 1
+fi
+if grep -q "${WEBHOOK_SECRET_VALUE}" "${TEMP_DIR}/project-read.json" || grep -q "\"webhook_secret\"" "${TEMP_DIR}/project-read.json"; then
+  echo "Webhook secret was found in the project read response." >&2
+  exit 1
+fi
+if grep -R -q "${WEBHOOK_SECRET_VALUE}" "${TEMP_DIR}/compose.log"; then
+  echo "Webhook secret was found in the deployment log." >&2
   exit 1
 fi
 if grep -R -q "${ADMIN_PASSWORD}" "${TEMP_DIR}/compose.log"; then

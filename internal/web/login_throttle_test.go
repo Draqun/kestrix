@@ -286,6 +286,25 @@ func TestThrottleLogin_BodyReadFailure(t *testing.T) {
 	}
 }
 
+// TestThrottleLogin_OversizedBodyNeverIncrementsThrottle pins design.md D5:
+// a cap must sit in front of throttleLogin, so an oversized body answers 413
+// without ever touching the throttle counters.
+func TestThrottleLogin_OversizedBodyNeverIncrementsThrottle(t *testing.T) {
+	clock := &stoppedClock{t: time.Now()}
+	srv := NewServer(Config{MaxBodyBytes: 8})
+	srv.loginThrottle = newLoginThrottle(5, time.Minute, 0, clock.now)
+	body, _ := json.Marshal(loginRequest{Name: "oversized", Password: "a-password-longer-than-the-bound"})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", w.Code)
+	}
+	if len(srv.loginThrottle.accounts) != 0 || len(srv.loginThrottle.addrs) != 0 {
+		t.Fatalf("throttle counters incremented: accounts=%d addrs=%d", len(srv.loginThrottle.accounts), len(srv.loginThrottle.addrs))
+	}
+}
+
 func TestThrottleLogin_RetryAfterRoundsUpFractionalSeconds(t *testing.T) {
 	clock := &stoppedClock{t: time.Now()}
 	srv := newThrottledServer(t, 1, 1500*time.Millisecond, clock)

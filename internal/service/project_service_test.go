@@ -49,6 +49,60 @@ func TestProjectService_CreateRejectsInvalidRemoteForms(t *testing.T) {
 	}
 }
 
+// TestValidateRepoURL pins design.md D6: the three accepted forms, the
+// rejected schemes, the rejected loopback/link-local/unspecified hosts, and
+// an allowed RFC 1918 host.
+func TestValidateRepoURL(t *testing.T) {
+	accepted := []string{
+		"https://git.example.test/team/app.git",
+		"ssh://git@git.example.test/team/app.git",
+		"git@git.example.test:team/app.git",
+		"https://10.0.0.5/team/app.git", // private network host is allowed
+	}
+	for _, url := range accepted {
+		t.Run("accept/"+url, func(t *testing.T) {
+			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
+			if err := validateProject(cfg); err != nil {
+				t.Fatalf("validateProject(%q) = %v, want nil", url, err)
+			}
+		})
+	}
+
+	rejectedSchemes := []string{
+		"http://git.example.test/team/app.git",
+		"file:///team/app.git",
+		"git://git.example.test/team/app.git",
+		"ext::sh -c id",
+		"no-colon-no-scheme-at-all",        // no "://" and no ":": falls straight to url.Parse
+		"path/before/any:colon-not-scpish", // "/" precedes the first ":": not scp-like either
+	}
+	for _, url := range rejectedSchemes {
+		t.Run("reject-scheme/"+url, func(t *testing.T) {
+			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
+			if err := validateProject(cfg); !errors.Is(err, ErrValidation) {
+				t.Fatalf("validateProject(%q) = %v, want ErrValidation", url, err)
+			}
+		})
+	}
+
+	rejectedHosts := []string{
+		"ssh://localhost/team/app.git",
+		"https://127.0.0.1/team/app.git",
+		"ssh://[::1]/team/app.git",
+		"https://169.254.169.254/latest/meta-data/",
+		"ssh://[fe80::1]/team/app.git",
+		"git@localhost:team/app.git", // scp-like form with a disallowed host
+	}
+	for _, url := range rejectedHosts {
+		t.Run("reject-host/"+url, func(t *testing.T) {
+			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
+			if err := validateProject(cfg); !errors.Is(err, ErrValidation) {
+				t.Fatalf("validateProject(%q) = %v, want ErrValidation", url, err)
+			}
+		})
+	}
+}
+
 func TestProjectService_Create_Happy(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)
@@ -111,11 +165,58 @@ func TestProjectService_UpdateIsFullReplacementAndClearsCredential(t *testing.T)
 		t.Fatalf("Update: %v", err)
 	}
 	if update.RepoURL != "https://example.test/new.git" || update.RepoRef != "release" ||
-		update.RepoCredentialRef != "" || update.GitLabProjectID != 0 || update.WebhookSecret != "" {
+		update.RepoCredentialRef != "" || update.GitLabProjectID != 0 {
 		t.Fatalf("update was not treated as a full replacement: %+v", update)
 	}
 	if update.Name != "demo" || update.CreatedAt != existing.CreatedAt {
 		t.Fatalf("identity fields were not preserved: %+v", update)
+	}
+	// webhook_secret is the one field an omitted update keeps rather than
+	// clears - see webhook-ingress-hardening design.md D4.
+	if update.WebhookSecret != existing.WebhookSecret {
+		t.Fatalf("omitted webhook_secret should keep the stored value: got %q, want %q", update.WebhookSecret, existing.WebhookSecret)
+	}
+}
+
+// TestProjectService_UpdateWebhookSecretKeepOrReplace pins design.md D4: an
+// update whose webhook_secret is omitted or empty keeps the stored secret;
+// a non-empty value replaces it.
+func TestProjectService_UpdateWebhookSecretKeepOrReplace(t *testing.T) {
+	base := func() *domain.ProjectConfig {
+		return &domain.ProjectConfig{
+			Name: "demo", RepoURL: "https://example.test/repo.git", RepoRef: "main",
+			WebhookSecret: "stored-secret",
+		}
+	}
+
+	// Omitted (zero value) keeps the stored secret.
+	mock := &mocks.MockProjectStore{GetResult: base()}
+	update := &domain.ProjectConfig{RepoURL: "https://example.test/repo.git", RepoRef: "main"}
+	if err := NewProjectService(mock).Update("demo", update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if update.WebhookSecret != "stored-secret" {
+		t.Fatalf("omit: WebhookSecret = %q, want stored-secret", update.WebhookSecret)
+	}
+
+	// Explicit empty string keeps the stored secret.
+	mock = &mocks.MockProjectStore{GetResult: base()}
+	update = &domain.ProjectConfig{RepoURL: "https://example.test/repo.git", RepoRef: "main", WebhookSecret: ""}
+	if err := NewProjectService(mock).Update("demo", update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if update.WebhookSecret != "stored-secret" {
+		t.Fatalf("empty: WebhookSecret = %q, want stored-secret", update.WebhookSecret)
+	}
+
+	// A non-empty value replaces the stored secret.
+	mock = &mocks.MockProjectStore{GetResult: base()}
+	update = &domain.ProjectConfig{RepoURL: "https://example.test/repo.git", RepoRef: "main", WebhookSecret: "new-secret"}
+	if err := NewProjectService(mock).Update("demo", update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if update.WebhookSecret != "new-secret" {
+		t.Fatalf("replace: WebhookSecret = %q, want new-secret", update.WebhookSecret)
 	}
 }
 

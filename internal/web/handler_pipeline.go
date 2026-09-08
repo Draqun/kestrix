@@ -135,8 +135,7 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		Changed []string `json:"changed"`
 		Dir     string   `json:"dir"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	dir, err := boundPipelineDir(s.cfg.PipelineDir, req.Dir)
@@ -192,8 +191,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		Dir     string   `json:"dir"`
 		Changed []string `json:"changed"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	dir, err := boundPipelineDir(s.cfg.PipelineDir, req.Dir)

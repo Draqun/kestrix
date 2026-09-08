@@ -309,8 +309,17 @@ type ProjectConfig struct {
 	PipelineFile      string `json:"pipeline_file"`
 	GitLabProjectID   int    `json:"gitlab_project_id,omitempty"`
 	DefaultBranch     string `json:"default_branch,omitempty"`
-	WebhookSecret     string `json:"webhook_secret,omitempty"`
-	CreatedAt         string `json:"created_at"`
+	// WebhookSecret is write-only: it is accepted on create and update but
+	// SHALL NOT appear in any response - see webhook-ingress-hardening D4.
+	// Responses carry HasWebhookSecret instead; callers encoding a
+	// ProjectConfig for the wire MUST go through the web package's
+	// publicProject helper first.
+	WebhookSecret string `json:"webhook_secret,omitempty"`
+	// HasWebhookSecret reports whether a webhook secret is stored, without
+	// disclosing it. Only publicProject sets this on an outgoing copy; the
+	// stored struct itself does not populate it.
+	HasWebhookSecret bool   `json:"has_webhook_secret"`
+	CreatedAt        string `json:"created_at"`
 }
 
 // Run is a stored run record.

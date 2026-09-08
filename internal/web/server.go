@@ -72,6 +72,18 @@ type Config struct {
 	Dispatch            DispatchConfig
 	Runner              RunnerConfig
 	SourceCache         SourceCacheConfig
+	// HTTPReadTimeout, HTTPWriteTimeout, and HTTPIdleTimeout configure the
+	// http.Server built by ListenAndServe; see design.md D5. Zero in any
+	// field means the operator-facing default (config.Environment resolves
+	// 30s/120s/120s before populating these in production wiring).
+	HTTPReadTimeout  time.Duration
+	HTTPWriteTimeout time.Duration
+	HTTPIdleTimeout  time.Duration
+	// MaxBodyBytes bounds request bodies on the /api subtree.
+	// WebhookMaxBodyBytes bounds POST /webhook bodies independently; see
+	// design.md D5. Zero means the operator-facing default (1 MiB / 8 MiB).
+	MaxBodyBytes        int64
+	WebhookMaxBodyBytes int64
 }
 
 // SourceCacheConfig controls the private persistent Git object cache.
@@ -127,7 +139,76 @@ const identityCacheMaxEntries = 10000
 // addresses POST /api/auth/login - public and unauthenticated - has seen.
 const loginThrottleMaxEntries = 10000
 
-var listenAndServe = http.ListenAndServe
+// defaultHTTPReadTimeout, defaultHTTPWriteTimeout, and defaultHTTPIdleTimeout
+// apply when Config leaves the corresponding field zero; see design.md D5.
+// config.Environment already resolves these operator-facing defaults before
+// populating Config in production wiring, so this fallback mainly serves
+// tests and other direct Config construction.
+const (
+	defaultHTTPReadTimeout  = 30 * time.Second
+	defaultHTTPWriteTimeout = 120 * time.Second
+	defaultHTTPIdleTimeout  = 120 * time.Second
+	defaultMaxBodyBytes     = 1 << 20 // 1 MiB
+	defaultWebhookMaxBytes  = 8 << 20 // 8 MiB
+)
+
+// serveHTTP is a seam over (*http.Server).ListenAndServe so tests can inject
+// a listen failure without opening a real socket; see design.md D5.
+var serveHTTP = (*http.Server).ListenAndServe
+
+// httpServer builds the *http.Server ListenAndServe runs, with timeouts
+// resolved from cfg (falling back to the package defaults when a field is
+// zero).
+func (s *Server) httpServer() *http.Server {
+	readTimeout := s.cfg.HTTPReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = defaultHTTPReadTimeout
+	}
+	writeTimeout := s.cfg.HTTPWriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultHTTPWriteTimeout
+	}
+	idleTimeout := s.cfg.HTTPIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultHTTPIdleTimeout
+	}
+	return &http.Server{
+		Addr:         s.cfg.ListenAddr,
+		Handler:      s.router,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
+	}
+}
+
+// maxBodyBytes and webhookMaxBodyBytes resolve cfg's body bounds, falling
+// back to the package defaults when unset.
+func (s *Server) maxBodyBytes() int64 {
+	if s.cfg.MaxBodyBytes > 0 {
+		return s.cfg.MaxBodyBytes
+	}
+	return defaultMaxBodyBytes
+}
+
+func (s *Server) webhookMaxBodyBytes() int64 {
+	if s.cfg.WebhookMaxBodyBytes > 0 {
+		return s.cfg.WebhookMaxBodyBytes
+	}
+	return defaultWebhookMaxBytes
+}
+
+// maxBody returns middleware that bounds the request body to n bytes via
+// http.MaxBytesReader; a body exceeding it fails downstream reads with
+// *http.MaxBytesError, which decodeJSON and the webhook/login handlers map
+// to 413. See design.md D5.
+func maxBody(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, n)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 var newSourceSessionManager = func(opts source.CacheOptions) (domain.SourceSessionManager, error) {
 	return source.NewGitCache(opts)
@@ -290,6 +371,7 @@ func (s *Server) buildRouter() chi.Router {
 	// required on API routes": a route added to neither is unreachable,
 	// never accidentally open.
 	r.Route("/api", func(r chi.Router) {
+		r.Use(maxBody(s.maxBodyBytes()))
 		r.Group(func(r chi.Router) {
 			r.Get("/health", s.handleHealth)
 			r.With(s.throttleLogin).Post("/auth/login", s.handleLogin)
@@ -347,7 +429,7 @@ func (s *Server) buildRouter() chi.Router {
 	})
 
 	// Webhook
-	r.Post("/webhook", s.handleWebhook)
+	r.With(maxBody(s.webhookMaxBodyBytes())).Post("/webhook", s.handleWebhook)
 
 	// Swagger docs - its own, more permissive content security policy;
 	// see design.md D8.
@@ -399,5 +481,5 @@ func (s *Server) Router() http.Handler {
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
 	log.Printf("Kestrix server listening on %s", s.cfg.ListenAddr)
-	return listenAndServe(s.cfg.ListenAddr, s.router)
+	return serveHTTP(s.httpServer())
 }
