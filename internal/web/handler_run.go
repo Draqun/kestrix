@@ -30,8 +30,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		Changed       []string `json:"changed"`
 		IncludeManual bool     `json:"include_manual"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	proj, primary, err := s.loadProjectPipeline(r.Context(), p, "", "pipeline-run")

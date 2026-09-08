@@ -25,7 +25,39 @@ POST /webhook
 
 ### Authentication
 
-If `signature.enabled` is `true` in the configuration, the receiver checks the `X-Gitlab-Token` header. Requests without a matching token are rejected with `401 Unauthorized`.
+Every delivery is authenticated before any part of its payload is trusted,
+and verification fails closed: there is no configuration in which `/webhook`
+accepts an unverified delivery.
+
+A delivery is accepted only if it verifies, using the configured method
+(`KESTRIX_WEBHOOK_METHOD`: `gitlab` header comparison, or `hmac` body
+signature), against either of two secrets, checked in this order:
+
+1. The matched registered project's own `webhook_secret` (set via
+   `PUT /api/projects/{name}`), when the project is registered and has one.
+2. The global `KESTRIX_WEBHOOK_SECRET`, when set.
+
+The project secret is tried first only so the common case short-circuits,
+not for security - either match accepts the delivery. A delivery that
+verifies against neither, including one for which no secret is configured at
+all, is rejected with `401 {"error":"unauthorized"}` and is **not** recorded
+in webhook history. The rejection is byte-identical whether the project is
+unknown, has no secret, or presented a wrong secret: a distinct message would
+let a caller enumerate which GitLab project IDs are registered. Secret
+comparison is constant time.
+
+Verification runs before the body is parsed as a GitLab push event, so a
+delivery that fails verification answers `401`, never `400`, regardless of
+whether its payload is well-formed.
+
+The request body is read at most once and is bounded by
+`KESTRIX_WEBHOOK_MAX_BODY_BYTES`; a body over that bound is rejected with
+`413` and is not recorded either.
+
+**BREAKING**: a deployment with no `KESTRIX_WEBHOOK_SECRET` and no
+per-project secret rejects every delivery with `401`. See
+[Authentication](authentication.md) for how the global secret and timeouts
+are configured, and the CHANGELOG for the migration note.
 
 ### Response Format
 
@@ -104,10 +136,11 @@ including events that are ignored because no registered project matches,
 resolved without triggering a task, or failed during processing. History
 survives a server restart.
 
-A request rejected before its payload is understood is not recorded: a bad
-`X-Gitlab-Token`, an unreadable body, or a payload that is not a GitLab push
-event. Recording those paths would let an unauthenticated caller write rows,
-and because retention is bounded by row count, evict real history.
+A request rejected before its payload is understood is not recorded: a
+failed verification (see Authentication above), an oversized body, or a
+payload that is not a GitLab push event. Recording those paths would let an
+unauthenticated caller write rows, and because retention is bounded by row
+count, evict real history.
 
 A recording failure never fails the webhook: GitLab retries on a non-2xx
 response, so a history outage would otherwise turn into a delivery outage. The

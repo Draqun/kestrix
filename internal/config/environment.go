@@ -72,6 +72,19 @@ type Environment struct {
 	// container) gets to exit before being killed; see design.md D4.
 	// Defaults to 10s.
 	RunnerCancelGrace time.Duration
+	// HTTPReadTimeout, HTTPWriteTimeout, and HTTPIdleTimeout bound the HTTP
+	// listener's connection lifetime; see webhook-ingress-hardening design.md
+	// D5. Defaults to 30s, 120s, and 120s.
+	HTTPReadTimeout  time.Duration
+	HTTPWriteTimeout time.Duration
+	HTTPIdleTimeout  time.Duration
+	// HTTPMaxBodyBytes bounds request bodies on the /api subtree.
+	// WebhookMaxBodyBytes bounds POST /webhook bodies independently, since a
+	// push payload carries file lists for up to twenty commits; see
+	// webhook-ingress-hardening design.md D5. Defaults to 1048576 (1 MiB) and
+	// 8388608 (8 MiB).
+	HTTPMaxBodyBytes    int64
+	WebhookMaxBodyBytes int64
 
 	values        map[string]string
 	originalEnvs  []string
@@ -269,6 +282,66 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	httpReadTimeout := 30 * time.Second
+	if raw := values[Prefix+"HTTP_READ_TIMEOUT"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_HTTP_READ_TIMEOUT must be a positive duration")
+			}
+		} else {
+			httpReadTimeout = parsed
+		}
+	}
+
+	httpWriteTimeout := 120 * time.Second
+	if raw := values[Prefix+"HTTP_WRITE_TIMEOUT"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_HTTP_WRITE_TIMEOUT must be a positive duration")
+			}
+		} else {
+			httpWriteTimeout = parsed
+		}
+	}
+
+	httpIdleTimeout := 120 * time.Second
+	if raw := values[Prefix+"HTTP_IDLE_TIMEOUT"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_HTTP_IDLE_TIMEOUT must be a positive duration")
+			}
+		} else {
+			httpIdleTimeout = parsed
+		}
+	}
+
+	httpMaxBodyBytes := int64(1048576)
+	if raw := values[Prefix+"HTTP_MAX_BODY_BYTES"]; raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_HTTP_MAX_BODY_BYTES must be a positive integer")
+			}
+		} else {
+			httpMaxBodyBytes = parsed
+		}
+	}
+
+	webhookMaxBodyBytes := int64(8388608)
+	if raw := values[Prefix+"WEBHOOK_MAX_BODY_BYTES"]; raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_WEBHOOK_MAX_BODY_BYTES must be a positive integer")
+			}
+		} else {
+			webhookMaxBodyBytes = parsed
+		}
+	}
+
 	return &Environment{
 		ListenAddr:            values[Prefix+"ADDR"],
 		PipelineDir:           values[Prefix+"DIR"],
@@ -305,6 +378,11 @@ func LoadEnvironment(environ []string) *Environment {
 		RunnerDockerUser:     values[Prefix+"RUNNER_DOCKER_USER"],
 		RunnerDockerNetwork:  runnerDockerNetwork,
 		RunnerCancelGrace:    runnerCancelGrace,
+		HTTPReadTimeout:      httpReadTimeout,
+		HTTPWriteTimeout:     httpWriteTimeout,
+		HTTPIdleTimeout:      httpIdleTimeout,
+		HTTPMaxBodyBytes:     httpMaxBodyBytes,
+		WebhookMaxBodyBytes:  webhookMaxBodyBytes,
 		values:               values,
 		originalEnvs:         normalized,
 		validationErr:        validationErr,

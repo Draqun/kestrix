@@ -65,7 +65,7 @@ func TestWebhookDispatchIntegration(t *testing.T) {
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
 		StorePath:   filepath.Join(tmpDir, "projects.json"),
-		Signature:   SignatureConfig{Enabled: true, Secret: "tok"},
+		Signature:   SignatureConfig{Secret: "tok"},
 		Dispatch: DispatchConfig{
 			Enabled:     true,
 			ProjectID:   "12345",
@@ -113,9 +113,11 @@ func TestWebhookNoDispatch(t *testing.T) {
 	server := NewServer(Config{
 		PipelineDir: tmpDir,
 		StorePath:   filepath.Join(tmpDir, "projects.json"),
+		Signature:   SignatureConfig{Secret: "tok"},
 	})
 	body := `{"object_kind":"push","ref":"refs/heads/main","commits":[{"id":"a","message":"x","added":[],"modified":["auth_service/main.go"],"removed":[]}],"repository":{"name":"test-app"},"changes":["auth_service/main.go"]}`
 	req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))
+	req.Header.Set("X-Gitlab-Token", "tok")
 	rec := httptest.NewRecorder()
 	server.router.ServeHTTP(rec, req)
 
@@ -139,7 +141,7 @@ func TestWebhookWrongSecret(t *testing.T) {
 	server := NewServer(Config{
 		PipelineDir: tmpDir,
 		StorePath:   filepath.Join(tmpDir, "projects.json"),
-		Signature:   SignatureConfig{Enabled: true, Secret: "correct"},
+		Signature:   SignatureConfig{Secret: "correct"},
 	})
 	body := `{"ref":"refs/heads/main","commits":[],"repository":{"name":"x"}}`
 	req := httptest.NewRequest("POST", "/webhook", io.NopCloser(bytes.NewBufferString(body)))

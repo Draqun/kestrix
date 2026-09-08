@@ -2,8 +2,9 @@
 
 Every `/api` route requires a signed-in account, except `GET /api/health` and
 `POST /api/auth/login`. `POST /webhook` is unaffected: it authenticates GitLab
-deliveries with its own shared secret, not a user account, and continues to
-work exactly as before.
+deliveries with its own per-project and global secrets, not a user account.
+See [Webhook Receiver: Authentication](webhook-receiver.md#authentication)
+for how those secrets are chosen and why verification fails closed.
 
 ## Signing in
 
@@ -104,6 +105,20 @@ controls whether the client-address key comes from the connection's peer
 address or from the first hop of `X-Forwarded-For`; enable it only behind a
 reverse proxy that sets that header itself; leaving it on elsewhere lets any
 client forge its own throttle key.
+
+## Request limits
+
+The HTTP listener enforces read, write, and idle timeouts
+(`KESTRIX_HTTP_READ_TIMEOUT`, `KESTRIX_HTTP_WRITE_TIMEOUT`,
+`KESTRIX_HTTP_IDLE_TIMEOUT`; defaults `30s`/`120s`/`120s`) and bounds every
+request body. `/api` routes share `KESTRIX_HTTP_MAX_BODY_BYTES` (default
+`1048576`, 1 MiB); `POST /webhook` has its own, larger
+`KESTRIX_WEBHOOK_MAX_BODY_BYTES` (default `8388608`, 8 MiB), since a push
+payload carries file lists for up to twenty commits. A request whose body
+exceeds its bound is rejected with `413` and never reaches the route's
+business logic; a login request rejected this way never runs the throttle or
+password verification either. Each setting must be a positive value - `0`, a
+negative number, or an unparseable value fails Kestrix's startup.
 
 ## Security response headers
 

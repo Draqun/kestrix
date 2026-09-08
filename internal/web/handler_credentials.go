@@ -36,8 +36,7 @@ func (s *Server) handleCreateCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var input domain.CredentialInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &input) {
 		return
 	}
 	meta, err := store.CreateCredential(input)
@@ -70,8 +69,7 @@ func (s *Server) handleRotateCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var input domain.CredentialInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+	if !decodeJSON(w, r, &input) {
 		return
 	}
 	meta, err := store.RotateCredential(chi.URLParam(r, "ref"), input)

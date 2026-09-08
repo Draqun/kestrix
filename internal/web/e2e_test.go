@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -93,16 +94,26 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	runStore := srv.runStore.(*mocks.MockRunStore)
 	runStore.FinishRunCh = make(chan struct{})
 
-	createBody, _ := json.Marshal(map[string]interface{}{
-		"name": "remote-e2e", "repo_url": bare, "repo_ref": "main",
-		"pipeline_dir": "ci", "pipeline_file": "pipeline.tf",
-	})
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewReader(createBody))
-	req.Header.Set("Content-Type", "application/json")
-	srv.router.ServeHTTP(w, authed(t, srv, req))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
+	// Registration goes straight through the store rather than
+	// POST /api/projects: repo_url validation (webhook-ingress-hardening
+	// design.md D6) only accepts https://, ssh://, and scp-like remotes, and
+	// this test's bare local path exists to exercise caching and run
+	// behavior against a real Git remote without a network transport, not
+	// the create-time URL check (covered separately in internal/service).
+	seedCfg := &domain.ProjectConfig{
+		Name: "remote-e2e", RepoURL: bare, RepoRef: "main",
+		PipelineDir: "ci", PipelineFile: "pipeline.tf", DefaultBranch: "main",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := srv.projectStore.Upsert(seedCfg); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	// Populate the source cache exactly like create's validateSource
+	// callback would have.
+	if _, session, err := srv.loadProjectPipeline(context.Background(), seedCfg, "", "test-seed"); err != nil {
+		t.Fatalf("seed pipeline load: %v", err)
+	} else {
+		session.Cleanup()
 	}
 	if got := cacheEntryCount(t, cacheRoot); got != 1 {
 		t.Fatalf("cache entries after create=%d, want 1", got)
@@ -122,7 +133,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	secondSHA := gitE2E(t, work, "rev-parse", "HEAD")
 	gitE2E(t, work, "push", "--quiet", "origin", "main")
 
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, authed(t, srv, httptest.NewRequest(http.MethodGet, "/api/projects/remote-e2e/definition", nil)))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "version-2") {
 		t.Fatalf("updated definition status=%d body=%s", w.Code, w.Body.String())
@@ -132,7 +143,7 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/projects/remote-e2e/run", strings.NewReader(`{"changed":["app"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/remote-e2e/run", strings.NewReader(`{"changed":["app"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	srv.router.ServeHTTP(w, authed(t, srv, req))
 	if w.Code != http.StatusOK {
@@ -214,9 +225,12 @@ project "e2e-test" {
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
 		StorePath:   filepath.Join(tmpDir, "projects.json"),
+		Signature:   SignatureConfig{Secret: "e2e-webhook-secret"},
 	})
 
-	// 4. Send a webhook for auth (code change).
+	// 4. Send a webhook for auth (code change). Verification fails closed
+	// (webhook-ingress-hardening), so the delivery must present the
+	// configured global secret.
 	payload := `{
 		"object_kind": "push",
 		"ref": "refs/heads/main",
@@ -234,6 +248,7 @@ project "e2e-test" {
 	}`
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload))
+	req.Header.Set("X-Gitlab-Token", "e2e-webhook-secret")
 	w := httptest.NewRecorder()
 	srv.handleWebhook(w, req)
 
@@ -291,6 +306,7 @@ project "p" {
 		ListenAddr:  ":0",
 		PipelineDir: tmpDir,
 		StorePath:   filepath.Join(tmpDir, "projects.json"),
+		Signature:   SignatureConfig{Secret: "e2e-webhook-secret"},
 	})
 
 	payload := `{
@@ -310,6 +326,7 @@ project "p" {
 	}`
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewBufferString(payload))
+	req.Header.Set("X-Gitlab-Token", "e2e-webhook-secret")
 	w := httptest.NewRecorder()
 	srv.handleWebhook(w, req)
 

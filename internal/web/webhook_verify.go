@@ -4,101 +4,47 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
-	"io"
-	"log"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
 
-// VerifyGitLabSignature is middleware that verifies the X-Gitlab-Token header
-// against a shared secret. If the token doesn't match, the request is rejected
-// with 403 Forbidden.
-//
-// GitLab sends the token as a plain header (not HMAC), so we compare directly.
-// For GitHub-style HMAC-SHA256 verification, use VerifyHMACSignature instead.
-func VerifyGitLabSignature(secret string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := r.Header.Get("X-Gitlab-Token")
-			if token == "" {
-				log.Printf("webhook: missing X-Gitlab-Token header")
-				http.Error(w, `{"error":"missing X-Gitlab-Token"}`, http.StatusForbidden)
-				return
-			}
-			if !hmac.Equal([]byte(token), []byte(secret)) {
-				log.Printf("webhook: invalid X-Gitlab-Token")
-				http.Error(w, `{"error":"invalid X-Gitlab-Token"}`, http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+// verifyGitLabToken reports whether header is the X-Gitlab-Token value
+// GitLab would send for secret, compared in constant time. An empty secret
+// never verifies: callers must not invoke this with an unconfigured secret.
+func verifyGitLabToken(header, secret string) bool {
+	if header == "" || secret == "" {
+		return false
 	}
+	return hmac.Equal([]byte(header), []byte(secret))
 }
 
-// VerifyHMACSignature is middleware that verifies HMAC-SHA256 signatures
-// (used by GitHub and compatible webhooks).
-//
-// The signature is expected in the format: "sha256=<hex>".
-// The secret is the raw bytes of the HMAC key.
-func VerifyHMACSignature(secret string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sigHeader := r.Header.Get("X-Hub-Signature-256")
-			if sigHeader == "" {
-				log.Printf("webhook: missing X-Hub-Signature-256 header")
-				http.Error(w, `{"error":"missing signature"}`, http.StatusForbidden)
-				return
-			}
-
-			// Parse "sha256=<hex>"
-			parts := strings.SplitN(sigHeader, "=", 2)
-			if len(parts) != 2 || parts[0] != "sha256" {
-				log.Printf("webhook: invalid signature format: %s", sigHeader)
-				http.Error(w, `{"error":"invalid signature format"}`, http.StatusForbidden)
-				return
-			}
-
-			expectedSig, err := hex.DecodeString(parts[1])
-			if err != nil {
-				log.Printf("webhook: invalid hex in signature")
-				http.Error(w, `{"error":"invalid signature encoding"}`, http.StatusForbidden)
-				return
-			}
-
-			// Read body for HMAC computation (we need to re-set it for the next handler).
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Printf("webhook: failed to read body for verification: %v", err)
-				http.Error(w, `{"error":"failed to read body"}`, http.StatusInternalServerError)
-				return
-			}
-			r.Body.Close()
-
-			// Compute HMAC-SHA256.
-			mac := hmac.New(sha256.New, []byte(secret))
-			mac.Write(body)
-			computedSig := mac.Sum(nil)
-
-			if !hmac.Equal(computedSig, expectedSig) {
-				log.Printf("webhook: HMAC mismatch")
-				http.Error(w, `{"error":"invalid signature"}`, http.StatusForbidden)
-				return
-			}
-
-			// Restore body for downstream handlers.
-			r.Body = io.NopCloser(strings.NewReader(string(body)))
-			next.ServeHTTP(w, r)
-		})
+// verifyHMAC reports whether header is a valid "sha256=<hex>" HMAC-SHA256
+// signature of body under secret, compared in constant time. An empty
+// secret never verifies: callers must not invoke this with an unconfigured
+// secret.
+func verifyHMAC(header string, body []byte, secret string) bool {
+	if header == "" || secret == "" {
+		return false
 	}
+	parts := strings.SplitN(header, "=", 2)
+	if len(parts) != 2 || parts[0] != "sha256" {
+		return false
+	}
+	expectedSig, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hmac.Equal(mac.Sum(nil), expectedSig)
 }
 
-// SignatureConfig holds the webhook signature verification configuration.
+// SignatureConfig holds the global webhook signature verification
+// configuration. See verifyDelivery for how a delivery is accepted.
 type SignatureConfig struct {
-	// Enabled turns verification on/off.
-	Enabled bool
-
-	// Secret is the shared secret for token/HMAC verification.
+	// Secret is the global shared secret, used when the delivery's matched
+	// project has none of its own.
 	Secret string
 
 	// Method determines which verification method to use.
@@ -107,20 +53,52 @@ type SignatureConfig struct {
 	Method string
 }
 
-// Middleware returns the appropriate verification middleware based on config.
-func (c SignatureConfig) Middleware() (func(http.Handler) http.Handler, error) {
-	if !c.Enabled {
-		return nil, nil
+// verifyOne checks body/headers under method against a single secret. An
+// empty secret never verifies.
+func verifyOne(method string, h http.Header, body []byte, secret string) bool {
+	if secret == "" {
+		return false
 	}
-	if c.Secret == "" {
-		return nil, fmt.Errorf("webhook secret is required when verification is enabled")
-	}
-	switch c.Method {
-	case "gitlab", "":
-		return VerifyGitLabSignature(c.Secret), nil
+	switch method {
 	case "hmac":
-		return VerifyHMACSignature(c.Secret), nil
-	default:
-		return nil, fmt.Errorf("unknown verification method %q (use 'gitlab' or 'hmac')", c.Method)
+		return verifyHMAC(h.Get("X-Hub-Signature-256"), body, secret)
+	default: // "gitlab", ""
+		return verifyGitLabToken(h.Get("X-Gitlab-Token"), secret)
 	}
+}
+
+// verifyDelivery reports whether a webhook delivery is authenticated: it
+// verifies against projectSecret when non-empty, then against globalSecret
+// when non-empty, and returns false when neither is set or neither
+// verifies. See design.md D1/D2 - the project secret is tried first only so
+// the common case short-circuits, not for security; either match accepts
+// the delivery.
+func verifyDelivery(method string, h http.Header, body []byte, projectSecret, globalSecret string) bool {
+	if projectSecret != "" && verifyOne(method, h, body, projectSecret) {
+		return true
+	}
+	if globalSecret != "" && verifyOne(method, h, body, globalSecret) {
+		return true
+	}
+	return false
+}
+
+// webhookProjectProbe reads just enough of a webhook body to find the
+// GitLab project ID before the body is trusted or fully parsed - see
+// design.md D1. A body that is not JSON, or has no ID, yields ID 0.
+type webhookProjectProbe struct {
+	Project struct {
+		ID int `json:"id"`
+	} `json:"project"`
+}
+
+// probeGitLabProjectID extracts {"project":{"id":N}} from body without
+// trusting anything else in it. A non-JSON body or one without an ID
+// yields 0.
+func probeGitLabProjectID(body []byte) int {
+	var probe webhookProjectProbe
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return 0
+	}
+	return probe.Project.ID
 }
