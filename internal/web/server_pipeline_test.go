@@ -69,20 +69,25 @@ func TestHandleGetPipeline_Happy(t *testing.T) {
 	}
 }
 
-// TestHandleGetPipeline_BadDir covers the 400 response when the
-// resolved directory does not parse: handleGetPipeline must surface
-// the parser error wrapped in {"error":%q}.
-func TestHandleGetPipeline_BadDir(t *testing.T) {
+// TestHandleGetPipeline_DirOutsideRoot covers the 403 response boundPipelineDir
+// produces for a requested directory outside the configured pipeline root -
+// here, one that also happens not to exist, which must answer identically;
+// see design.md D5. handleGetPipeline must refuse before the parser ever
+// runs.
+func TestHandleGetPipeline_DirOutsideRoot(t *testing.T) {
 	srv := emptyDirServer(t)
 	nonexistent := filepath.Join(t.TempDir(), "no-such-dir")
 	w := httptest.NewRecorder()
 	srv.handleGetPipeline(w, httptest.NewRequest("GET", "/api/pipeline?dir="+nonexistent, nil))
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "error") {
 		t.Errorf("body = %q, want JSON error", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), nonexistent) {
+		t.Errorf("body = %q, must not echo the requested path", w.Body.String())
 	}
 }
 
@@ -149,16 +154,17 @@ func TestHandleGetPipelineRaw_NoTF(t *testing.T) {
 	}
 }
 
-// TestHandleGetPipelineRaw_BadDir covers the 400 path when the resolved
-// directory is itself unreadable (ReadFile's directory case).
-func TestHandleGetPipelineRaw_BadDir(t *testing.T) {
+// TestHandleGetPipelineRaw_DirOutsideRoot covers the 403 boundPipelineDir
+// produces for a requested directory outside the configured pipeline root;
+// see design.md D5.
+func TestHandleGetPipelineRaw_DirOutsideRoot(t *testing.T) {
 	srv := emptyDirServer(t)
 	nonexistent := filepath.Join(t.TempDir(), "missing")
 	w := httptest.NewRecorder()
 	srv.handleGetPipelineRaw(w, httptest.NewRequest("GET", "/api/pipeline/raw?dir="+nonexistent, nil))
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "error") {
 		t.Errorf("body = %q, want JSON error", w.Body.String())

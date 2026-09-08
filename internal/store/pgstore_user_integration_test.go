@@ -108,7 +108,8 @@ func TestPG_ListUsers_OrderedByName(t *testing.T) {
 
 func TestPG_UpdateUserRole(t *testing.T) {
 	pg := testPG(t)
-	if _, err := pg.CreateUser("dave", domain.RoleViewer, "hash"); err != nil {
+	created, err := pg.CreateUser("dave", domain.RoleViewer, "hash")
+	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	if err := pg.UpdateUserRole("dave", domain.RoleAdmin); err != nil {
@@ -121,6 +122,9 @@ func TestPG_UpdateUserRole(t *testing.T) {
 	if got.Role != domain.RoleAdmin {
 		t.Fatalf("role = %s, want admin", got.Role)
 	}
+	if got.TokenVersion != created.TokenVersion+1 {
+		t.Fatalf("TokenVersion = %d, want %d (role change must bump it)", got.TokenVersion, created.TokenVersion+1)
+	}
 }
 
 func TestPG_UpdateUserRole_NotFound(t *testing.T) {
@@ -132,7 +136,8 @@ func TestPG_UpdateUserRole_NotFound(t *testing.T) {
 
 func TestPG_UpdateUserPassword(t *testing.T) {
 	pg := testPG(t)
-	if _, err := pg.CreateUser("erin", domain.RoleOperator, "old-hash"); err != nil {
+	created, err := pg.CreateUser("erin", domain.RoleOperator, "old-hash")
+	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	if err := pg.UpdateUserPassword("erin", "new-hash"); err != nil {
@@ -144,6 +149,83 @@ func TestPG_UpdateUserPassword(t *testing.T) {
 	}
 	if uc.PasswordHash != "new-hash" {
 		t.Fatalf("PasswordHash = %q, want new-hash", uc.PasswordHash)
+	}
+	if uc.TokenVersion != created.TokenVersion+1 {
+		t.Fatalf("TokenVersion = %d, want %d (password change must bump it)", uc.TokenVersion, created.TokenVersion+1)
+	}
+}
+
+func TestPG_UpdateUserRole_NotFoundLeavesVersionUnchanged(t *testing.T) {
+	pg := testPG(t)
+	created, err := pg.CreateUser("dave2", domain.RoleViewer, "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := pg.UpdateUserRole("ghost", domain.RoleAdmin); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("UpdateUserRole error = %v, want ErrUserNotFound", err)
+	}
+	got, err := pg.GetUser("dave2")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if got.TokenVersion != created.TokenVersion {
+		t.Fatalf("TokenVersion = %d, want unchanged %d (a failed write on another account must not bump it)", got.TokenVersion, created.TokenVersion)
+	}
+}
+
+func TestPG_BumpTokenVersion(t *testing.T) {
+	pg := testPG(t)
+	created, err := pg.CreateUser("gina", domain.RoleViewer, "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := pg.BumpTokenVersion("gina"); err != nil {
+		t.Fatalf("BumpTokenVersion: %v", err)
+	}
+	got, err := pg.GetUser("gina")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if got.TokenVersion != created.TokenVersion+1 {
+		t.Fatalf("TokenVersion = %d, want %d", got.TokenVersion, created.TokenVersion+1)
+	}
+	if got.Role != created.Role {
+		t.Fatalf("role changed to %s, want unchanged %s", got.Role, created.Role)
+	}
+}
+
+func TestPG_BumpTokenVersion_NotFound(t *testing.T) {
+	pg := testPG(t)
+	if err := pg.BumpTokenVersion("ghost"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("BumpTokenVersion error = %v, want ErrUserNotFound", err)
+	}
+}
+
+// TestPG_TokenVersionColumn_AddedToPreexistingSchema asserts the
+// token_version migration applies cleanly to a users table created before
+// this change, matching the pattern of every other additive column in
+// pgstore.go's migrate().
+func TestPG_TokenVersionColumn_AddedToPreexistingSchema(t *testing.T) {
+	pg := testPG(t)
+	if _, err := pg.db.Exec(`ALTER TABLE users DROP COLUMN IF EXISTS token_version`); err != nil {
+		t.Fatalf("simulate pre-migration schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := migrate(pg.db); err != nil {
+			t.Errorf("restore schema: %v", err)
+		}
+	})
+
+	if err := migrate(pg.db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	created, err := pg.CreateUser("hank", domain.RoleViewer, "hash")
+	if err != nil {
+		t.Fatalf("CreateUser after migration: %v", err)
+	}
+	if created.TokenVersion != 1 {
+		t.Fatalf("TokenVersion = %d, want 1 for a new account after migration", created.TokenVersion)
 	}
 }
 

@@ -81,15 +81,37 @@ func TestHandleResolveRoute_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleResolveRoute_BadDir(t *testing.T) {
+// TestHandleResolveRoute_DirOutsideRoot covers the 403 boundPipelineDir
+// produces for a requested directory outside the configured pipeline root;
+// see design.md D5.
+func TestHandleResolveRoute_DirOutsideRoot(t *testing.T) {
 	srv := systemHandlerServer(t)
 	body := `{"dir":"/nonexistent/path"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/resolve", strings.NewReader(body))
 	srv.handleResolve(w, r)
 
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}
+
+// TestHandleResolveRoute_DirInsideRootButUnparseable covers the pre-existing
+// 400 path once boundPipelineDir lets a directory through: the root itself,
+// with no pipeline file in it, still reaches parser.ParseDir and fails
+// there rather than at the bound check.
+func TestHandleResolveRoute_DirInsideRootButUnparseable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "pipeline.tf"), []byte(`project "demo" {`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: root, StorePath: filepath.Join(root, "projects.json")})
+	body := `{"dir":"` + root + `"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/resolve", strings.NewReader(body))
+	srv.handleResolve(w, r)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -131,15 +153,35 @@ func TestHandleGenerate_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleGenerate_BadDir(t *testing.T) {
+// TestHandleGenerate_DirOutsideRoot covers the 403 boundPipelineDir produces
+// for a requested directory outside the configured pipeline root; see
+// design.md D5.
+func TestHandleGenerate_DirOutsideRoot(t *testing.T) {
 	srv := systemHandlerServer(t)
 	body := `{"dir":"/nonexistent/path"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
 	srv.handleGenerate(w, r)
 
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}
+
+// TestHandleGenerate_DirInsideRootButUnparseable mirrors
+// TestHandleResolveRoute_DirInsideRootButUnparseable for handleGenerate.
+func TestHandleGenerate_DirInsideRootButUnparseable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "pipeline.tf"), []byte(`project "demo" {`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{ListenAddr: ":0", PipelineDir: root, StorePath: filepath.Join(root, "projects.json")})
+	body := `{"dir":"` + root + `"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
+	srv.handleGenerate(w, r)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
 	}
 }
 
@@ -169,14 +211,17 @@ func TestHandleValidate_Happy(t *testing.T) {
 	}
 }
 
-func TestHandleValidate_BadDir(t *testing.T) {
+// TestHandleValidate_DirOutsideRoot covers the 403 boundPipelineDir produces
+// for a requested directory outside the configured pipeline root; see
+// design.md D5.
+func TestHandleValidate_DirOutsideRoot(t *testing.T) {
 	srv := systemHandlerServer(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/validate?dir=/nonexistent/path", nil)
 	srv.handleValidate(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "error") {
 		t.Errorf("body = %q, want error field", w.Body.String())

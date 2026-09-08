@@ -34,8 +34,26 @@ type Environment struct {
 	DatabaseURL         string
 	MasterKeyPath       string
 	JWTSigningKeyPath   string
-	Docker              DockerEnvironment
-	SourceCache         SourceCacheEnvironment
+	// IdentityCacheTTL bounds how long RequireAuth may serve an account's
+	// role and token version from cache before resolving it from the store
+	// again; see design.md D4. Zero disables the cache. Defaults to 5s.
+	IdentityCacheTTL time.Duration
+	// LoginMaxAttempts and LoginWindow bound the login throttle: this many
+	// failed logins for one account or one client address within the
+	// window trip a 429; see design.md D7. Defaults to 10 and 1m.
+	LoginMaxAttempts int
+	LoginWindow      time.Duration
+	// TrustProxyHeader, when set, makes the login throttle key an address
+	// on the first hop of X-Forwarded-For instead of the raw peer address;
+	// see design.md D7. Defaults to false - reading that header
+	// unconditionally would let any client forge its own throttle key.
+	TrustProxyHeader bool
+	// ContentSecurityPolicy overrides the bundled UI's default policy on
+	// every route except /docs/*; see design.md D8. Defaults to that
+	// bundled-UI policy.
+	ContentSecurityPolicy string
+	Docker                DockerEnvironment
+	SourceCache           SourceCacheEnvironment
 
 	values        map[string]string
 	originalEnvs  []string
@@ -110,6 +128,54 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	identityCacheTTL := 5 * time.Second
+	if raw := values[Prefix+"IDENTITY_CACHE_TTL"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed < 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_IDENTITY_CACHE_TTL must be a non-negative duration")
+			}
+		} else {
+			identityCacheTTL = parsed
+		}
+	}
+
+	loginMaxAttempts := 10
+	if raw := values[Prefix+"LOGIN_MAX_ATTEMPTS"]; raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_LOGIN_MAX_ATTEMPTS must be a positive integer")
+			}
+		} else {
+			loginMaxAttempts = parsed
+		}
+	}
+
+	loginWindow := time.Minute
+	if raw := values[Prefix+"LOGIN_WINDOW"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_LOGIN_WINDOW must be a positive duration")
+			}
+		} else {
+			loginWindow = parsed
+		}
+	}
+
+	var trustProxyHeader bool
+	if raw := values[Prefix+"TRUST_PROXY_HEADER"]; raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_TRUST_PROXY_HEADER must be a boolean")
+			}
+		} else {
+			trustProxyHeader = parsed
+		}
+	}
+
 	var historyLimit int
 	if raw := values[Prefix+"WEBHOOK_HISTORY_LIMIT"]; raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -123,18 +189,23 @@ func LoadEnvironment(environ []string) *Environment {
 	}
 
 	return &Environment{
-		ListenAddr:          values[Prefix+"ADDR"],
-		PipelineDir:         values[Prefix+"DIR"],
-		WebhookSecret:       values[Prefix+"WEBHOOK_SECRET"],
-		WebhookMethod:       values[Prefix+"WEBHOOK_METHOD"],
-		WebhookHistoryLimit: historyLimit,
-		DispatchProject:     values[Prefix+"DISPATCH_PROJECT"],
-		GitLabURL:           values[Prefix+"GITLAB_URL"],
-		GitLabToken:         values[Prefix+"GITLAB_TOKEN"],
-		TestDatabaseURL:     values[Prefix+"TEST_DATABASE_URL"],
-		DatabaseURL:         values["DATABASE_URL"],
-		MasterKeyPath:       values[Prefix+"MASTER_KEY_PATH"],
-		JWTSigningKeyPath:   values[Prefix+"JWT_SIGNING_KEY_PATH"],
+		ListenAddr:            values[Prefix+"ADDR"],
+		PipelineDir:           values[Prefix+"DIR"],
+		WebhookSecret:         values[Prefix+"WEBHOOK_SECRET"],
+		WebhookMethod:         values[Prefix+"WEBHOOK_METHOD"],
+		WebhookHistoryLimit:   historyLimit,
+		DispatchProject:       values[Prefix+"DISPATCH_PROJECT"],
+		GitLabURL:             values[Prefix+"GITLAB_URL"],
+		GitLabToken:           values[Prefix+"GITLAB_TOKEN"],
+		TestDatabaseURL:       values[Prefix+"TEST_DATABASE_URL"],
+		DatabaseURL:           values["DATABASE_URL"],
+		MasterKeyPath:         values[Prefix+"MASTER_KEY_PATH"],
+		JWTSigningKeyPath:     values[Prefix+"JWT_SIGNING_KEY_PATH"],
+		IdentityCacheTTL:      identityCacheTTL,
+		LoginMaxAttempts:      loginMaxAttempts,
+		LoginWindow:           loginWindow,
+		TrustProxyHeader:      trustProxyHeader,
+		ContentSecurityPolicy: values[Prefix+"CONTENT_SECURITY_POLICY"],
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],

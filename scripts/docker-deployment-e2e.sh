@@ -195,6 +195,56 @@ fi
 AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
 echo "Authenticated as ${ADMIN_NAME}."
 
+# Session revocation: a deleted account's token must stop working, and must
+# do so on the very next request - see design.md D2/D4 (rbac-hardening).
+# Deletion happens through this same running process, so no wait for the
+# identity-cache TTL is needed.
+echo "Verifying a deleted account's token stops working..."
+REVOKE_NAME="e2e-revoke-check"
+REVOKE_PASSWORD="throwaway-${PROJECT_NAME}"
+printf '%s\n' "${REVOKE_PASSWORD}" | compose exec -T kestrix \
+  /kestrix user create --role viewer "${REVOKE_NAME}"
+
+REVOKE_LOGIN_RESPONSE="${TEMP_DIR}/revoke-login.json"
+status="$(curl -sS -o "${REVOKE_LOGIN_RESPONSE}" -w '%{http_code}' --max-time 10 \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"${REVOKE_NAME}\",\"password\":\"${REVOKE_PASSWORD}\"}")"
+if [[ "${status}" != "200" ]]; then
+  echo "Login as the throwaway revocation-check account returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${REVOKE_LOGIN_RESPONSE}" >&2
+  exit 1
+fi
+REVOKE_TOKEN="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${REVOKE_LOGIN_RESPONSE}")"
+if [[ -z "${REVOKE_TOKEN}" ]]; then
+  echo "Revocation-check login response did not contain a token." >&2
+  exit 1
+fi
+
+status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer ${REVOKE_TOKEN}" "http://127.0.0.1:${BASE_PORT}/api/projects")"
+if [[ "${status}" != "200" ]]; then
+  echo "Throwaway account's token was rejected before deletion (HTTP ${status})." >&2
+  exit 1
+fi
+
+REVOKE_DELETE_RESPONSE="${TEMP_DIR}/revoke-delete-response"
+status="$(curl -sS -o "${REVOKE_DELETE_RESPONSE}" -w '%{http_code}' --max-time 10 \
+  "${AUTH_HEADER[@]}" -X DELETE "http://127.0.0.1:${BASE_PORT}/api/users/${REVOKE_NAME}")"
+if [[ "${status}" != "204" ]]; then
+  echo "Deleting the throwaway account returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${REVOKE_DELETE_RESPONSE}" >&2
+  exit 1
+fi
+
+status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer ${REVOKE_TOKEN}" "http://127.0.0.1:${BASE_PORT}/api/projects")"
+if [[ "${status}" != "401" ]]; then
+  echo "Deleted account's token still worked (HTTP ${status}), want 401." >&2
+  exit 1
+fi
+echo "Deleted account's token correctly rejected with 401."
+
 assert_json_endpoint() {
   local path="$1"
   local expected_field="$2"

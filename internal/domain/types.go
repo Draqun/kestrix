@@ -108,10 +108,14 @@ func HigherRole(a, b Role) Role {
 // User is a Kestrix account. It is safe to return from any API response or
 // CLI output: it never carries a password hash.
 type User struct {
-	Name      string    `json:"name"`
-	Role      Role      `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Name string `json:"name"`
+	Role Role   `json:"role"`
+	// TokenVersion is compared against a token's ver claim on every request;
+	// see UserStore.BumpTokenVersion. It is internal bookkeeping and is not
+	// serialized to API responses or CLI output.
+	TokenVersion int       `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // UserCredential pairs a user's identity with its stored password hash. It
@@ -130,12 +134,26 @@ type ProjectGrant struct {
 	Role        Role   `json:"role"`
 }
 
-// Claims is the verified identity and role carried by an authentication
-// token, produced only by TokenIssuer.Verify.
+// IdentityCacheEntry is what IdentityCache stores for one account name: just
+// enough to decide a request without a store round trip. Exists is false for
+// a cached negative result (an account name that does not exist), which is
+// cached too so a token for a deleted account does not become a free store
+// query per request until it expires.
+type IdentityCacheEntry struct {
+	Exists       bool
+	Role         Role
+	TokenVersion int
+}
+
+// Claims is the verified identity carried by an authentication token,
+// produced only by TokenIssuer.Verify. Role reflects the account's stored
+// role at the moment RequireAuth resolved it, not necessarily the role the
+// token was issued with; see design.md D1.
 type Claims struct {
-	UserName  string
-	Role      Role
-	ExpiresAt time.Time
+	UserName     string
+	Role         Role
+	TokenVersion int
+	ExpiresAt    time.Time
 }
 
 // TaskResult captures the outcome of a single task execution.

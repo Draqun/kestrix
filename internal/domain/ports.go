@@ -240,6 +240,11 @@ type WebhookLogStore interface {
 // UserStore persists user accounts and their password hashes. GetUser and
 // ListUsers never expose a password hash; only GetUserCredential does, and it
 // exists solely for authentication.
+//
+// UpdateUserRole and UpdateUserPassword each bump the account's token
+// version as part of the same write, so a token issued before the change
+// stops verifying; see TokenIssuer and Claims. BumpTokenVersion exists for
+// callers that need to force that without changing the role or password.
 type UserStore interface {
 	CreateUser(name string, role Role, passwordHash string) (User, error)
 	GetUser(name string) (User, error)
@@ -248,6 +253,7 @@ type UserStore interface {
 	UpdateUserRole(name string, role Role) error
 	UpdateUserPassword(name string, passwordHash string) error
 	DeleteUser(name string) error
+	BumpTokenVersion(name string) error
 }
 
 // GrantStore persists per-project role grants. ResolveGrant reports whether
@@ -266,6 +272,21 @@ type GrantStore interface {
 type PasswordHasher interface {
 	Hash(password string) (string, error)
 	Verify(hash, password string) (bool, error)
+}
+
+// IdentityCache bounds how long RequireAuth's per-request identity lookup
+// stays fresh; see design.md D4. Get reports a cache miss for both an
+// absent entry and an expired one - callers cannot tell the two apart, and
+// do not need to. Set stores the current entry with the cache's own TTL and
+// eviction policy; a zero-TTL cache implementation MAY treat Set as a no-op
+// and Get as always missing, disabling caching entirely. Invalidate drops
+// any entry for name immediately, used by writes that change what the
+// entry would report (role, password, or token-version changes; account
+// deletion) so a stale privilege cannot outlive the write that revoked it.
+type IdentityCache interface {
+	Get(name string) (entry IdentityCacheEntry, ok bool)
+	Set(name string, entry IdentityCacheEntry)
+	Invalidate(name string)
 }
 
 // TokenIssuer issues and verifies signed authentication tokens. Verify must

@@ -30,12 +30,46 @@ func testSigningKey() ([]byte, error) {
 // for tests that exercise the router (and therefore RequireAuth/RequireRole)
 // directly. Handler-level tests that call a handleXxx method with a
 // hand-built request do not go through the middleware and do not need one.
+//
+// Since RequireAuth resolves its role from the user store rather than the
+// token (design.md D1), the synthetic account is created there first - or
+// reused, at role, if a prior call already created it - so the token it
+// mints actually verifies.
 func authToken(t interface{ Fatalf(string, ...interface{}) }, srv *Server, role domain.Role) string {
-	token, _, err := srv.tokenIssuer.Issue(domain.User{Name: "test-" + string(role), Role: role})
+	name := "test-" + string(role)
+	user := ensureTestUser(t, srv, name, role)
+	token, _, err := srv.tokenIssuer.Issue(user)
 	if err != nil {
 		t.Fatalf("mint test token: %v", err)
 	}
 	return "Bearer " + token
+}
+
+// ensureTestUser returns the account named name from srv.userStore, creating
+// it at role if absent, or updating it to role if it already exists at a
+// different one. It exists so router-level tests can mint a token whose
+// account genuinely resolves through RequireAuth's user-store lookup.
+func ensureTestUser(t interface{ Fatalf(string, ...interface{}) }, srv *Server, name string, role domain.Role) domain.User {
+	if srv.userStore == nil {
+		t.Fatalf("ensureTestUser: server has no userStore configured")
+	}
+	if existing, err := srv.userStore.GetUser(name); err == nil {
+		if existing.Role != role {
+			if err := srv.userStore.UpdateUserRole(name, role); err != nil {
+				t.Fatalf("update test user role: %v", err)
+			}
+			existing, err = srv.userStore.GetUser(name)
+			if err != nil {
+				t.Fatalf("reload test user: %v", err)
+			}
+		}
+		return existing
+	}
+	created, err := srv.userStore.CreateUser(name, role, "unused-test-hash")
+	if err != nil {
+		t.Fatalf("create test user: %v", err)
+	}
+	return created
 }
 
 // authed attaches an admin bearer token to r and returns it. It exists so
@@ -44,11 +78,15 @@ func authToken(t interface{ Fatalf(string, ...interface{}) }, srv *Server, role 
 // asserting on an authorization boundary - those boundaries are covered
 // explicitly by middleware_test.go and the route-role table test. Many of
 // those tests build a *Server literal directly rather than through
-// NewServer, predating tokenIssuer; authed wires in the fixed test signing
-// key lazily rather than requiring every such literal to set one.
+// NewServer, predating tokenIssuer and userStore; authed wires in the fixed
+// test signing key and an in-memory user store lazily rather than requiring
+// every such literal to set them.
 func authed(t interface{ Fatalf(string, ...interface{}) }, srv *Server, r *http.Request) *http.Request {
 	if srv.tokenIssuer == nil {
 		srv.tokenIssuer = auth.JWTIssuer{Key: testSigningKey}
+	}
+	if srv.userStore == nil {
+		srv.userStore = mocks.NewMockUserStore()
 	}
 	r.Header.Set("Authorization", authToken(t, srv, domain.RoleAdmin))
 	return r

@@ -32,8 +32,10 @@ Create the first one once the server can reach the database:
 kestrix user create --role admin <name>
 ```
 
-See [Authentication](authentication.md) for login, roles, project grants, and
-account recovery.
+See [Authentication](authentication.md) for login, roles, project grants,
+account recovery, revocation latency, login throttling, and the security
+response headers. All of that section's environment variables beyond the two
+key paths above are optional and default to sane values.
 
 ## Database profiles
 

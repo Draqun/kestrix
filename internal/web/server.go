@@ -45,9 +45,27 @@ type Config struct {
 	DatabaseURL       string
 	MasterKeyPath     string
 	JWTSigningKeyPath string
-	Branch            string
-	Docker            DockerConfig
-	Signature         SignatureConfig
+	// IdentityCacheTTL bounds how long RequireAuth may serve an account's
+	// role and token version from cache; see design.md D4. Zero disables
+	// the cache. config.Environment.IdentityCacheTTL already resolves the
+	// operator-facing 5s default before this field is populated in
+	// production wiring; here, zero simply means disabled.
+	IdentityCacheTTL time.Duration
+	// LoginMaxAttempts and LoginWindow configure the login throttle; see
+	// design.md D7. Either being <= 0 disables throttling entirely -
+	// config.Environment resolves the operator-facing 10/1m defaults
+	// before populating these in production wiring.
+	LoginMaxAttempts int
+	LoginWindow      time.Duration
+	// TrustProxyHeader makes the login throttle key on the first hop of
+	// X-Forwarded-For instead of the raw peer address; see design.md D7.
+	TrustProxyHeader bool
+	// ContentSecurityPolicy overrides defaultContentSecurityPolicy on every
+	// route except /docs/*; see design.md D8. Empty keeps the default.
+	ContentSecurityPolicy string
+	Branch                string
+	Docker                DockerConfig
+	Signature             SignatureConfig
 	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
 	// store default.
 	WebhookHistoryLimit int
@@ -96,7 +114,18 @@ type Server struct {
 	tokenIssuer     domain.TokenIssuer
 	passwordHasher  domain.PasswordHasher
 	authService     *service.AuthService
+	identityCache   domain.IdentityCache
+	loginThrottle   *loginThrottle
 }
+
+// identityCacheMaxEntries bounds InMemoryIdentityCache regardless of how
+// many distinct accounts have authenticated recently; see design.md D4.
+const identityCacheMaxEntries = 10000
+
+// loginThrottleMaxEntries bounds each of loginThrottle's account and
+// address maps independently, regardless of how many distinct names or
+// addresses POST /api/auth/login - public and unauthenticated - has seen.
+const loginThrottleMaxEntries = 10000
 
 var listenAndServe = http.ListenAndServe
 
@@ -145,6 +174,10 @@ func NewServerE(cfg Config) (*Server, error) {
 	s.passwordHasher = auth.NewArgon2Hasher()
 	if s.userStore != nil {
 		s.authService = service.NewAuthService(s.userStore, s.passwordHasher, s.tokenIssuer)
+	}
+	s.identityCache = auth.NewInMemoryIdentityCache(cfg.IdentityCacheTTL, identityCacheMaxEntries, time.Now)
+	if cfg.LoginMaxAttempts > 0 && cfg.LoginWindow > 0 {
+		s.loginThrottle = newLoginThrottle(cfg.LoginMaxAttempts, cfg.LoginWindow, loginThrottleMaxEntries, time.Now)
 	}
 	cacheCfg := cfg.SourceCache
 	if cacheCfg.Directory == "" {
@@ -245,6 +278,7 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 
+	r.Use(s.SecurityHeaders)
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
@@ -258,7 +292,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Route("/api", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Get("/health", s.handleHealth)
-			r.Post("/auth/login", s.handleLogin)
+			r.With(s.throttleLogin).Post("/auth/login", s.handleLogin)
 		})
 
 		r.Group(func(r chi.Router) {
@@ -315,14 +349,18 @@ func (s *Server) buildRouter() chi.Router {
 	// Webhook
 	r.Post("/webhook", s.handleWebhook)
 
-	// Swagger docs
-	r.Get("/docs/swagger.json", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(docs.SwaggerInfo.ReadDoc()))
+	// Swagger docs - its own, more permissive content security policy;
+	// see design.md D8.
+	r.Group(func(r chi.Router) {
+		r.Use(docsSecurityHeaders)
+		r.Get("/docs/swagger.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(docs.SwaggerInfo.ReadDoc()))
+		})
+		r.Get("/docs/*", httpSwagger.Handler(
+			httpSwagger.URL("/docs/swagger.json"),
+		))
 	})
-	r.Get("/docs/*", httpSwagger.Handler(
-		httpSwagger.URL("/docs/swagger.json"),
-	))
 
 	// Serve built frontend if --static is set
 	if s.cfg.StaticDir != "" {

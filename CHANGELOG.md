@@ -6,6 +6,10 @@ All notable changes to Kestrix are documented here.
 
 ### Added
 
+- Session revocation: an account's global role, password, and token version are now resolved from the database on every request instead of trusted from the token, bounded by a short-lived in-process cache (`KESTRIX_IDENTITY_CACHE_TTL`, default `5s`, `0` disables it). Changing a role or password, or deleting an account, ends every session issued before the change - the account must log in again.
+- Login throttling: `POST /api/auth/login` limits failed attempts per account name and per client address (`KESTRIX_LOGIN_MAX_ATTEMPTS`, default `10`; `KESTRIX_LOGIN_WINDOW`, default `1m`), returning `429` with `Retry-After` and skipping password verification once throttled. `KESTRIX_TRUST_PROXY_HEADER` (default `false`) opts into keying the client address from `X-Forwarded-For` behind a trusted reverse proxy.
+- Security response headers on every route: `Content-Security-Policy` (overridable via `KESTRIX_CONTENT_SECURITY_POLICY`, `/docs/*` keeps its own), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `X-Frame-Options: DENY`.
+- Authentication and authorization decisions (failed logins, throttled attempts, `403` denials) are now logged with the account, client address, route, and reason - never the token, password, or password hash.
 - Local user accounts, JWT-based login, and role-based access control (`viewer`/`operator`/`admin`, plus per-project role grants). `POST /api/auth/login` and admin-only account endpoints (`/api/users*`) are new.
 - `kestrix user create|list|passwd|delete` manages accounts directly against the database, so the first administrator can be created without a reachable API or an existing account. Passwords are always read from a terminal prompt or standard input, never a flag.
 - `KESTRIX_JWT_SIGNING_KEY_PATH` configures the token signing key, provisioned and validated at startup the same way as `KESTRIX_MASTER_KEY_PATH`.
@@ -17,6 +21,8 @@ All notable changes to Kestrix are documented here.
 
 ### Changed
 
+- **BREAKING**: Every token carries a per-account version now; a token issued before this upgrade carries none and is rejected with `401`, so every signed-in session must log in again once. The `users` table gains a `token_version` column, added automatically on startup - no manual migration step is required.
+- A grant-store or user-store failure during authorization now responds `503`, never a silently reduced role or a `403` that blames the caller for an outage; and a caller-supplied pipeline directory (`dir` on `/api/pipeline`, `/api/pipeline/raw`, `/api/resolve`, `/api/generate`, `/api/validate`) is now confined to the configured pipeline root, answering `403` for a path outside it (including one that doesn't exist, so the check cannot be used to probe the filesystem).
 - **BREAKING**: Every `/api` route except `GET /api/health` and `POST /api/auth/login` now requires a valid bearer token; an existing deployment must set `KESTRIX_JWT_SIGNING_KEY_PATH` and run `kestrix user create --role admin <name>` before upgrading, or the server starts but the UI and API are unusable. `POST /webhook` is unaffected: it keeps its own shared-secret verification.
 - **BREAKING**: `GET /api/logs` returns the paginated `{items, pagination}` envelope already used by `/api/runs` and `/api/projects`, instead of a bare JSON array.
 - `GET /api/health` reports the stored webhook count and the registered project count as separate values; both fields previously echoed the same in-memory counter.

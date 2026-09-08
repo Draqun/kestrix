@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/store"
 )
 
 // errUserStore is a domain.UserStore whose failure on any operation is
@@ -49,7 +51,7 @@ func (s *errUserStore) GetUser(name string) (domain.User, error) {
 	}
 	u, ok := s.users[name]
 	if !ok {
-		return domain.User{}, errors.New("not found")
+		return domain.User{}, fmt.Errorf("%w: %s", store.ErrUserNotFound, name)
 	}
 	return u, nil
 }
@@ -81,6 +83,8 @@ func (s *errUserStore) UpdateUserRole(name string, role domain.Role) error {
 
 func (s *errUserStore) UpdateUserPassword(name string, _ string) error { return nil }
 
+func (s *errUserStore) BumpTokenVersion(name string) error { return nil }
+
 func (s *errUserStore) DeleteUser(name string) error {
 	if s.DeleteErr != nil {
 		return s.DeleteErr
@@ -92,10 +96,11 @@ func (s *errUserStore) DeleteUser(name string) error {
 // errGrantStore is a domain.GrantStore whose failure on any operation is
 // injectable.
 type errGrantStore struct {
-	ListErr   error
-	RemoveErr error
-	SetErr    error
-	grants    map[[2]string]domain.Role
+	ListErr    error
+	RemoveErr  error
+	SetErr     error
+	ResolveErr error
+	grants     map[[2]string]domain.Role
 }
 
 func newErrGrantStore() *errGrantStore {
@@ -136,6 +141,9 @@ func (g *errGrantStore) ListGrantsForProject(projectName string) ([]domain.Proje
 }
 
 func (g *errGrantStore) ResolveGrant(userName, projectName string) (domain.Role, bool, error) {
+	if g.ResolveErr != nil {
+		return "", false, g.ResolveErr
+	}
 	role, ok := g.grants[[2]string{userName, projectName}]
 	return role, ok, nil
 }
