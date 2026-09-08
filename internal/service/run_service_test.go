@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,6 +158,36 @@ func TestRunStatusRemainsRunningWhileManualWorkCanStillExecute(t *testing.T) {
 	}
 	if errMsg != "exit 1" {
 		t.Fatalf("error = %q, want preserved task failure", errMsg)
+	}
+}
+
+func TestRunStatusCanceledTaskMakesTheRunCanceled(t *testing.T) {
+	status, errMsg := runStatus([]domain.TaskResult{
+		{Name: "victim", Status: "canceled", Error: "canceled"},
+		{Name: "pending", Status: "canceled", Error: "canceled"},
+	}, nil)
+	if status != "canceled" {
+		t.Fatalf("status = %q, want canceled", status)
+	}
+	if errMsg != "canceled" {
+		t.Fatalf("error = %q, want canceled", errMsg)
+	}
+}
+
+func TestRunStatusCanceledTaskOutranksAFailedTask(t *testing.T) {
+	// A task killed by our own cancellation reports "canceled"; an
+	// unrelated task that failed on its own still reports "failed" - but
+	// the overall run is canceled, not failed, since that reflects operator
+	// intent rather than a pipeline bug. See design.md D5.
+	status, errMsg := runStatus([]domain.TaskResult{
+		{Name: "unrelated", Status: "failed", Error: "exit 1"},
+		{Name: "victim", Status: "canceled", Error: "canceled"},
+	}, nil)
+	if status != "canceled" {
+		t.Fatalf("status = %q, want canceled", status)
+	}
+	if errMsg != "canceled" {
+		t.Fatalf("error = %q, want canceled", errMsg)
 	}
 }
 
@@ -584,6 +615,172 @@ func TestApproveManualTask_ErrorBranches(t *testing.T) {
 				t.Fatalf("err = %v, want contains %q", err, tt.err)
 			}
 		})
+	}
+}
+
+// blockingPipelineRunner blocks Run until either releaseCh is closed or ctx
+// is cancelled (a well-behaved executor honoring cancellation), signalling
+// startedCh once it has begun so a test can synchronize on it.
+type blockingPipelineRunner struct {
+	startedCh   chan struct{}
+	releaseCh   chan struct{}
+	ignoreCtx   bool
+	result      []domain.TaskResult
+	resultErr   error
+	startedOnce sync.Once
+}
+
+func (r *blockingPipelineRunner) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
+	r.startedOnce.Do(func() { close(r.startedCh) })
+	if r.ignoreCtx {
+		<-r.releaseCh
+	} else {
+		select {
+		case <-r.releaseCh:
+		case <-ctx.Done():
+		}
+	}
+	return r.result, r.resultErr
+}
+
+func (r *blockingPipelineRunner) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+func TestRunService_Start_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 7}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run to start")
+	}
+
+	svc.mu.Lock()
+	_, hasCancel := svc.active[runID]
+	_, hasDone := svc.done[runID]
+	svc.mu.Unlock()
+	if !hasCancel || !hasDone {
+		t.Fatal("run not registered in active/done maps while running")
+	}
+
+	close(runner.releaseCh)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		svc.mu.Lock()
+		_, stillActive := svc.active[runID]
+		svc.mu.Unlock()
+		if !stillActive {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("run entry not removed from active/done maps after completion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRunService_Cancel_ActiveRunTerminatesInTime(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 8}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+
+	if err := svc.Cancel(context.Background(), runID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0] != runID {
+		t.Fatalf("CancelRunCalls = %v, want [%d]", store.CancelRunCalls, runID)
+	}
+}
+
+func TestRunService_Cancel_TimesOutWhenRunDoesNotTerminate(t *testing.T) {
+	oldBuffer := CancelWaitBuffer
+	CancelWaitBuffer = 50 * time.Millisecond
+	t.Cleanup(func() { CancelWaitBuffer = oldBuffer })
+
+	store := &mocks.MockRunStore{CreateRunID: 9}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), ignoreCtx: true}
+	svc := NewRunService(store, runner, runner)
+	svc.CancelGrace = time.Millisecond
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+	defer close(runner.releaseCh) // let the leaked goroutine exit after the test
+
+	err = svc.Cancel(context.Background(), runID)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if len(store.CancelRunCalls) != 0 {
+		t.Fatalf("CancelRun should not be called on timeout, got %v", store.CancelRunCalls)
+	}
+}
+
+func TestRunService_Cancel_NoActiveEntryCancelsInStoreDirectly(t *testing.T) {
+	store := &mocks.MockRunStore{}
+	svc := NewRunService(store, nil, nil)
+
+	if err := svc.Cancel(context.Background(), 123); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0] != 123 {
+		t.Fatalf("CancelRunCalls = %v, want [123]", store.CancelRunCalls)
+	}
+}
+
+func TestRunService_Cancel_CallerContextCancelledWhileWaiting(t *testing.T) {
+	oldBuffer := CancelWaitBuffer
+	CancelWaitBuffer = time.Minute
+	t.Cleanup(func() { CancelWaitBuffer = oldBuffer })
+
+	store := &mocks.MockRunStore{CreateRunID: 10}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), ignoreCtx: true}
+	svc := NewRunService(store, runner, runner)
+	svc.CancelGrace = time.Minute
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+	defer close(runner.releaseCh) // let the leaked goroutine exit after the test
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancelCaller()
+	}()
+
+	err = svc.Cancel(callerCtx, runID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Cancel err = %v, want context.Canceled", err)
+	}
+	if len(store.CancelRunCalls) != 0 {
+		t.Fatalf("CancelRun should not be called when the caller's context is cancelled, got %v", store.CancelRunCalls)
+	}
+}
+
+func TestRunService_Cancel_NoActiveEntryAndNoStore(t *testing.T) {
+	svc := NewRunService(nil, nil, nil)
+	if err := svc.Cancel(context.Background(), 1); err == nil {
+		t.Fatal("expected an error when runs are not supported")
 	}
 }
 

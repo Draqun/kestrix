@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
@@ -111,6 +114,426 @@ func TestTaskFatalAndOrderCycle(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("expected cycle error, got %v", err)
+	}
+}
+
+// cancelAfterExecutor runs each task normally but cancels the loop's
+// context once the named task completes, simulating cancellation arriving
+// between two tasks.
+type cancelAfterExecutor struct {
+	calls       []string
+	cancel      context.CancelFunc
+	cancelAfter string
+}
+
+func (e *cancelAfterExecutor) RunTask(_ context.Context, task model.Task, _ Options) (string, error) {
+	e.calls = append(e.calls, task.Name)
+	if task.Name == e.cancelAfter {
+		e.cancel()
+	}
+	return "output-" + task.Name, nil
+}
+
+func TestTaskLoopStopsSchedulingAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	nodes := []dag.Node{
+		{Task: model.Task{Name: "first"}},
+		{Task: model.Task{Name: "second"}},
+		{Task: model.Task{Name: "third"}},
+	}
+	executor := &cancelAfterExecutor{cancel: cancel, cancelAfter: "first"}
+	var out bytes.Buffer
+	var completions []TaskResult
+	results, err := taskLoop(ctx, nodes, executor, Options{
+		Stdout:         &out,
+		OnTaskComplete: func(tr TaskResult) { completions = append(completions, tr) },
+	})
+	if err != nil {
+		t.Fatalf("taskLoop: %v", err)
+	}
+	if !reflect.DeepEqual(executor.calls, []string{"first"}) {
+		t.Fatalf("executor calls = %v, want only [first] - no task should run after cancellation", executor.calls)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results = %+v, want 3 entries", results)
+	}
+	if results[0].Status != "passed" {
+		t.Errorf("first task status = %q, want passed", results[0].Status)
+	}
+	if results[1].Status != "canceled" || results[1].Error != "canceled" {
+		t.Errorf("second task result = %+v, want canceled/canceled", results[1])
+	}
+	if results[2].Status != "canceled" || results[2].Error != "canceled" {
+		t.Errorf("third task result = %+v, want canceled/canceled", results[2])
+	}
+	if len(completions) != 3 {
+		t.Fatalf("OnTaskComplete called %d times, want 3", len(completions))
+	}
+}
+
+// cancelDuringExecutor cancels the loop's context from inside RunTask itself
+// before returning an error, simulating a process killed by our own
+// SIGTERM/SIGKILL after cancellation.
+type cancelDuringExecutor struct {
+	cancel context.CancelFunc
+}
+
+func (e *cancelDuringExecutor) RunTask(_ context.Context, _ model.Task, _ Options) (string, error) {
+	e.cancel()
+	return "", errors.New("signal: terminated")
+}
+
+func TestTaskLoopReclassifiesKilledTaskAsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	nodes := []dag.Node{{Task: model.Task{Name: "victim"}}}
+	executor := &cancelDuringExecutor{cancel: cancel}
+	var out bytes.Buffer
+	results, err := taskLoop(ctx, nodes, executor, Options{Stdout: &out})
+	if err != nil {
+		t.Fatalf("taskLoop: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != "canceled" || results[0].Error != "canceled" {
+		t.Fatalf("results = %+v, want one canceled task (not failed)", results)
+	}
+}
+
+func TestTaskLoopPrintsAllowlistOnceBeforeFirstTask(t *testing.T) {
+	nodes := []dag.Node{
+		{Task: model.Task{Name: "one"}},
+		{Task: model.Task{Name: "two"}},
+	}
+	executor := &stubExecutor{}
+	var out bytes.Buffer
+	if _, err := taskLoop(context.Background(), nodes, executor, Options{Stdout: &out}); err != nil {
+		t.Fatalf("taskLoop: %v", err)
+	}
+	text := out.String()
+	if strings.Count(text, "[ENV] task allowlist:") != 1 {
+		t.Fatalf("allowlist line printed %d times, want 1: %q", strings.Count(text, "[ENV] task allowlist:"), text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "[ENV] task allowlist:") && strings.Contains(line, "=") {
+			t.Errorf("allowlist line exposes a value: %q", line)
+		}
+	}
+}
+
+func TestTaskLoopSkipsAllowlistWhenNoTaskRuns(t *testing.T) {
+	nodes := []dag.Node{{Task: model.Task{Name: "manual", Manual: true}}}
+	executor := &stubExecutor{}
+	var out bytes.Buffer
+	if _, err := taskLoop(context.Background(), nodes, executor, Options{Stdout: &out}); err != nil {
+		t.Fatalf("taskLoop: %v", err)
+	}
+	if strings.Contains(out.String(), "[ENV] task allowlist:") {
+		t.Errorf("allowlist printed with no task run: %q", out.String())
+	}
+}
+
+func TestDockerExecutorHardeningFlags(t *testing.T) {
+	var captured []string
+	old := commandContext
+	commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		captured = append([]string(nil), args...)
+		return exec.CommandContext(ctx, "true")
+	}
+	t.Cleanup(func() { commandContext = old })
+
+	root := t.TempDir()
+	docker := &DockerExecutor{
+		WorkDir: root,
+		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		PIDs:    128,
+		Memory:  "1g",
+		CPUs:    "1.5",
+		User:    "1000:1000",
+		Network: "bridge",
+	}
+	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+
+	assertFlagValue(t, captured, "--pids-limit", "128")
+	assertFlagValue(t, captured, "--memory", "1g")
+	assertFlagValue(t, captured, "--cpus", "1.5")
+	assertFlagValue(t, captured, "--network", "bridge")
+	assertFlagValue(t, captured, "--user", "1000:1000")
+	if !containsArg(captured, "--cap-drop") || !containsArg(captured, "ALL") {
+		t.Errorf("missing --cap-drop ALL: %v", captured)
+	}
+	if !containsArg(captured, "--security-opt") || !containsArg(captured, "no-new-privileges") {
+		t.Errorf("missing --security-opt no-new-privileges: %v", captured)
+	}
+	for _, arg := range captured {
+		if strings.Contains(arg, "docker.sock") {
+			t.Errorf("docker.sock mounted: %v", captured)
+		}
+	}
+	if containsArg(captured, "--privileged") {
+		t.Errorf("--privileged present: %v", captured)
+	}
+}
+
+func TestDockerExecutorNetworkNoneAndOmittedUser(t *testing.T) {
+	var captured []string
+	old := commandContext
+	commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		captured = append([]string(nil), args...)
+		return exec.CommandContext(ctx, "true")
+	}
+	t.Cleanup(func() { commandContext = old })
+
+	root := t.TempDir()
+	docker := &DockerExecutor{
+		WorkDir: root,
+		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		Network: "none",
+	}
+	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+
+	assertFlagValue(t, captured, "--network", "none")
+	if containsArg(captured, "--user") {
+		t.Errorf("--user should be omitted when unset: %v", captured)
+	}
+	if containsArg(captured, "--pids-limit") || containsArg(captured, "--memory") || containsArg(captured, "--cpus") {
+		t.Errorf("zero-valued limits should be omitted: %v", captured)
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func assertFlagValue(t *testing.T, args []string, flag, want string) {
+	t.Helper()
+	for i, a := range args {
+		if a == flag {
+			if i+1 >= len(args) || args[i+1] != want {
+				t.Errorf("%s value = %v, want %q", flag, args[i+1:], want)
+			}
+			return
+		}
+	}
+	t.Errorf("%s not found in %v", flag, args)
+}
+
+// TestKillGroupDefaultImplementation exercises the production killGroup body
+// directly - every other test replaces the package variable, so the default
+// syscall.Kill call would otherwise never execute. Signal 0 performs no
+// delivery, only an existence/permission check, so this is safe to call
+// unconditionally regardless of the test process's own process group.
+func TestKillGroupDefaultImplementation(t *testing.T) {
+	_ = killGroup(os.Getpid(), syscall.Signal(0))
+}
+
+// TestSetCancelViaProcessGroupCleanupIsNoOpBeforeCancel exercises the
+// cleanup func's nil-timer branch: cmd.Cancel was never invoked (the
+// process exited on its own), so there is no pending timer to stop.
+func TestSetCancelViaProcessGroupCleanupIsNoOpBeforeCancel(t *testing.T) {
+	old := killGroup
+	killGroup = func(int, syscall.Signal) error { t.Fatal("killGroup should not be called"); return nil }
+	t.Cleanup(func() { killGroup = old })
+
+	cmd := exec.Command("true")
+	cmd.Process = &os.Process{Pid: 4243}
+	cleanup := setCancelViaProcessGroup(cmd, time.Second)
+	cleanup() // Cancel was never called; must not panic or signal anything.
+}
+
+// TestSetCancelViaProcessGroupCleanupStopsPendingKill is a regression test
+// for the grace-period SIGKILL racing PID reuse after a clean exit: calling
+// cleanup right after Cancel (as RunTask does once cmd.Run returns) must
+// stop the scheduled SIGKILL before it fires.
+func TestSetCancelViaProcessGroupCleanupStopsPendingKill(t *testing.T) {
+	type call struct {
+		pgid int
+		sig  syscall.Signal
+	}
+	var mu sync.Mutex
+	var calls []call
+	old := killGroup
+	killGroup = func(pgid int, sig syscall.Signal) error {
+		mu.Lock()
+		calls = append(calls, call{pgid, sig})
+		mu.Unlock()
+		return nil
+	}
+	t.Cleanup(func() { killGroup = old })
+
+	cmd := exec.Command("true")
+	cmd.Process = &os.Process{Pid: 4244}
+	cleanup := setCancelViaProcessGroup(cmd, 30*time.Millisecond)
+
+	if err := cmd.Cancel(); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	cleanup() // Simulates cmd.Run() returning right after SIGTERM: stop the SIGKILL timer.
+
+	time.Sleep(100 * time.Millisecond) // well past the grace period
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 || calls[0] != (call{4244, syscall.SIGTERM}) {
+		t.Fatalf("calls = %+v, want exactly one SIGTERM and no SIGKILL after cleanup", calls)
+	}
+}
+
+func TestSetCancelViaProcessGroupSendsTermThenKill(t *testing.T) {
+	type call struct {
+		pgid int
+		sig  syscall.Signal
+	}
+	var mu sync.Mutex
+	var calls []call
+	done := make(chan struct{})
+	old := killGroup
+	killGroup = func(pgid int, sig syscall.Signal) error {
+		mu.Lock()
+		calls = append(calls, call{pgid, sig})
+		mu.Unlock()
+		if sig == syscall.SIGKILL {
+			close(done)
+		}
+		return nil
+	}
+	t.Cleanup(func() { killGroup = old })
+
+	cmd := exec.Command("true")
+	cmd.Process = &os.Process{Pid: 4242}
+	setCancelViaProcessGroup(cmd, 10*time.Millisecond)
+
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatal("SysProcAttr.Setpgid not set")
+	}
+	if cmd.WaitDelay != 10*time.Millisecond {
+		t.Fatalf("WaitDelay = %v, want 10ms", cmd.WaitDelay)
+	}
+
+	if err := cmd.Cancel(); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the grace-period SIGKILL")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %+v, want exactly 2", calls)
+	}
+	if calls[0] != (call{4242, syscall.SIGTERM}) {
+		t.Errorf("first call = %+v, want (4242, SIGTERM)", calls[0])
+	}
+	if calls[1] != (call{4242, syscall.SIGKILL}) {
+		t.Errorf("second call = %+v, want (4242, SIGKILL)", calls[1])
+	}
+}
+
+func TestLocalAndGitLabExecutorsWireProcessGroupCancel(t *testing.T) {
+	root := t.TempDir()
+	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "true"}}
+
+	var captured *exec.Cmd
+	old := commandContext
+	commandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		captured = exec.CommandContext(ctx, "true")
+		return captured
+	}
+	t.Cleanup(func() { commandContext = old })
+
+	local := &LocalExecutor{WorkDir: root, Repos: repos}
+	if _, err := local.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("LocalExecutor.RunTask: %v", err)
+	}
+	if captured.SysProcAttr == nil || !captured.SysProcAttr.Setpgid {
+		t.Error("LocalExecutor: SysProcAttr.Setpgid not set")
+	}
+	if captured.Cancel == nil {
+		t.Error("LocalExecutor: Cancel not set")
+	}
+	if captured.WaitDelay <= 0 {
+		t.Error("LocalExecutor: WaitDelay not set")
+	}
+
+	captured = nil
+	gitlab := &GitLabRunnerExecutor{WorkDir: root, StageMap: map[string]string{"task": "build"}}
+	if _, err := gitlab.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("GitLabRunnerExecutor.RunTask: %v", err)
+	}
+	if captured.SysProcAttr == nil || !captured.SysProcAttr.Setpgid {
+		t.Error("GitLabRunnerExecutor: SysProcAttr.Setpgid not set")
+	}
+	if captured.Cancel == nil {
+		t.Error("GitLabRunnerExecutor: Cancel not set")
+	}
+	if captured.WaitDelay <= 0 {
+		t.Error("GitLabRunnerExecutor: WaitDelay not set")
+	}
+}
+
+func TestDockerExecutorCancelStopsContainerByName(t *testing.T) {
+	type invocation struct {
+		args []string
+		cmd  *exec.Cmd
+	}
+	var invocations []invocation
+	old := commandContext
+	commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "true")
+		invocations = append(invocations, invocation{args: append([]string(nil), args...), cmd: cmd})
+		return cmd
+	}
+	t.Cleanup(func() { commandContext = old })
+
+	root := t.TempDir()
+	docker := &DockerExecutor{
+		WorkDir: root,
+		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		Grace:   5 * time.Second,
+	}
+	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+
+	// The task exited normally: no stop should have been issued.
+	if len(invocations) != 1 {
+		t.Fatalf("normal exit issued %d docker commands, want 1 (run only): %v", len(invocations), invocations)
+	}
+	runArgs := invocations[0].args
+	containerName := ""
+	for i, a := range runArgs {
+		if a == "--name" && i+1 < len(runArgs) {
+			containerName = runArgs[i+1]
+		}
+	}
+	if containerName == "" {
+		t.Fatalf("could not find --name in run args: %v", runArgs)
+	}
+
+	// Invoking Cancel (as the stdlib would on context cancellation) must
+	// stop the same container by name, with the configured grace period.
+	if err := invocations[0].cmd.Cancel(); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(invocations) != 2 {
+		t.Fatalf("Cancel issued %d docker commands, want 2 (run + stop): %v", len(invocations), invocations)
+	}
+	stopArgs := invocations[1].args
+	want := []string{"stop", "-t", "5", containerName}
+	if !reflect.DeepEqual(stopArgs, want) {
+		t.Fatalf("stop args = %v, want %v", stopArgs, want)
 	}
 }
 

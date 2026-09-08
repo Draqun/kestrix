@@ -258,6 +258,96 @@ func TestApplySourceCacheEnvironmentBranches(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigRunnerDockerDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Runner.DockerPIDs != 256 {
+		t.Errorf("DockerPIDs = %d, want 256", cfg.Runner.DockerPIDs)
+	}
+	if cfg.Runner.DockerMemory != "2g" {
+		t.Errorf("DockerMemory = %q, want 2g", cfg.Runner.DockerMemory)
+	}
+	if cfg.Runner.DockerCPUs != "2" {
+		t.Errorf("DockerCPUs = %q, want 2", cfg.Runner.DockerCPUs)
+	}
+	if cfg.Runner.DockerUser != "" {
+		t.Errorf("DockerUser = %q, want empty", cfg.Runner.DockerUser)
+	}
+	if cfg.Runner.DockerNetwork != "bridge" {
+		t.Errorf("DockerNetwork = %q, want bridge", cfg.Runner.DockerNetwork)
+	}
+	if time.Duration(cfg.Runner.CancelGrace) != 10*time.Second {
+		t.Errorf("CancelGrace = %v, want 10s", time.Duration(cfg.Runner.CancelGrace))
+	}
+}
+
+func TestRunnerConfigPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("runner:\n  docker_pids: 100\n  docker_memory: 4g\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := LoadEnvironment([]string{
+		"KESTRIX_RUNNER_DOCKER_PIDS=999",
+		"KESTRIX_RUNNER_DOCKER_MEMORY=1g",
+		"KESTRIX_RUNNER_DOCKER_CPUS=4",
+		"KESTRIX_RUNNER_DOCKER_USER=1000:1000",
+		"KESTRIX_RUNNER_DOCKER_NETWORK=none",
+		"KESTRIX_RUNNER_CANCEL_GRACE=20s",
+	})
+	if err := cfg.ApplyRunnerEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	// File explicitly set docker_pids/docker_memory: they win over env.
+	if cfg.Runner.DockerPIDs != 100 {
+		t.Errorf("DockerPIDs = %d, want 100 (file wins)", cfg.Runner.DockerPIDs)
+	}
+	if cfg.Runner.DockerMemory != "4g" {
+		t.Errorf("DockerMemory = %q, want 4g (file wins)", cfg.Runner.DockerMemory)
+	}
+	// Not set in the file: environment fills in.
+	if cfg.Runner.DockerCPUs != "4" {
+		t.Errorf("DockerCPUs = %q, want 4 (env wins)", cfg.Runner.DockerCPUs)
+	}
+	if cfg.Runner.DockerUser != "1000:1000" {
+		t.Errorf("DockerUser = %q, want 1000:1000 (env wins)", cfg.Runner.DockerUser)
+	}
+	if cfg.Runner.DockerNetwork != "none" {
+		t.Errorf("DockerNetwork = %q, want none (env wins)", cfg.Runner.DockerNetwork)
+	}
+	if time.Duration(cfg.Runner.CancelGrace) != 20*time.Second {
+		t.Errorf("CancelGrace = %v, want 20s (env wins)", time.Duration(cfg.Runner.CancelGrace))
+	}
+}
+
+func TestApplyRunnerEnvironmentBranches(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := cfg.ApplyRunnerEnvironment(nil); err != nil {
+		t.Fatal(err)
+	}
+	invalid := LoadEnvironment([]string{"KESTRIX_RUNNER_DOCKER_PIDS=-1"})
+	if err := cfg.ApplyRunnerEnvironment(invalid); err == nil {
+		t.Fatal("expected environment validation error")
+	}
+
+	env := LoadEnvironment([]string{
+		"KESTRIX_RUNNER_DOCKER_PIDS=128",
+		"KESTRIX_RUNNER_DOCKER_MEMORY=1g",
+	})
+	if err := cfg.ApplyRunnerEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runner.DockerPIDs != 128 {
+		t.Errorf("DockerPIDs = %d, want 128 (no file presence)", cfg.Runner.DockerPIDs)
+	}
+	if cfg.Runner.DockerMemory != "1g" {
+		t.Errorf("DockerMemory = %q, want 1g (no file presence)", cfg.Runner.DockerMemory)
+	}
+}
+
 func TestApplyFlags(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ApplyFlags(":3000", "/opt/pipelines", "release", "glpat-yep", true, 99999)

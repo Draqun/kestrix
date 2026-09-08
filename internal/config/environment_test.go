@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -247,6 +248,136 @@ func TestEnvironmentPrefixed(t *testing.T) {
 	}
 	if value, ok := e.Lookup("KESTRIX_ONE"); !ok || value != "1" {
 		t.Fatalf("lookup=%q ok=%v", value, ok)
+	}
+}
+
+func TestLoadEnvironmentRunnerEnvPassthroughEmpty(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.RunnerEnvPassthrough) != 0 {
+		t.Fatalf("RunnerEnvPassthrough = %v, want empty", env.RunnerEnvPassthrough)
+	}
+}
+
+func TestLoadEnvironmentRunnerEnvPassthroughValidList(t *testing.T) {
+	env := LoadEnvironment([]string{
+		"KESTRIX_RUNNER_ENV_PASSTHROUGH= DOCKER_REGISTRY, DEPLOY_HOST ,,DOCKER_USERNAME",
+	})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DOCKER_REGISTRY", "DEPLOY_HOST", "DOCKER_USERNAME"}
+	if !reflect.DeepEqual(env.RunnerEnvPassthrough, want) {
+		t.Fatalf("RunnerEnvPassthrough = %v, want %v", env.RunnerEnvPassthrough, want)
+	}
+}
+
+func TestLoadEnvironmentRunnerEnvPassthroughRejectsDeniedNames(t *testing.T) {
+	for _, denied := range []string{
+		"KESTRIX_MASTER_KEY_PATH",
+		"KESTRIX_JWT_SIGNING_KEY_PATH",
+		"DATABASE_URL",
+		"KESTRIX_GITLAB_TOKEN",
+		"KESTRIX_WEBHOOK_SECRET",
+	} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_ENV_PASSTHROUGH=" + denied})
+		err := env.ValidationError()
+		if err == nil {
+			t.Fatalf("%s: ValidationError() = nil, want error", denied)
+		}
+		if !strings.Contains(err.Error(), denied) {
+			t.Errorf("%s: error = %v, want it to name the variable", denied, err)
+		}
+		if strings.Contains(err.Error(), "=") {
+			t.Errorf("%s: error = %v, must not expose a value", denied, err)
+		}
+	}
+}
+
+func TestLoadEnvironmentRunnerDockerDefaults(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.RunnerDockerPIDs != 256 {
+		t.Errorf("RunnerDockerPIDs = %d, want 256", env.RunnerDockerPIDs)
+	}
+	if env.RunnerDockerMemory != "2g" {
+		t.Errorf("RunnerDockerMemory = %q, want 2g", env.RunnerDockerMemory)
+	}
+	if env.RunnerDockerCPUs != "2" {
+		t.Errorf("RunnerDockerCPUs = %q, want 2", env.RunnerDockerCPUs)
+	}
+	if env.RunnerDockerUser != "" {
+		t.Errorf("RunnerDockerUser = %q, want empty", env.RunnerDockerUser)
+	}
+	if env.RunnerDockerNetwork != "bridge" {
+		t.Errorf("RunnerDockerNetwork = %q, want bridge", env.RunnerDockerNetwork)
+	}
+	if env.RunnerCancelGrace != 10*time.Second {
+		t.Errorf("RunnerCancelGrace = %v, want 10s", env.RunnerCancelGrace)
+	}
+}
+
+func TestLoadEnvironmentRunnerDockerExplicitValues(t *testing.T) {
+	env := LoadEnvironment([]string{
+		"KESTRIX_RUNNER_DOCKER_PIDS=64",
+		"KESTRIX_RUNNER_DOCKER_MEMORY=512m",
+		"KESTRIX_RUNNER_DOCKER_CPUS=1.5",
+		"KESTRIX_RUNNER_DOCKER_USER=1000:1000",
+		"KESTRIX_RUNNER_DOCKER_NETWORK=none",
+		"KESTRIX_RUNNER_CANCEL_GRACE=30s",
+	})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.RunnerDockerPIDs != 64 {
+		t.Errorf("RunnerDockerPIDs = %d, want 64", env.RunnerDockerPIDs)
+	}
+	if env.RunnerDockerMemory != "512m" {
+		t.Errorf("RunnerDockerMemory = %q, want 512m", env.RunnerDockerMemory)
+	}
+	if env.RunnerDockerCPUs != "1.5" {
+		t.Errorf("RunnerDockerCPUs = %q, want 1.5", env.RunnerDockerCPUs)
+	}
+	if env.RunnerDockerUser != "1000:1000" {
+		t.Errorf("RunnerDockerUser = %q, want 1000:1000", env.RunnerDockerUser)
+	}
+	if env.RunnerDockerNetwork != "none" {
+		t.Errorf("RunnerDockerNetwork = %q, want none", env.RunnerDockerNetwork)
+	}
+	if env.RunnerCancelGrace != 30*time.Second {
+		t.Errorf("RunnerCancelGrace = %v, want 30s", env.RunnerCancelGrace)
+	}
+}
+
+func TestLoadEnvironmentRunnerDockerPIDsRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_DOCKER_PIDS=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUNNER_DOCKER_PIDS=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentRunnerCancelGraceRejectsNegative(t *testing.T) {
+	for _, raw := range []string{"-1s", "not-a-duration"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_CANCEL_GRACE=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUNNER_CANCEL_GRACE=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentRunnerCancelGraceAllowsZero(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_RUNNER_CANCEL_GRACE=0s"})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.RunnerCancelGrace != 0 {
+		t.Fatalf("RunnerCancelGrace = %v, want 0", env.RunnerCancelGrace)
 	}
 }
 

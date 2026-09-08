@@ -71,6 +71,8 @@ go test -run TestWebhook ./internal/web/ -count=1
 - **Scripts need bash** (`pipefail`); busybox `sh` breaks. Pipeline uses `bash scripts/*.sh`.
 - **Prod compose**: `docker/docker-compose.prod.yml`, Kestrix (backend + React FE) on **:18080** (dev uses :8080/:3000); the unfinished business site is optional on :8082.
 - **Module path**: `kestrix`; repository hosting is configured separately in `project.yaml`.
+- **Task processes do not inherit the Kestrix environment.** They see only `PATH`/`HOME`/`LANG`/`LC_ALL`/`TMPDIR`/`TERM`/`USER`, `CI_*`, resolved pipeline variables, and host variables named in `KESTRIX_RUNNER_ENV_PASSTHROUGH` (never `KESTRIX_MASTER_KEY_PATH`, `KESTRIX_JWT_SIGNING_KEY_PATH`, `DATABASE_URL`, `KESTRIX_GITLAB_TOKEN`, `KESTRIX_WEBHOOK_SECRET` - listing one refuses to start). One function, `config.Environment.TaskEnv`, builds this for every executor.
+- **`docker` mode is hardened by default**: `--cap-drop ALL`, `--security-opt no-new-privileges`, a PID limit (`KESTRIX_RUNNER_DOCKER_PIDS`, default 256), memory/CPU limits (`KESTRIX_RUNNER_DOCKER_MEMORY`/`_CPUS`, default `2g`/`2`), network `KESTRIX_RUNNER_DOCKER_NETWORK` (default `bridge`; `none` for no egress). No Docker socket mount, no `--privileged`.
 
 ## Conventions
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
@@ -132,12 +134,10 @@ project "name" {
 - Config: ~/.kestrix/config.yaml or env vars (KESTRIX_* only)
 
 ## Cancel runs
-`POST /api/projects/{name}/runs/{id}/cancel` → `PGStore.CancelRun`:
-- `running` → `canceled`
-- `pending` without incomplete deps → `canceled`
-- `pending` depending on incomplete/failed → `skipped`
-- `passed` unchanged  
-Does **not** kill OS processes yet (status-only); stuck runs still need cancel to leave `running`.
+`POST /api/projects/{name}/runs/{id}/cancel` → `RunService.Cancel`:
+- Active run (registered in `RunService.active`/`.done`): cancels its context, sends the task's process group SIGTERM then SIGKILL (`local`)/`docker stop` (`docker`) after `KESTRIX_RUNNER_CANCEL_GRACE` (default 10s), waits up to grace+5s, then the store marks it `canceled`.
+- No active entry (already finished, waiting for manual approval, or from before a restart): falls back to `PGStore.CancelRun` (status-only rewrite): `running`→`canceled`, `pending` without incomplete deps→`canceled`, `pending` depending on incomplete/failed→`skipped`, `passed` unchanged.
+- Wait times out (process didn't die within grace+5s): `504`, run stays `running` — never falsely reported `canceled`.
 
 ## UI notes
 - Vite dev :3000 proxies API to :8080

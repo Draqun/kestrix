@@ -8,11 +8,29 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
+
+// defaultCancelGrace is used by Cancel when CancelGrace is unset (zero),
+// mirroring the runner package's own default; see design.md D4/D5.
+const defaultCancelGrace = 10 * time.Second
+
+// CancelWaitBuffer is added to CancelGrace when Cancel waits for an active
+// run's executeRun goroutine to return; see design.md D5. A package
+// variable so unit tests aren't forced to wait a real 5 seconds to reach
+// the timeout path.
+var CancelWaitBuffer = 5 * time.Second
+
+// ErrRunCancelTimedOut identifies a Cancel call whose run did not terminate
+// within its grace period; callers use errors.Is to map this distinctly
+// (for example to an HTTP 504) without exposing the underlying message,
+// which may name internal timing but never a host path or secret.
+var ErrRunCancelTimedOut = errors.New("run did not terminate in time")
 
 // ProjectService handles project CRUD with validation.
 type ProjectService struct {
@@ -152,11 +170,26 @@ type RunService struct {
 	runStore   domain.RunStore
 	pipeline   domain.PipelineRunner
 	taskRunner domain.TaskRunner
+
+	// CancelGrace bounds how long Cancel waits, beyond an extra 5s, for an
+	// active run's executeRun goroutine to return after its context is
+	// cancelled. Zero selects defaultCancelGrace; see design.md D5.
+	CancelGrace time.Duration
+
+	mu     sync.Mutex
+	active map[int]context.CancelFunc
+	done   map[int]chan struct{}
 }
 
 // NewRunService creates a RunService.
 func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, taskRunner domain.TaskRunner) *RunService {
-	return &RunService{runStore: runStore, pipeline: pipeline, taskRunner: taskRunner}
+	return &RunService{
+		runStore:   runStore,
+		pipeline:   pipeline,
+		taskRunner: taskRunner,
+		active:     make(map[int]context.CancelFunc),
+		done:       make(map[int]chan struct{}),
+	}
 }
 
 // Start creates a run and executes the pipeline in the background.
@@ -172,8 +205,69 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	output := &bytes.Buffer{}
 	s.prepareRunExecution(runID, output, &opts)
 
-	go s.executeRun(ctx, runID, proj, changed, opts, output)
+	runCtx, cancel := context.WithCancel(ctx)
+	doneCh := make(chan struct{})
+	s.mu.Lock()
+	s.active[runID] = cancel
+	s.done[runID] = doneCh
+	s.mu.Unlock()
+
+	go func() {
+		defer close(doneCh)
+		defer cancel()
+		defer func() {
+			s.mu.Lock()
+			delete(s.active, runID)
+			delete(s.done, runID)
+			s.mu.Unlock()
+		}()
+		s.executeRun(runCtx, runID, proj, changed, opts, output)
+	}()
 	return runID, nil
+}
+
+// Cancel stops an active run's executing task before its status is recorded
+// as canceled: it cancels the run's context, waits up to CancelGrace plus 5s
+// for its executeRun goroutine to return, then marks the run canceled in the
+// store. If the wait times out, the run is left running and an error is
+// returned instead - a run reported canceled while its process keeps
+// executing would be worse than one correctly still reported running; see
+// design.md D5. A run with no active entry (already finished, waiting for
+// manual approval, or from before a restart) is canceled in the store
+// directly, with no termination attempted.
+func (s *RunService) Cancel(ctx context.Context, runID int) error {
+	s.mu.Lock()
+	cancel, hasCancel := s.active[runID]
+	doneCh, hasDone := s.done[runID]
+	s.mu.Unlock()
+
+	if !hasCancel || !hasDone {
+		if s.runStore == nil {
+			return fmt.Errorf("runs not supported")
+		}
+		return s.runStore.CancelRun(runID)
+	}
+
+	cancel()
+	grace := s.CancelGrace
+	if grace <= 0 {
+		grace = defaultCancelGrace
+	}
+	timeout := grace + CancelWaitBuffer
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-doneCh:
+		// An active entry only exists once Start has registered it, which
+		// requires runStore to create the run in the first place - so
+		// runStore is guaranteed non-nil here.
+		return s.runStore.CancelRun(runID)
+	case <-timer.C:
+		return fmt.Errorf("run %d did not terminate within %s: %w", runID, timeout, ErrRunCancelTimedOut)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project) (int, error) {
@@ -264,15 +358,25 @@ func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
 		status = "failed"
 		errMsg = runErr.Error()
 	}
+	canceled := false
 	for _, tr := range taskResults {
-		if tr.Status != "failed" {
-			continue
+		switch tr.Status {
+		case "canceled":
+			canceled = true
+		case "failed":
+			status = "failed"
+			if errMsg == "" {
+				errMsg = tr.Error
+			}
 		}
-		status = "failed"
-		if errMsg == "" {
-			errMsg = tr.Error
-		}
-		break
+	}
+	if canceled {
+		// A task terminated by our own cancellation is not a pipeline
+		// failure; see design.md D5 and the "Cancel a running local task"
+		// scenario - the run SHALL be canceled even when the task that was
+		// killed reports its own result as canceled rather than failed.
+		status = "canceled"
+		errMsg = "canceled"
 	}
 	if hasExecutableRunState(taskResults) {
 		status = "running"

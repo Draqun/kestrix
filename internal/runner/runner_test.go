@@ -10,7 +10,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
@@ -331,6 +333,60 @@ func TestRunLocal_PassAndScript(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Output, "hi") {
 		t.Errorf("expected captured stdout to contain 'hi', got %q", results[0].Output)
+	}
+}
+
+// TestRunLocal_CancelKillsProcessGroup is an integration test excluded from
+// unit coverage per runner-unit-only-coverage: it runs real sleep processes
+// and waits out a real cancel grace period. See design.md D4 and the
+// task-execution-isolation capability's "Cancel a running local task"
+// scenario.
+func TestRunLocal_CancelKillsProcessGroup(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skip("pgrep not available")
+	}
+
+	dir := t.TempDir()
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	project := simpleProject("cancel", "repo.repo.changed", "sleep 30 & sleep 30 & wait")
+	var out bytes.Buffer
+
+	go func() {
+		<-started
+		time.Sleep(300 * time.Millisecond) // let both sleeps actually start
+		cancel()
+	}()
+
+	grace := config.Current().RunnerCancelGrace
+	results, err := RunLocal(ctx, project, map[string]bool{"repo": true}, Options{
+		WorkDir: dir, Stdout: &out, Stderr: &out,
+		OnTaskStart: func(string) { close(started) },
+	})
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != "canceled" {
+		t.Fatalf("results = %+v, want one canceled (killed) task", results)
+	}
+
+	deadline := time.Now().Add(grace + 2*time.Second)
+	for {
+		output, lookErr := exec.Command("pgrep", "-f", "sleep 30").Output()
+		if lookErr != nil {
+			return // pgrep exits non-zero when no process matches
+		}
+		if strings.TrimSpace(string(output)) == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sleep processes still running after grace(%v)+2s: %s", grace, output)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
