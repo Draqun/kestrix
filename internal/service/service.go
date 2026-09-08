@@ -270,10 +270,11 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	if s.pipeline == nil {
 		return 0, fmt.Errorf("pipeline runner not configured")
 	}
-	runID, err := s.createRun(projectName, changed, opts.IncludeManual, proj)
+	runID, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
 	if err != nil {
 		return 0, err
 	}
+	log.Printf("run: started actor=%q project=%q run=%d", opts.Actor, projectName, runID)
 	output := &bytes.Buffer{}
 	s.prepareRunExecution(runID, output, &opts)
 
@@ -307,7 +308,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 // design.md D5. A run with no active entry (already finished, waiting for
 // manual approval, or from before a restart) is canceled in the store
 // directly, with no termination attempted.
-func (s *RunService) Cancel(ctx context.Context, runID int) error {
+func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error {
 	s.mu.Lock()
 	cancel, hasCancel := s.active[runID]
 	doneCh, hasDone := s.done[runID]
@@ -317,7 +318,11 @@ func (s *RunService) Cancel(ctx context.Context, runID int) error {
 		if s.runStore == nil {
 			return fmt.Errorf("runs not supported")
 		}
-		return s.runStore.CancelRun(runID)
+		if err := s.runStore.CancelRun(runID, actor); err != nil {
+			return err
+		}
+		log.Printf("run: canceled actor=%q run=%d", actor, runID)
+		return nil
 	}
 
 	cancel()
@@ -334,7 +339,11 @@ func (s *RunService) Cancel(ctx context.Context, runID int) error {
 		// An active entry only exists once Start has registered it, which
 		// requires runStore to create the run in the first place - so
 		// runStore is guaranteed non-nil here.
-		return s.runStore.CancelRun(runID)
+		if err := s.runStore.CancelRun(runID, actor); err != nil {
+			return err
+		}
+		log.Printf("run: canceled actor=%q run=%d", actor, runID)
+		return nil
 	case <-timer.C:
 		return fmt.Errorf("run %d did not terminate within %s: %w", runID, timeout, ErrRunCancelTimedOut)
 	case <-ctx.Done():
@@ -342,14 +351,14 @@ func (s *RunService) Cancel(ctx context.Context, runID int) error {
 	}
 }
 
-func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project) (int, error) {
+func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string) (int, error) {
 	if proj == nil {
 		return 0, fmt.Errorf("project not loaded")
 	}
 	if s.runStore == nil {
 		return 0, fmt.Errorf("run store is not configured")
 	}
-	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj)
+	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj, startedBy)
 	if err != nil {
 		return 0, fmt.Errorf("create run: %w", err)
 	}
@@ -477,8 +486,15 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
 	}
+	var approvedBy string
+	var approvedAt *time.Time
+	if opts.Actor != "" {
+		approvedBy = opts.Actor
+		t := time.Now()
+		approvedAt = &t
+	}
 	if s.runStore != nil {
-		_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running"}, "")
+		_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running", ApprovedBy: approvedBy, ApprovedAt: approvedAt}, "")
 	}
 	if !opts.SourcesPrepared {
 		previousSourcesAcquired := opts.OnSourcesAcquired
@@ -507,6 +523,10 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if err != nil && tr.Status == "" {
 		tr.Status = "failed"
 		tr.Error = err.Error()
+	}
+	if approvedBy != "" {
+		tr.ApprovedBy = approvedBy
+		tr.ApprovedAt = approvedAt
 	}
 	if s.runStore != nil {
 		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
@@ -598,6 +618,7 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 		}
 	}
 
+	log.Printf("run: approved actor=%q project=%q run=%d task=%q", opts.Actor, projectName, runID, taskName)
 	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
 }
 

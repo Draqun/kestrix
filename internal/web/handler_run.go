@@ -59,6 +59,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		SourceSessions:     s.sourceSessions,
 		InitialSources:     []domain.AcquiredSource{primary.Source},
 		WorkspaceCleanup:   primary.Cleanup,
+		Actor:              actorFrom(r),
 	})
 	if err != nil {
 		primary.Cleanup()
@@ -116,7 +117,8 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 
 	var runID int
 	snap := &proj
-	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap)
+	actor := actorFrom(r)
+	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap, actor)
 	if err != nil {
 		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -132,6 +134,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		WorkspaceCleanup:   primary.Cleanup,
 		Stdout:             io.Discard,
 		Stderr:             io.Discard,
+		Actor:              actor,
 	})
 	status := "passed"
 	errMsg := ""
@@ -280,6 +283,7 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		WorkDir: workDir, RepoPaths: repoPaths, SourcesPrepared: true,
 		Variables: s.buildVarStore(&proj), CredentialResolver: s.credentialResolver(),
 		SourceSessions: s.sourceSessions, WorkspaceCleanup: cleanup,
+		Actor: actorFrom(r),
 	}); err != nil {
 		cleanup()
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -310,7 +314,7 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
-	if err := s.runService.Cancel(r.Context(), runID); err != nil {
+	if err := s.runService.Cancel(r.Context(), runID, actorFrom(r)); err != nil {
 		if errors.Is(err, service.ErrRunCancelTimedOut) {
 			writeError(w, http.StatusGatewayTimeout, fmt.Sprintf("run %d did not stop in time", runID))
 			return

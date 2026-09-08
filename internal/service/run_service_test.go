@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,18 @@ import (
 	"kestrix/internal/mocks"
 	"kestrix/internal/model"
 )
+
+// captureLog redirects the standard logger to a buffer for the rest of the
+// test, restoring it on cleanup. Tests using this must not run with
+// t.Parallel(), since the standard logger is a package-level global.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+	return &buf
+}
 
 type emptyTaskRunner struct{}
 
@@ -82,6 +95,36 @@ func TestRunService_Start_Happy(t *testing.T) {
 	}
 	if mockRun.FinishRunCalls[0].Status != "passed" {
 		t.Errorf("expected finish status 'passed', got %q", mockRun.FinishRunCalls[0].Status)
+	}
+}
+
+func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
+	buf := captureLog(t)
+	finishCh := make(chan struct{})
+	mockRun := &mocks.MockRunStore{CreateRunID: 42, FinishRunCh: finishCh}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "build", Status: "passed"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.Start(context.Background(), "myproject", &model.Project{
+		Name:  "myproject",
+		Tasks: []model.Task{{Name: "build"}},
+	}, []string{"main.go"}, domain.RunnerOptions{Actor: "user:alice"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockRun.CreateRunCalls) != 1 || mockRun.CreateRunCalls[0].StartedBy != "user:alice" {
+		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:alice", mockRun.CreateRunCalls)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "run: started") || !strings.Contains(out, `actor="user:alice"`) ||
+		!strings.Contains(out, `project="myproject"`) || !strings.Contains(out, "run=42") {
+		t.Fatalf("log output = %q, want a started record naming the actor, project, and run id", out)
+	}
+	if strings.Contains(out, "main.go") {
+		t.Fatalf("log output leaked request data beyond actor/project/run: %q", out)
 	}
 }
 
@@ -360,6 +403,126 @@ func TestRunService_RunTask_ErrorWithoutStatus(t *testing.T) {
 	}
 }
 
+func TestRunService_RunTask_StampsApproverOnTerminalEntry(t *testing.T) {
+	mockRun := &mocks.MockRunStore{ApplyTaskCh: make(chan struct{})}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	before := time.Now()
+	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{Actor: "user:alice"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.ApprovedBy != "user:alice" {
+		t.Fatalf("terminal entry ApprovedBy = %q, want user:alice", tr.ApprovedBy)
+	}
+	if tr.ApprovedAt == nil || tr.ApprovedAt.Before(before) {
+		t.Fatalf("terminal entry ApprovedAt = %v, want no earlier than %v", tr.ApprovedAt, before)
+	}
+	if len(mockRun.ApplyTaskCalls) != 2 {
+		t.Fatalf("expected 2 ApplyTaskResult calls, got %d", len(mockRun.ApplyTaskCalls))
+	}
+	running := mockRun.ApplyTaskCalls[0].TaskResult
+	if running.ApprovedBy != "user:alice" || running.ApprovedAt == nil {
+		t.Fatalf("initial running entry = %+v, want approver stamped", running)
+	}
+	terminal := mockRun.ApplyTaskCalls[1].TaskResult
+	if terminal.ApprovedBy != "user:alice" || terminal.ApprovedAt == nil || !terminal.ApprovedAt.Equal(*running.ApprovedAt) {
+		t.Fatalf("terminal entry = %+v, want same approver/time as running entry %+v", terminal, running)
+	}
+}
+
+func TestRunService_RunTask_EmptyActorLeavesApprovalUnset(t *testing.T) {
+	mockRun := &mocks.MockRunStore{ApplyTaskCh: make(chan struct{})}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.ApprovedBy != "" || tr.ApprovedAt != nil {
+		t.Fatalf("terminal entry = %+v, want no approver when Actor is empty", tr)
+	}
+}
+
+func TestRunService_ApproveManualTask_LogsActorOnSuccess(t *testing.T) {
+	buf := captureLog(t)
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          7,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "manual", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: "passed"},
+				{Name: "manual", Status: "manual"},
+			},
+		},
+	}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	if _, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "manual", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "manual", domain.RunnerOptions{WorkDir: "/repo", Actor: "user:alice"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "run: approved") || !strings.Contains(out, `actor="user:alice"`) ||
+		!strings.Contains(out, `project="proj"`) || !strings.Contains(out, "run=7") || !strings.Contains(out, `task="manual"`) {
+		t.Fatalf("log output = %q, want an approved record naming actor, project, run id, and task", out)
+	}
+}
+
+func TestRunService_ApproveManualTask_RefusalLogsNothingAndSkipsApply(t *testing.T) {
+	buf := captureLog(t)
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          7,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name:  "proj",
+				Tasks: []model.Task{{Name: "manual", Manual: true}},
+			},
+			TaskResults: []domain.TaskResult{{Name: "manual", Status: "passed"}},
+		},
+	}
+	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
+
+	_, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
+		Name:  "proj",
+		Tasks: []model.Task{{Name: "manual", Manual: true}},
+	}, "manual", domain.RunnerOptions{Actor: "user:alice"})
+	if err == nil {
+		t.Fatal("expected refusal error because the task is not waiting for approval")
+	}
+	if len(mockRun.ApplyTaskCalls) != 0 {
+		t.Fatalf("ApplyTaskResult should not be called on a refused approval, got %+v", mockRun.ApplyTaskCalls)
+	}
+	if strings.Contains(buf.String(), "run: approved") {
+		t.Fatalf("log output = %q, want no approved record on a refused approval", buf.String())
+	}
+}
+
 func TestRunService_ApproveManualTask_Happy(t *testing.T) {
 	mockRun := &mocks.MockRunStore{
 		GetRunResult: &domain.Run{
@@ -433,7 +596,7 @@ func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
 
 func TestRunService_createRun_NoStore(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	runID, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"})
+	runID, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "")
 	if err == nil || err.Error() != "run store is not configured" {
 		t.Fatalf("error = %v, want missing run store error", err)
 	}
@@ -699,11 +862,32 @@ func TestRunService_Cancel_ActiveRunTerminatesInTime(t *testing.T) {
 	}
 	<-runner.startedCh
 
-	if err := svc.Cancel(context.Background(), runID); err != nil {
+	if err := svc.Cancel(context.Background(), runID, "user:alice"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0] != runID {
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0].ID != runID {
 		t.Fatalf("CancelRunCalls = %v, want [%d]", store.CancelRunCalls, runID)
+	}
+	if store.CancelRunCalls[0].CanceledBy != "user:alice" {
+		t.Fatalf("CanceledBy = %q, want user:alice", store.CancelRunCalls[0].CanceledBy)
+	}
+}
+
+func TestRunService_Cancel_ActiveRunStoreErrorReturnedUnchanged(t *testing.T) {
+	wantErr := errors.New("store exploded")
+	store := &mocks.MockRunStore{CreateRunID: 9, CancelRunErr: wantErr}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+
+	err = svc.Cancel(context.Background(), runID, "user:alice")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Cancel err = %v, want %v", err, wantErr)
 	}
 }
 
@@ -724,7 +908,7 @@ func TestRunService_Cancel_TimesOutWhenRunDoesNotTerminate(t *testing.T) {
 	<-runner.startedCh
 	defer close(runner.releaseCh) // let the leaked goroutine exit after the test
 
-	err = svc.Cancel(context.Background(), runID)
+	err = svc.Cancel(context.Background(), runID, "")
 	if err == nil {
 		t.Fatal("expected a timeout error")
 	}
@@ -737,11 +921,22 @@ func TestRunService_Cancel_NoActiveEntryCancelsInStoreDirectly(t *testing.T) {
 	store := &mocks.MockRunStore{}
 	svc := NewRunService(store, nil, nil)
 
-	if err := svc.Cancel(context.Background(), 123); err != nil {
+	if err := svc.Cancel(context.Background(), 123, "user:alice"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0] != 123 {
-		t.Fatalf("CancelRunCalls = %v, want [123]", store.CancelRunCalls)
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0].ID != 123 || store.CancelRunCalls[0].CanceledBy != "user:alice" {
+		t.Fatalf("CancelRunCalls = %v, want [{123 user:alice}]", store.CancelRunCalls)
+	}
+}
+
+func TestRunService_Cancel_StoreErrorReturnedUnchanged(t *testing.T) {
+	wantErr := errors.New("store exploded")
+	store := &mocks.MockRunStore{CancelRunErr: wantErr}
+	svc := NewRunService(store, nil, nil)
+
+	err := svc.Cancel(context.Background(), 123, "user:alice")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Cancel err = %v, want %v", err, wantErr)
 	}
 }
 
@@ -768,7 +963,7 @@ func TestRunService_Cancel_CallerContextCancelledWhileWaiting(t *testing.T) {
 		cancelCaller()
 	}()
 
-	err = svc.Cancel(callerCtx, runID)
+	err = svc.Cancel(callerCtx, runID, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Cancel err = %v, want context.Canceled", err)
 	}
@@ -779,7 +974,7 @@ func TestRunService_Cancel_CallerContextCancelledWhileWaiting(t *testing.T) {
 
 func TestRunService_Cancel_NoActiveEntryAndNoStore(t *testing.T) {
 	svc := NewRunService(nil, nil, nil)
-	if err := svc.Cancel(context.Background(), 1); err == nil {
+	if err := svc.Cancel(context.Background(), 1, ""); err == nil {
 		t.Fatal("expected an error when runs are not supported")
 	}
 }

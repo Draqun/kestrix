@@ -10,7 +10,7 @@ import (
 	"kestrix/internal/model"
 )
 
-func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project) (int, error) {
+func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
 	changedJSON := "[]"
 	if len(changed) > 0 {
 		b, _ := json.Marshal(changed)
@@ -24,8 +24,8 @@ func (s *PGStore) CreateRun(projectName string, changed []string, includeManual 
 	}
 	var id int
 	err := s.db.QueryRow(
-		`INSERT INTO runs (project_name, changed, include_manual, pipeline_def) VALUES ($1, $2, $3, $4) RETURNING id`,
-		projectName, changedJSON, includeManual, snapJSON,
+		`INSERT INTO runs (project_name, changed, include_manual, pipeline_def, started_by) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		projectName, changedJSON, includeManual, snapJSON, startedBy,
 	).Scan(&id)
 	return id, err
 }
@@ -82,7 +82,7 @@ func (s *PGStore) FlushRunOutput(runID int, output string) error {
 // - pending (no incomplete deps) → canceled
 // - pending (depends on incomplete/failed) → skipped
 // - passed left unchanged
-func (s *PGStore) CancelRun(id int) error {
+func (s *PGStore) CancelRun(id int, canceledBy string) error {
 	var taskResultsJSON string
 	var status string
 	err := s.db.QueryRow(
@@ -161,8 +161,8 @@ func (s *PGStore) CancelRun(id int) error {
 
 	b, _ := json.Marshal(final)
 	_, err = s.db.Exec(
-		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now() WHERE id = $2`,
-		string(b), id,
+		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now(), canceled_by = $2 WHERE id = $3`,
+		string(b), canceledBy, id,
 	)
 	return err
 }
@@ -232,8 +232,8 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 	var pipelineDefJSON sql.NullString
 	var finishedAt sql.NullTime
 	err := s.db.QueryRow(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs WHERE id = $1`, id,
-	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt)
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at, started_by, canceled_by FROM runs WHERE id = $1`, id,
+	).Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt, &r.StartedBy, &r.CanceledBy)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -274,7 +274,7 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 		offset = 0
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at, started_by, canceled_by FROM runs WHERE project_name = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
 		projectName, limit, offset,
 	)
 	if err != nil {
@@ -288,7 +288,7 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 		var changedJSON, taskResultsJSON, sourcesJSON string
 		var pipelineDefJSON sql.NullString
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt, &r.StartedBy, &r.CanceledBy); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)
@@ -314,7 +314,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at FROM runs ORDER BY started_at DESC LIMIT $1`,
+		`SELECT id, project_name, status, changed, include_manual, pipeline_def, output, error, task_results, sources, started_at, finished_at, started_by, canceled_by FROM runs ORDER BY started_at DESC LIMIT $1`,
 		limit,
 	)
 	if err != nil {
@@ -328,7 +328,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		var changedJSON, taskResultsJSON, sourcesJSON string
 		var pipelineDefJSON sql.NullString
 		var finishedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectName, &r.Status, &changedJSON, &r.IncludeManual, &pipelineDefJSON, &r.Output, &r.Error, &taskResultsJSON, &sourcesJSON, &r.StartedAt, &finishedAt, &r.StartedBy, &r.CanceledBy); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(changedJSON), &r.Changed)

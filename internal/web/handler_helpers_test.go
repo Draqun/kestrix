@@ -1,12 +1,28 @@
 package web
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
+
+func TestActorFrom_AuthenticatedRequest(t *testing.T) {
+	r := requestWithClaims(domain.Claims{UserName: "alice", Role: domain.RoleOperator})
+	if got := actorFrom(r); got != "user:alice" {
+		t.Errorf("actorFrom = %q, want user:alice", got)
+	}
+}
+
+func TestActorFrom_NoClaims(t *testing.T) {
+	r := httptest.NewRequest("GET", "/x", nil)
+	if got := actorFrom(r); got != "" {
+		t.Errorf("actorFrom = %q, want empty string without claims", got)
+	}
+}
 
 func TestBuildVarStore_NilProject(t *testing.T) {
 	srv := &Server{cfg: Config{

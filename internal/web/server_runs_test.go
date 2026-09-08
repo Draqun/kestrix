@@ -205,7 +205,9 @@ func TestHandleCancelRun_Happy(t *testing.T) {
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, mock)
 	manager := srv.sourceSessions.(*testSourceSessions)
 	w := httptest.NewRecorder()
-	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/5/cancel", nil), "name", "demo", "runID", "5")
+	req := httptest.NewRequest("POST", "/api/projects/demo/runs/5/cancel", nil)
+	req = req.WithContext(contextWithClaims(req.Context(), domain.Claims{UserName: "carol", Role: domain.RoleOperator}))
+	r := runCtx(req, "name", "demo", "runID", "5")
 	srv.handleCancelRun(w, r)
 
 	if w.Code != http.StatusOK {
@@ -214,8 +216,11 @@ func TestHandleCancelRun_Happy(t *testing.T) {
 	if len(mock.CancelRunCalls) != 1 {
 		t.Fatalf("expected 1 CancelRun call, got %d", len(mock.CancelRunCalls))
 	}
-	if mock.CancelRunCalls[0] != 5 {
-		t.Errorf("CancelRun called with %d, want 5", mock.CancelRunCalls[0])
+	if mock.CancelRunCalls[0].ID != 5 {
+		t.Errorf("CancelRun called with %d, want 5", mock.CancelRunCalls[0].ID)
+	}
+	if mock.CancelRunCalls[0].CanceledBy != "user:carol" {
+		t.Errorf("CanceledBy = %q, want user:carol", mock.CancelRunCalls[0].CanceledBy)
 	}
 	if len(manager.released) != 1 || manager.released[0] != 5 {
 		t.Fatalf("released pins = %v, want [5]", manager.released)
@@ -451,6 +456,7 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	srv := runTaskServer(t, cfg, mock)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
+	r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
 	r = runCtx(r, "name", "demo", "task", "test")
 	srv.handleRunTask(w, r)
 
@@ -469,6 +475,22 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	}
 	if resp["status"] != "passed" {
 		t.Errorf("status = %v, want passed", resp["status"])
+	}
+	if len(mock.CreateRunCalls) != 1 || mock.CreateRunCalls[0].StartedBy != "user:dave" {
+		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:dave", mock.CreateRunCalls)
+	}
+	// handleRunTask shares RunService.RunTask with the manual-approval path
+	// (design.md D4), so re-running a task directly by name stamps the same
+	// approver fields on its result - see REVIEW.md R1/R2.
+	if len(mock.FinishRunCalls) != 1 || len(mock.FinishRunCalls[0].TaskResults) != 1 {
+		t.Fatalf("FinishRunCalls = %+v, want 1 call with 1 task result", mock.FinishRunCalls)
+	}
+	tr := mock.FinishRunCalls[0].TaskResults[0]
+	if tr.ApprovedBy != "user:dave" {
+		t.Errorf("ApprovedBy = %q, want user:dave", tr.ApprovedBy)
+	}
+	if tr.ApprovedAt == nil {
+		t.Error("ApprovedAt = nil, want set")
 	}
 }
 
@@ -655,9 +677,11 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 	}
 	srv := setupRunServer(t, mockProj, mockRun)
 	srv.sourceSessions = &testSourceSessions{root: tmp}
+	pipeline := srv.taskRunner.(*mocks.MockPipelineRunner)
 	w := httptest.NewRecorder()
-	r := runCtx(httptest.NewRequest("POST", "/api/projects/test/runs/1/tasks/deploy/approve", nil),
-		"name", "test", "runID", "1", "task", "deploy")
+	req := httptest.NewRequest("POST", "/api/projects/test/runs/1/tasks/deploy/approve", nil)
+	req = req.WithContext(contextWithClaims(req.Context(), domain.Claims{UserName: "erin", Role: domain.RoleOperator}))
+	r := runCtx(req, "name", "test", "runID", "1", "task", "deploy")
 	srv.handleApproveManualTask(w, r)
 
 	if w.Code != http.StatusOK {
@@ -688,6 +712,12 @@ func TestHandleApproveManualTask_Happy(t *testing.T) {
 	firstStatus := mockRun.FirstApplyTaskResult().Status
 	if firstStatus != "running" {
 		t.Errorf("first ApplyTaskResult status = %q, want running", firstStatus)
+	}
+	if firstApproved := mockRun.FirstApplyTaskResult().ApprovedBy; firstApproved != "user:erin" {
+		t.Errorf("first ApplyTaskResult ApprovedBy = %q, want user:erin", firstApproved)
+	}
+	if len(pipeline.TaskRunCalls) != 1 || pipeline.TaskRunCalls[0].Actor != "user:erin" {
+		t.Fatalf("TaskRunCalls = %+v, want Actor=user:erin", pipeline.TaskRunCalls)
 	}
 }
 
@@ -780,8 +810,9 @@ func TestHandleRunProject_Happy(t *testing.T) {
 	srv := setupRunServer(t, mockProj, mockRun)
 	srv.sourceSessions = &testSourceSessions{root: tmp}
 	w := httptest.NewRecorder()
-	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{"changed":["main"]}`)),
-		"name", "demo")
+	req := httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{"changed":["main"]}`))
+	req = req.WithContext(contextWithClaims(req.Context(), domain.Claims{UserName: "frank", Role: domain.RoleOperator}))
+	r := runCtx(req, "name", "demo")
 	srv.handleRunProject(w, r)
 
 	<-mockRun.FinishRunCh // wait for background goroutine
@@ -804,5 +835,58 @@ func TestHandleRunProject_Happy(t *testing.T) {
 	}
 	if mockRun.AppendTaskCallCount() < 1 {
 		t.Fatalf("expected at least 1 AppendTaskResult call, got %d", mockRun.AppendTaskCallCount())
+	}
+	if len(mockRun.CreateRunCalls) != 1 || mockRun.CreateRunCalls[0].StartedBy != "user:frank" {
+		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:frank", mockRun.CreateRunCalls)
+	}
+}
+
+// TestHandleRunProject_ActorNotSpoofable is the run-attribution "caller-
+// supplied actor is ignored" scenario: a start request carrying an actor
+// name in its body and an X-Actor header still records the authenticated
+// account only.
+func TestHandleRunProject_ActorNotSpoofable(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo ok"
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRun := &mocks.MockRunStore{CreateRunID: 43, FinishRunCh: make(chan struct{})}
+	mockProj := &mocks.MockProjectStore{
+		GetResult: &domain.ProjectConfig{
+			Name:         "demo",
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
+			PipelineDir:  ".",
+			PipelineFile: "pipeline.tf",
+		},
+	}
+	srv := setupRunServer(t, mockProj, mockRun)
+	srv.sourceSessions = &testSourceSessions{root: tmp}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{"changed":["main"],"started_by":"user:mallory"}`))
+	req.Header.Set("X-Actor", "user:mallory")
+	req = req.WithContext(contextWithClaims(req.Context(), domain.Claims{UserName: "frank", Role: domain.RoleOperator}))
+	r := runCtx(req, "name", "demo")
+	srv.handleRunProject(w, r)
+
+	<-mockRun.FinishRunCh
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(mockRun.CreateRunCalls) != 1 || mockRun.CreateRunCalls[0].StartedBy != "user:frank" {
+		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:frank (not user:mallory)", mockRun.CreateRunCalls)
 	}
 }

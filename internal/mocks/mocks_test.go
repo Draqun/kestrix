@@ -40,7 +40,7 @@ func TestMockProjectStore_DeleteRecordsCall(t *testing.T) {
 func TestMockRunStore_CreateRunRecordsCall(t *testing.T) {
 	m := &MockRunStore{CreateRunID: 42}
 	snap := &model.Project{Name: "demo"}
-	id, err := m.CreateRun("demo", []string{"svc"}, true, snap)
+	id, err := m.CreateRun("demo", []string{"svc"}, true, snap, "user:alice")
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -224,10 +224,10 @@ func TestMockRunStore_FlushRunOutput(t *testing.T) {
 
 func TestMockRunStore_CancelRun(t *testing.T) {
 	m := &MockRunStore{}
-	if err := m.CancelRun(1); err != nil {
+	if err := m.CancelRun(1, "user:alice"); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.CancelRunCalls) != 1 || m.CancelRunCalls[0] != 1 {
+	if len(m.CancelRunCalls) != 1 || m.CancelRunCalls[0].ID != 1 || m.CancelRunCalls[0].CanceledBy != "user:alice" {
 		t.Errorf("CancelRunCalls = %+v", m.CancelRunCalls)
 	}
 }

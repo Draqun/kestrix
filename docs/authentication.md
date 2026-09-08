@@ -174,6 +174,30 @@ If every administrator account is lost or locked out, `kestrix user create`
 against the same `DATABASE_URL` recovers access without any other bootstrap
 step - it is the same path used to create the first account.
 
+## Attribution
+
+Kestrix records which account started, approved, or canceled a run, so the
+run detail can always answer "who did this":
+
+- Starting a run sets the run's `started_by`.
+- Approving a manual task sets that task's result entry `approved_by` and
+  `approved_at`. Re-running a task directly by name (rather than through the
+  approval gate) sets the same two fields, since both routes share the same
+  execution path.
+- Canceling a running run sets the run's `canceled_by`.
+
+Each value is the actor string `user:<account name>`, taken from the signed
+token that authenticated the request - never from the request body, a
+header, or a query parameter, so it cannot be spoofed. Kestrix writes one log
+line for each of the three actions, naming the actor, project, run id, and
+(for an approval) the task name.
+
+Attribution is stored as that string, not a reference to the account: it is
+copied at the moment of the action and survives the account being deleted
+later. A run started, approved, or canceled before this feature existed has
+no recorded actor; the UI shows `unknown` for those fields, and no backfill
+is possible since the information was never captured.
+
 ## Compatibility
 
 Deploying this version is not backward compatible: `KESTRIX_JWT_SIGNING_KEY_PATH`

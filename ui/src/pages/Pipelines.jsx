@@ -45,6 +45,15 @@ function formatStatus(status) {
   return { color: 'warning', label: 'RUNNING' };
 }
 
+// actorLabel renders an attribution actor string for display: an empty or
+// missing actor (a run recorded before run-attribution existed) shows as
+// "unknown", and the "user:" prefix is stripped so the account name reads
+// on its own. See run-attribution: "Attribution is shown in the interface".
+function actorLabel(actor) {
+  if (!actor) return 'unknown';
+  return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
+}
+
 function isManualWaiting(job, pipelineDef, allJobs) {
   if (!job) return false;
   const waiting = job.status === 'manual' ||
@@ -200,8 +209,9 @@ export function RunDetail({ projectName, runId, onBack }) {
 
       {r && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-          {new Date(r.started_at).toLocaleString()}
+          {new Date(r.started_at).toLocaleString()} by {actorLabel(r.started_by)}
           {r.finished_at && ` → ${new Date(r.finished_at).toLocaleString()}`}
+          {r.status === 'canceled' && ` · canceled by ${actorLabel(r.canceled_by)}`}
         </Typography>
       )}
 
@@ -279,6 +289,12 @@ export function RunDetail({ projectName, runId, onBack }) {
                     </Button>
                   )}
                 </Box>
+                {activeJob.approved_by && (
+                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1, px: 1 }}>
+                    approved by {actorLabel(activeJob.approved_by)}
+                    {activeJob.approved_at && ` at ${new Date(activeJob.approved_at).toLocaleString()}`}
+                  </Typography>
+                )}
                 {activeJob.error && activeJob.status !== 'manual' && (
                   <Alert severity="error" sx={{ mb: 1, mx: 1 }}>{activeJob.error}</Alert>
                 )}
@@ -506,7 +522,7 @@ export function RunList({ onNewRun, onOpenRun }) {
                   secondary={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                       <Typography variant="caption" color="text.secondary">
-                        {new Date(run.started_at).toLocaleString()}
+                        {new Date(run.started_at).toLocaleString()} by {actorLabel(run.started_by)}
                         {run.finished_at && ` → ${new Date(run.finished_at).toLocaleString()}`}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">

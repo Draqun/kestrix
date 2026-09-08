@@ -152,6 +152,8 @@ func migrate(db *sql.DB) error {
 		{"add project ref", `ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_ref TEXT NOT NULL DEFAULT ''`},
 		{"add project credential reference", `ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_credential_ref TEXT`},
 		{"add user token version", `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1`},
+		{"add run started_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT ''`},
+		{"add run canceled_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS canceled_by TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {
