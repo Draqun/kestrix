@@ -8,7 +8,7 @@ Register GitLab projects with Kestrix so the webhook handler knows which pipelin
 
 ## Requirements
 
-### REQ-1: Project config includes GitLab binding (implemented)
+### Requirement: REQ-1: Project config includes GitLab binding (implemented)
 Each project configuration SHALL include its existing GitLab binding fields and
 MAY include a provider-neutral `repo_url`, `repo_ref`, and
 `repo_credential_ref` for a remote source. A remote project SHALL provide both
@@ -49,7 +49,7 @@ MAY include a provider-neutral `repo_url`, `repo_ref`, and
 - **THEN** project validation SHALL fail before persistence
 - **AND** the response SHALL explain that the remote ref is required
 
-### REQ-2: Project persistence (implemented)
+### Requirement: REQ-2: Project persistence (implemented)
 Project configurations SHALL survive server restarts by being stored in PostgreSQL. The server SHALL not load or write project configurations through a JSON FileStore.
 
 #### Scenario: Persistence across restarts
@@ -66,7 +66,7 @@ Project configurations SHALL survive server restarts by being stored in PostgreS
 - **THEN** it SHALL fail startup
 - **AND** it SHALL not create or read a JSON project store
 
-### REQ-3: Project lookup by GitLab project ID (implemented)
+### Requirement: REQ-3: Project lookup by GitLab project ID (implemented)
 The webhook handler SHALL find projects by GitLab project ID.
 
 #### Scenario: Lookup by GitLab project ID
@@ -81,7 +81,7 @@ The webhook handler SHALL find projects by GitLab project ID.
 **WHEN** no project matches  
 **THEN** the server SHALL return HTTP 200 with `{"status": "ignored", "reason": "unknown project"}`
 
-### REQ-4: Explicit project registration
+### Requirement: REQ-4: Explicit project registration
 The server SHALL NOT create or update a registered project as a side effect of startup or server construction based solely on `--dir` or `pipeline_dir`.
 
 #### Scenario: Startup does not register a pipeline directory
@@ -96,7 +96,7 @@ The server SHALL NOT create or update a registered project as a side effect of s
 - **WHEN** a client creates a project through `POST /api/projects`
 - **THEN** the server SHALL persist the project and expose it through the project API
 
-### REQ-5: API CRUD for projects (implemented)
+### Requirement: REQ-5: API CRUD for projects (implemented)
 Existing project CRUD endpoints SHALL accept and expose non-secret remote
 source metadata, including `repo_url`, `repo_ref`, and `repo_credential_ref`.
 Credential values SHALL be write-only through dedicated credential operations
