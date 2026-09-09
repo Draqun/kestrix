@@ -3,11 +3,13 @@ package mocks
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
+	"kestrix/internal/source"
 )
 
 // MockProjectStore records calls and returns configurable values.
@@ -27,6 +29,15 @@ type MockProjectStore struct {
 	LoadResult           map[string]*domain.ProjectConfig
 	LoadErr              error
 	Projects             map[string]*domain.ProjectConfig
+	ReplaceSourcesCalls  []ReplaceSourcesCall
+	ReplaceSourcesErr    error
+	FindBySourceKeyErr   error
+}
+
+// ReplaceSourcesCall records one ReplaceSources invocation.
+type ReplaceSourcesCall struct {
+	Name    string
+	Sources []domain.ProjectSource
 }
 
 func (m *MockProjectStore) Load() (map[string]*domain.ProjectConfig, error) {
@@ -90,6 +101,68 @@ func (m *MockProjectStore) Delete(name string) error {
 	delete(m.Projects, name)
 	return nil
 }
+
+// UpsertWithSources models the store's single transaction: the project row and
+// the source set are both applied, or neither is when an error is configured.
+func (m *MockProjectStore) UpsertWithSources(cfg *domain.ProjectConfig, sources []domain.ProjectSource) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.UpsertCalls = append(m.UpsertCalls, cfg)
+	m.ReplaceSourcesCalls = append(m.ReplaceSourcesCalls, ReplaceSourcesCall{Name: cfg.Name, Sources: sources})
+	if m.UpsertErr != nil {
+		return m.UpsertErr
+	}
+	if m.ReplaceSourcesErr != nil {
+		return m.ReplaceSourcesErr
+	}
+	if m.Projects == nil {
+		m.Projects = make(map[string]*domain.ProjectConfig)
+	}
+	cfg.Sources = sources
+	m.Projects[cfg.Name] = cfg
+	return nil
+}
+
+// ReplaceSources records the call and, when the project is known, stores the
+// set on it so Get and FindBySourceKey see what the store would.
+func (m *MockProjectStore) ReplaceSources(name string, sources []domain.ProjectSource) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ReplaceSourcesCalls = append(m.ReplaceSourcesCalls, ReplaceSourcesCall{Name: name, Sources: sources})
+	if m.ReplaceSourcesErr != nil {
+		return m.ReplaceSourcesErr
+	}
+	if p, ok := m.Projects[name]; ok {
+		p.Sources = sources
+	}
+	return nil
+}
+
+// FindBySourceKey matches keys against each stored project's Sources, using
+// the same match key the real store computes, ordered by project name.
+func (m *MockProjectStore) FindBySourceKey(keys []string) ([]*domain.ProjectConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.FindBySourceKeyErr != nil {
+		return nil, m.FindBySourceKeyErr
+	}
+	wanted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		wanted[k] = true
+	}
+	var matched []*domain.ProjectConfig
+	for _, p := range m.Projects {
+		for _, src := range p.Sources {
+			if key, err := source.SourceMatchKey(src.URL); err == nil && wanted[key] {
+				matched = append(matched, p)
+				break
+			}
+		}
+	}
+	sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
+	return matched, nil
+}
+
 func (m *MockProjectStore) List() ([]string, error) {
 	if m.ListResult != nil {
 		return m.ListResult, m.ListErr

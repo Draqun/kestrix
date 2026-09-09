@@ -43,6 +43,13 @@ type GitCache struct {
 	command  string
 	resolver domain.CredentialResolver
 	now      func() time.Time
+	// maintenance tracks the goroutines started by maintainAsync so a caller
+	// that is about to delete the cache root can wait for them; see
+	// WaitForMaintenance. maintenanceMu keeps Add and Wait apart: a WaitGroup
+	// may not take a positive delta at zero while a Wait is in flight, and
+	// Open can start maintenance at any moment.
+	maintenance   sync.WaitGroup
+	maintenanceMu sync.RWMutex
 }
 
 type cacheMetadata struct {
@@ -414,11 +421,35 @@ func (l *cacheLock) release() {
 }
 
 func (c *GitCache) maintainAsync() {
+	c.maintenanceMu.RLock()
+	c.maintenance.Add(1)
+	c.maintenanceMu.RUnlock()
 	go func() {
+		defer c.maintenance.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = c.Maintain(ctx)
 	}()
+}
+
+// WaitForMaintenance blocks until the background maintenance Open may have
+// started has finished. Maintain deletes cache entries, so a caller about to
+// remove the cache root has to wait for it or race the removal against it.
+//
+// It covers that goroutine and nothing else. Open starts maintenance only for
+// purposes that are not part of a run (see the call site), yet every Open
+// takes an entry lock, writes metadata and clones the mirror - so a caller
+// with run Opens still in flight has to wait for those separately. This is not
+// on its own a barrier before removing the root; the e2e test pairs it with a
+// signal for its own Release.
+//
+// An Open that starts maintenance while this is waiting blocks until it
+// returns, so the WaitGroup's "Add at zero during Wait" rule cannot be
+// tripped.
+func (c *GitCache) WaitForMaintenance() {
+	c.maintenanceMu.Lock()
+	defer c.maintenanceMu.Unlock()
+	c.maintenance.Wait()
 }
 
 func (c *GitCache) Pin(ctx context.Context, runID int, sources []domain.AcquiredSource) error {

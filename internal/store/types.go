@@ -20,6 +20,9 @@ type Run = domain.Run
 // domain.ProjectStore.
 type ProjectConfig = domain.ProjectConfig
 
+// ProjectSource aliases the domain type so store code reads naturally.
+type ProjectSource = domain.ProjectSource
+
 // WebhookEvent is an alias for domain.WebhookEvent.
 type WebhookEvent = domain.WebhookEvent
 

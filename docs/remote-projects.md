@@ -90,6 +90,44 @@ before any task starts. Runs record requested refs and resolved SHAs; manual
 approval rematerializes those exact SHAs from the run snapshot even if a branch
 or project configuration has changed.
 
+## Sources
+
+Every registered project has a derived set of **sources**: its `repo_url`
+(the primary source) plus one entry for each `ci_repo` block in its pipeline
+that declares a `url`. A push to any source reaches the project's triggers:
+the webhook receiver matches the pushed repository's URL against all sources
+of all projects, so a shared library declared by several projects fans out to
+each of them. Repository URLs are compared transport-neutrally, so registering
+the HTTPS form and receiving the SSH form of the same repository still matches.
+
+Sources are recomputed when the project is created or updated and whenever its
+pipeline definition is loaded from Git at its configured ref (the project
+detail page, `GET /api/projects/{name}/definition`, or a webhook from a
+secondary repository). A webhook from the primary repository does not refresh
+them, because it loads one specific commit rather than the configured ref; add
+a `ci_repo` and the new source appears the next time the project is opened.
+They are never entered by hand: a `sources` field in a create or update payload is
+ignored. `GET /api/projects/{name}` lists them, primary first, and the
+Projects page shows them under the pipeline directory.
+
+```json
+"sources": [
+  {"name": "checkout", "url": "https://git.example.test/team/checkout.git", "primary": true},
+  {"name": "shared", "url": "ssh://git@example.test/team/shared.git", "primary": false}
+]
+```
+
+For a secondary repository to trigger the project, add a webhook on that
+repository in the Git host pointing at the same `/webhook` URL. Nothing about
+the project registration changes.
+
+**After upgrading** to a release with sources: startup records the primary
+source for every existing project, so pushes to the project's own repository
+keep resolving. Secondary sources appear the first time the pipeline is loaded
+after the upgrade; open each project once in the UI (or request its
+definition) so its remote `ci_repo` blocks become sources. Until then a push to
+such a repository is recorded as `ignored` with reason `unknown project`.
+
 ## Git is the pipeline source of truth
 
 Kestrix displays raw HCL, the parsed definition, and repository metadata, but

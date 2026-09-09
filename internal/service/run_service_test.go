@@ -578,7 +578,7 @@ func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
 	}}
 	svc := NewProjectService(store)
 	validationErr := errors.New("remote denied")
-	validate := func(*domain.ProjectConfig) error { return validationErr }
+	validate := func(*domain.ProjectConfig) (model.Project, error) { return model.Project{}, validationErr }
 
 	if err := svc.CreateValidated(&domain.ProjectConfig{Name: "new", RepoURL: "https://git.test/new.git", RepoRef: "main"}, validate); !errors.Is(err, ErrValidation) {
 		t.Fatalf("create error = %v", err)

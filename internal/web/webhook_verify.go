@@ -83,22 +83,21 @@ func verifyDelivery(method string, h http.Header, body []byte, projectSecret, gl
 	return false
 }
 
-// webhookProjectProbe reads just enough of a webhook body to find the
-// GitLab project ID before the body is trusted or fully parsed - see
-// design.md D1. A body that is not JSON, or has no ID, yields ID 0.
-type webhookProjectProbe struct {
-	Project struct {
-		ID int `json:"id"`
-	} `json:"project"`
+// webhookProbe reads just enough of a webhook body to route and authenticate
+// the delivery before anything else in it is trusted - see design.md D1 and
+// multi-source-projects D6: the project object's GitLab ID and repository
+// URLs. A body that is not JSON yields an empty project (ID 0, no URLs), so
+// only the global secret can accept it.
+type webhookProbe struct {
+	Project GitLabProject `json:"project"`
 }
 
-// probeGitLabProjectID extracts {"project":{"id":N}} from body without
-// trusting anything else in it. A non-JSON body or one without an ID
-// yields 0.
-func probeGitLabProjectID(body []byte) int {
-	var probe webhookProjectProbe
+// probeWebhook extracts the payload's project object from body without
+// trusting anything else in it.
+func probeWebhook(body []byte) GitLabProject {
+	var probe webhookProbe
 	if err := json.Unmarshal(body, &probe); err != nil {
-		return 0
+		return GitLabProject{}
 	}
-	return probe.Project.ID
+	return probe.Project
 }

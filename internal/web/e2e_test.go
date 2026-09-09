@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,6 +45,24 @@ func remoteWorkflowPipeline(marker string) string {
     }
   }
 }`
+}
+
+// releaseSignallingSessions is the cache plus a signal for the one call the
+// test cannot otherwise wait for: Release runs in the run's goroutine after
+// FinishRun has already unblocked the test, and it writes lock files into the
+// cache root. The channel closes on the first Release, which is exactly right
+// for one run per test; a second run added here would need a counted signal,
+// or it would reopen the race this decorator closes.
+type releaseSignallingSessions struct {
+	*source.GitCache
+	released chan struct{}
+	once     sync.Once
+}
+
+func (s *releaseSignallingSessions) Release(ctx context.Context, runID int) error {
+	err := s.GitCache.Release(ctx, runID)
+	s.once.Do(func() { close(s.released) })
+	return err
 }
 
 func cacheEntryCount(t *testing.T, root string) int {
@@ -85,12 +104,38 @@ func TestRemoteProjectWorkflowE2E(t *testing.T) {
 	gitE2E(t, work, "push", "--quiet", "-u", "origin", "main")
 
 	srv := NewServer(Config{ListenAddr: ":0", StorePath: filepath.Join(root, "projects.json")})
-	cacheRoot := filepath.Join(root, "cache")
+	// The cache root sits outside t.TempDir() because two goroutines outlive
+	// the assertions below: the cache maintains itself after an Open, and the
+	// run's own goroutine calls Release - which writes lock files into this
+	// directory - only after FinishRun has already signalled the test.
+	// t.TempDir() would race both and fail with "directory not empty", so the
+	// cleanup below waits for each of them and then insists the directory is
+	// removable: a swallowed removal error would turn that race into a
+	// silently leaked directory per run instead of a failing test.
+	cacheRoot, err := os.MkdirTemp("", "kestrix-e2e-cache-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cache, err := source.NewGitCache(source.CacheOptions{Root: cacheRoot, MaxAge: time.Hour, MaxBytes: 1 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv.sourceSessions = cache
+	sessions := &releaseSignallingSessions{GitCache: cache, released: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-sessions.released:
+		case <-time.After(10 * time.Second):
+			// Tuned to the 5s the test itself allows the run: past this point
+			// either Release has happened or the run never got that far, and
+			// the removal below has nothing to race. Waiting longer would only
+			// slow down every failing path before its reason is printed.
+		}
+		cache.WaitForMaintenance()
+		if err := os.RemoveAll(cacheRoot); err != nil {
+			t.Errorf("cache root still busy after the run settled: %v", err)
+		}
+	})
+	srv.sourceSessions = sessions
 	runStore := srv.runStore.(*mocks.MockRunStore)
 	runStore.FinishRunCh = make(chan struct{})
 

@@ -139,9 +139,33 @@ type ProjectStore interface {
 	Save(projects map[string]*ProjectConfig) error
 	Get(name string) (*ProjectConfig, error)
 	FindByGitLabID(id int) (*ProjectConfig, error)
+	// Upsert writes the project row and keeps its primary source row in step
+	// with repo_url, for callers that have no derived set to hand over
+	// (seeding, tests). Create and update use UpsertWithSources instead.
 	Upsert(cfg *ProjectConfig) error
+	// UpsertWithSources writes the project row and the project's complete
+	// derived source set in one transaction, so a rejected set leaves the
+	// registration untouched rather than half applied behind an error
+	// response.
+	UpsertWithSources(cfg *ProjectConfig, sources []ProjectSource) error
 	Delete(name string) error
 	List() ([]string, error)
+	// ReplaceSources swaps a project's derived source set in full; see
+	// ProjectSource. Sources are a projection of the project row and its
+	// parsed pipeline, never edited one at a time.
+	ReplaceSources(name string, sources []ProjectSource) error
+	// FindBySourceKey returns every project, ordered by name and with Sources
+	// populated, that has a source whose match key is in keys.
+	FindBySourceKey(keys []string) ([]*ProjectConfig, error)
+}
+
+// ProjectSource is one repository a project listens to: its primary
+// repository or a remote ci_repo declared by its pipeline. Name is the
+// ci_repo name (the project name for the primary). It carries no credential.
+type ProjectSource struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Primary bool   `json:"primary"`
 }
 
 // RunStore is the port for run lifecycle persistence.
@@ -223,6 +247,7 @@ type WebhookEvent struct {
 	ID             int       `json:"id"`
 	ReceivedAt     time.Time `json:"received_at"`
 	ProjectName    string    `json:"project_name,omitempty"`
+	SourceName     string    `json:"source_name,omitempty"`
 	Repo           string    `json:"repo"`
 	Branch         string    `json:"branch"`
 	Revision       string    `json:"revision,omitempty"`
@@ -347,6 +372,8 @@ type ProjectConfig struct {
 	// stored struct itself does not populate it.
 	HasWebhookSecret bool   `json:"has_webhook_secret"`
 	CreatedAt        string `json:"created_at"`
+	// Sources is derived and read-only; a client-supplied value is ignored.
+	Sources []ProjectSource `json:"sources,omitempty"`
 }
 
 // Run is a stored run record.

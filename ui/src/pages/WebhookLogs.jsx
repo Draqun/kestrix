@@ -190,7 +190,12 @@ export default function WebhookLogs() {
                         {formatTime(log.received_at)}
                       </Typography>
                     </TableCell>
-                    <TableCell>{log.project_name || <Typography variant="body2" color="text.secondary">—</Typography>}</TableCell>
+                    <TableCell>
+                      {log.project_name || <Typography variant="body2" color="text.secondary">—</Typography>}
+                      {log.source_name && log.source_name !== log.project_name && (
+                        <Typography variant="caption" color="text.secondary" display="block">via {log.source_name}</Typography>
+                      )}
+                    </TableCell>
                     <TableCell><strong>{log.repo}</strong></TableCell>
                     <TableCell>
                       {log.branch ? <Chip label={log.branch} size="small" variant="outlined" /> : '—'}

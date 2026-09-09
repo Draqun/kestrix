@@ -7,15 +7,18 @@ The webhook receiver processes Git push events, classifies changed files, resolv
 When a push event arrives at `POST /webhook`, the receiver:
 
 1. Validates the request (optional `X-Gitlab-Token` check).
-2. Parses the GitLab push event JSON into a normalized `PushEvent`.
-3. Acquires the registered remote project at the push event's immutable
-   `checkout_sha` and loads the pipeline definition from that checkout.
-4. Classifies changed files as "code" or "non-code" using configurable patterns.
-5. Matches changed files to declared `ci_repo` blocks.
-6. Resolves the DAG to determine which tasks are triggered.
-7. Optionally dispatches the resolved pipeline to a GitLab project via the dispatch client.
-8. Records the event in durable webhook history.
-9. Returns a JSON response with the triggered tasks and generated YAML.
+2. Parses the GitLab push event JSON into a normalized `PushEvent`, including
+   the repository URLs the payload carries.
+3. Resolves the registered project(s) the pushed repository belongs to (see
+   [Project Resolution](#project-resolution)).
+4. For each matched project, acquires its primary repository and loads the
+   pipeline definition from that checkout (see [Pipeline Loading](#pipeline-loading)).
+5. Classifies changed files as "code" or "non-code" using configurable patterns.
+6. Matches changed files to declared `ci_repo` blocks.
+7. Resolves the DAG to determine which tasks are triggered.
+8. Optionally dispatches the resolved pipeline to a GitLab project via the dispatch client.
+9. Records one event per matched project in durable webhook history.
+10. Returns a JSON response with one result per matched project.
 
 ## HTTP Endpoint
 
@@ -63,25 +66,92 @@ are configured, and the CHANGELOG for the migration note.
 
 ```json
 {
+  "status": "ok",
+  "results": [
+    {
+      "project": "my-service",
+      "source_name": "shared-lib",
+      "status": "ok",
+      "changed": ["shared-lib"],
+      "tasks": ["lint", "test", "build"],
+      "count": 3,
+      "dispatched": true,
+      "pipeline_id": 12345,
+      "pipeline_url": "https://gitlab.com/org/my-service/-/pipelines/12345"
+    }
+  ],
   "project": "my-service",
-  "repo": "org/my-service",
-  "branch": "main",
-  "status": "triggered",
+  "changed": ["shared-lib"],
   "tasks": ["lint", "test", "build"],
-  "dispatch": {
-    "dispatched": true,
-    "pipeline_id": 12345,
-    "pipeline_url": "https://gitlab.com/org/my-service/-/pipelines/12345"
-  }
+  "count": 3,
+  "dispatched": true,
+  "pipeline_id": 12345,
+  "pipeline_url": "https://gitlab.com/org/my-service/-/pipelines/12345"
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `status` | `"triggered"`, `"skipped"` (no code changes), or `"error"` |
-| `project` | Name of the Kestrix project |
-| `tasks` | List of triggered task names |
-| `dispatch` | Dispatch result (only when dispatch is enabled) |
+| `status` | `"ok"` when at least one project resolved, `"error"` when every matched project failed, `"ignored"` when no project matched |
+| `results` | One entry per matched project, in project-name order |
+| `results[].source_name` | The source the delivery matched: the project name for its primary repository, the `ci_repo` name for a secondary one |
+| `results[].status` | `"ok"` when the project's pipeline was loaded and its DAG resolved, `"error"` otherwise (with `error` carrying the message). A failed dispatch keeps `"ok"` with `dispatched: false` and `error` set, and is recorded as `error` in history |
+| `project`, `changed`, `tasks`, `count`, `dispatched`, `pipeline_id`, `pipeline_url` | Mirrored at the top level only when exactly one project matched, for callers written before fan-out |
+
+When every matched project fails, the response status is `422` (`400` when
+the push carries no immutable SHA) and the single-match document carries the
+`error` message at the top level.
+
+## Project Resolution
+
+A registered project listens to a set of **sources**: its `repo_url` (the
+primary source) and every `ci_repo` block in its pipeline that declares a
+`url`. Sources are derived automatically when the project is created or
+updated and whenever its pipeline definition is loaded from Git; they are
+listed by `GET /api/projects/{name}` and cannot be edited by hand. See
+[Remote projects](remote-projects.md#sources).
+
+The receiver matches the payload's repository URLs (`git_http_url`,
+`git_ssh_url`, `web_url`) against every project's sources. The comparison is
+transport-neutral: `https://host/group/repo.git`, `ssh://git@host/group/repo`
+and `git@host:group/repo.git` all identify the same repository. A URL that
+embeds credentials is never matched, stored, or logged.
+
+When no source matches, the receiver falls back to the payload's `project.id`
+against `gitlab_project_id`, so registrations that predate sources keep
+working. When neither matches, the delivery is recorded as `ignored` and the
+response is `{"status": "ignored", "reason": "unknown project"}`.
+
+Resolution happens before verification, on fields probed from the raw body,
+so each matched project is verified against **its own** `webhook_secret` (or
+the global secret) as described under Authentication. A matched project whose
+secret does not verify is skipped without a history row while the others are
+processed; a delivery that no matched project accepts answers `401`. When no
+project matches at all, only the global secret can accept the delivery, and it
+is then recorded as `ignored`.
+
+### Fan-out
+
+One repository may be a source of several projects (a shared library declared
+by two services, for example). Such a delivery is processed once per project:
+each project's DAG is evaluated against its own changed set, each gets its own
+history row and its own dispatch, and the response lists every outcome in
+`results`. A failure in one project never prevents the others from being
+processed. For a secondary repository to reach Kestrix at all, add a webhook
+on that repository in the Git host pointing at the same `/webhook` URL.
+
+### Secondary pushes
+
+A push to a secondary source cannot be checked out as the pipeline: the
+pipeline is the primary repository's file. The receiver therefore loads the
+definition from the primary source at the project's configured `repo_ref`, and
+marks the matching `ci_repo` (found by its `url` in the just-loaded pipeline,
+so a renamed block is still recognised) as changed **as a whole** when the
+push contains at least one code-classified file. The pushed files are not path-matched
+against the primary repository's subpath `ci_repo` blocks, so a directory name
+shared by both repositories cannot produce a false trigger. The event SHA is
+recorded in history and passed to the dispatched job as
+`KESTRIX_SOURCE_REVISION`.
 
 ## File Classification
 
@@ -112,12 +182,21 @@ The classifier maps changed files to declared `ci_repo` blocks:
 
 ## Pipeline Loading
 
-On each registered-project webhook request, the receiver refreshes the remote
-through the source-session manager and requests the exact immutable event SHA.
+On each registered-project webhook request, the receiver refreshes the primary
+remote through the source-session manager. For a push to the primary source it
+requests the exact immutable event SHA; for a push to a secondary source it
+requests the configured `repo_ref` (see [Secondary pushes](#secondary-pushes)).
 All `.tf` files in the project's relative pipeline directory are parsed and
 merged into one project (see [Pipeline Definition](pipeline-definition.md)). If
-the event revision cannot be acquired, the request fails without resolving or
-dispatching tasks from a different revision.
+the revision cannot be acquired, that project's entry fails without resolving
+or dispatching tasks from a different revision. A secondary push also refreshes the
+project's derived sources, because it loads the configured ref. A primary push
+never rewrites them: it loads its own immutable SHA, which is normally the
+ref's head but need not be, since deliveries can arrive out of order or be
+retried - deriving routing from an older commit would restore a `ci_repo` that
+a later commit removed. A `ci_repo` added on the primary repository therefore
+reaches routing at the next load of the configured ref: opening the project, or
+`GET /api/projects/{name}/definition`.
 
 ## Dispatch Integration
 
@@ -128,13 +207,22 @@ When dispatch is configured and tasks are triggered, the receiver creates a GitL
   - `KESTRIX_TRIGGERED_TASKS` — comma-separated list of triggered tasks.
   - `KESTRIX_CHANGED_REPOS` — comma-separated list of changed repos.
   - `KESTRIX_DISPATCH_TIME` — UTC timestamp of the dispatch.
+  - `KESTRIX_SOURCE_NAME` — the source that fired: the project name for a
+    primary push, the `ci_repo` name for a secondary one.
+  - `KESTRIX_SOURCE_REVISION` — the pushed commit SHA of that source, so a job
+    can pin a secondary checkout to the revision that triggered it.
+
+Dispatch is always bound to the matched project's `gitlab_project_id`; a
+secondary repository cannot redirect it.
 
 ## Webhook History
 
 Every parsed event is recorded in PostgreSQL before the receiver responds,
 including events that are ignored because no registered project matches,
 resolved without triggering a task, or failed during processing. History
-survives a server restart.
+survives a server restart. A delivery that fans out to several projects
+records one row per project, each carrying `source_name`, the source it
+matched; a busy shared repository therefore consumes retention faster.
 
 A request rejected before its payload is understood is not recorded: a
 failed verification (see Authentication above), an oversized body, or a
@@ -152,7 +240,7 @@ failure is logged and the receiver returns its normal response.
 |--------|---------|
 | `triggered` | Tasks were resolved for the push |
 | `skipped` | The event resolved but triggered no task |
-| `ignored` | No registered project matched the event's GitLab project ID |
+| `ignored` | No registered project matched the event's repository URLs or GitLab project ID |
 | `error` | Processing failed, including a failed pipeline dispatch; the message is stored with the event |
 
 Raw webhook payload bodies are not stored, so commit messages and author
@@ -185,6 +273,7 @@ Returns recorded events newest first, in the same paginated envelope as
       "id": 42,
       "received_at": "2026-09-01T10:00:00Z",
       "project_name": "my-service",
+      "source_name": "my-service",
       "repo": "org/my-service",
       "branch": "main",
       "revision": "0123456789abcdef",
@@ -198,6 +287,10 @@ Returns recorded events newest first, in the same paginated envelope as
   "pagination": { "total": 1, "limit": 25, "offset": 0, "next": null, "prev": null }
 }
 ```
+
+`source_name` is the project name when the push came from the project's own
+repository and the `ci_repo` name when it came from a secondary source; the
+Webhook Logs page shows it under the project when the two differ.
 
 | Parameter | Description |
 |-----------|-------------|

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kestrix/internal/credentials"
+	"kestrix/internal/source"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -137,6 +138,17 @@ func migrate(db *sql.DB) error {
 			role         TEXT NOT NULL,
 			PRIMARY KEY (user_name, project_name)
 		);
+
+		CREATE TABLE IF NOT EXISTS project_sources (
+			project_name TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
+			match_key    TEXT NOT NULL,
+			source_name  TEXT NOT NULL,
+			repo_url     TEXT NOT NULL,
+			is_primary   BOOLEAN NOT NULL DEFAULT false,
+			PRIMARY KEY (project_name, match_key)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_project_sources_key ON project_sources(match_key);
 	`); err != nil {
 		return fmt.Errorf("create base schema: %w", err)
 	}
@@ -154,6 +166,7 @@ func migrate(db *sql.DB) error {
 		{"add user token version", `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1`},
 		{"add run started_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT ''`},
 		{"add run canceled_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS canceled_by TEXT NOT NULL DEFAULT ''`},
+		{"add webhook event source", `ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS source_name TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {
@@ -214,8 +227,50 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("%s: %w", statement.name, err)
 		}
 	}
+	if err := backfillPrimarySources(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	return nil
+}
+
+// backfillPrimarySources gives every project that predates project_sources
+// its primary row, so a push to its repository keeps resolving after the
+// upgrade. Secondary rows need the parsed pipeline and appear on the first
+// definition load; startup never touches Git. The match key is computed in
+// Go, which is why this is a loop rather than one INSERT ... SELECT.
+func backfillPrimarySources(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT name, repo_url FROM projects p
+		WHERE NOT EXISTS (SELECT 1 FROM project_sources s WHERE s.project_name = p.name) ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("find projects without sources: %w", err)
+	}
+	type primary struct{ name, url string }
+	var missing []primary
+	for rows.Next() {
+		var p primary
+		if err := rows.Scan(&p.name, &p.url); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan project without sources: %w", err)
+		}
+		missing = append(missing, p)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close projects without sources: %w", err)
+	}
+	for _, p := range missing {
+		key, err := source.SourceMatchKey(p.url)
+		if err != nil {
+			// The row stays without sources and keeps resolving through its
+			// gitlab_project_id; a malformed URL must not block startup.
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO project_sources (project_name, match_key, source_name, repo_url, is_primary)
+			VALUES ($1, $2, $1, $3, true) ON CONFLICT DO NOTHING`, p.name, key, p.url); err != nil {
+			return fmt.Errorf("backfill primary source for %s: %w", p.name, err)
+		}
 	}
 	return nil
 }
