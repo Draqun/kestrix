@@ -165,6 +165,33 @@ func TestLoadEnvironmentContentSecurityPolicyExplicitValueReplacesDefault(t *tes
 	}
 }
 
+func TestLoadEnvironmentCookieSecureDefaultsTrue(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if !env.CookieSecure {
+		t.Fatal("CookieSecure = false, want true default")
+	}
+}
+
+func TestLoadEnvironmentCookieSecureExplicitFalse(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_COOKIE_SECURE=false"})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.CookieSecure {
+		t.Fatal("CookieSecure = true, want false")
+	}
+}
+
+func TestLoadEnvironmentCookieSecureRejectsNonBoolean(t *testing.T) {
+	env := LoadEnvironment([]string{"KESTRIX_COOKIE_SECURE=maybe"})
+	if err := env.ValidationError(); err == nil {
+		t.Fatal("ValidationError() = nil, want error for a non-boolean value")
+	}
+}
+
 func TestLoadEnvironmentParsesTypedSourceCacheSettings(t *testing.T) {
 	env := LoadEnvironment([]string{
 		"KESTRIX_SOURCE_CACHE_DIR=/var/cache/kestrix",

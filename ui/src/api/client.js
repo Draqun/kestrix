@@ -7,18 +7,13 @@ export { normalizeProject };
 
 // ─── Authentication plumbing ────────────────────────────────────
 //
-// AuthContext is the only caller of setAuthToken/setUnauthorizedHandler.
-// Every exported request function below goes through apiFetch so a token,
-// once set, is attached everywhere with nothing left to individually
-// remember, and a 401 from any call is reported to the same place.
+// The session lives in the HttpOnly kestrix_session cookie the browser
+// attaches automatically on every same-origin request; this client never
+// holds the token. X-Kestrix-Request proves same-origin intent for a
+// cookie-authenticated mutation - see design.md D3. AuthContext is the only
+// caller of setUnauthorizedHandler; a 401 from any call is reported there.
 
-let authToken = null;
 let onUnauthorized = null;
-
-/** setAuthToken records the bearer token attached to every later request. */
-export function setAuthToken(token) {
-  authToken = token || null;
-}
 
 /** setUnauthorizedHandler is called once, by AuthProvider, on every 401. */
 export function setUnauthorizedHandler(handler) {
@@ -26,14 +21,14 @@ export function setUnauthorizedHandler(handler) {
 }
 
 async function apiFetch(url, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+  const headers = { ...(options.headers || {}), 'X-Kestrix-Request': '1' };
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401 && onUnauthorized) onUnauthorized();
   return res;
 }
 
-/** login exchanges credentials for a token. Never attaches a stale token. */
+/** login exchanges credentials for a token; the server also sets the
+ * session cookie. The token is returned only for bearer clients. */
 export async function login(name, password) {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: 'POST',
@@ -45,6 +40,33 @@ export async function login(name, password) {
     throw new Error(err.error || 'Invalid name or password');
   }
   return res.json();
+}
+
+/** me restores the signed-in account's name, role, and expiry from the
+ * session cookie. Throws on any non-2xx, with the response status attached
+ * as `.status` - callers must not treat every failure as "no session": the
+ * server answers 503, not 401, for a store outage, and that must not be
+ * treated as an unauthenticated visitor. */
+export async function me() {
+  const res = await apiFetch(`${API_BASE}/api/auth/me`);
+  if (!res.ok) {
+    const err = new Error('No active session');
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+/** logout clears the session cookie server-side. Always succeeds, even if
+ * the request itself fails (offline, a network blip) - callers rely on
+ * this to safely clear their own local session state unconditionally. */
+export async function logout() {
+  try {
+    await apiFetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+  } catch {
+    // Best-effort cleanup: a failed request must not block the caller from
+    // treating the user as signed out locally.
+  }
 }
 
 export async function healthCheck() {

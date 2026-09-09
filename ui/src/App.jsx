@@ -55,8 +55,9 @@ function RunDetailRoutes() {
 
 function AppRoutes() {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, restoring } = useAuth();
 
+  if (restoring) return null;
   if (!isAuthenticated) {
     return <Login />;
   }

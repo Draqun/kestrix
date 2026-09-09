@@ -1,16 +1,16 @@
 # Authentication and access control
 
-Every `/api` route requires a signed-in account, except `GET /api/health` and
-`POST /api/auth/login`. `POST /webhook` is unaffected: it authenticates GitLab
-deliveries with its own per-project and global secrets, not a user account.
+Every `/api` route requires a signed-in account, except `GET /api/health`,
+`POST /api/auth/login`, and `POST /api/auth/logout`. `POST /webhook` is
+unaffected: it authenticates GitLab deliveries with its own per-project and
+global secrets, not a user account.
 See [Webhook Receiver: Authentication](webhook-receiver.md#authentication)
 for how those secrets are chosen and why verification fails closed.
 
 ## Signing in
 
-The UI shows a login screen until a token is present. `POST /api/auth/login`
-accepts a name and password and, on success, returns a signed token and its
-expiry:
+`POST /api/auth/login` accepts a name and password and, on success, returns a
+signed token and its expiry:
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/login \
@@ -18,10 +18,91 @@ curl -X POST http://localhost:8080/api/auth/login \
   -d '{"name":"alice","password":"..."}'
 ```
 
-Send the token on every later request as `Authorization: Bearer <token>`. A
-token is valid for 60 minutes; there is no refresh flow, so a client
-re-authenticates by logging in again. A request with no token, a malformed
-header, or an invalid/expired token receives `401`.
+A bearer client (the CLI, scripts, the Terraform provider) sends that token
+on every later request as `Authorization: Bearer <token>`. A token is valid
+for 60 minutes; there is no refresh flow, so a client re-authenticates by
+logging in again. A request with no credential, a malformed header, or an
+invalid/expired token receives `401`.
+
+The login request itself must carry `Content-Type: application/json` -
+anything else (including no header at all) is rejected with `415` before any
+password verification runs. This is not an accident of the JSON decoder: it
+is what keeps an HTML form from forging a login on a visitor's behalf now
+that login has a browser-visible side effect (the cookie below).
+
+### Browser sessions: the `kestrix_session` cookie
+
+The same `200` login response also sets a cookie carrying the same token:
+
+```
+Set-Cookie: kestrix_session=<token>; Path=/api; HttpOnly; SameSite=Strict; Secure; Max-Age=<seconds until expiry>
+```
+
+- `HttpOnly` - never readable by page script. This is what closes the token
+  exposure a Content-Security-Policy can only narrow (see "Security response
+  headers" below).
+- `Path=/api` - never sent to `/`, static assets, or `/docs/*`.
+- `SameSite=Strict` and `Secure` - defense in depth; the actual CSRF control
+  is the header rule below.
+- `Secure` is controlled by `KESTRIX_COOKIE_SECURE` (default `true`). Leave it
+  at the default on any deployment reachable over HTTPS, including
+  `http://localhost` (browsers treat loopback as a secure context, so
+  `make dev` and `make ui-serve` work unchanged). Set it to `false` only for
+  a plain-HTTP deployment on a non-loopback host - a `Secure` cookie is
+  silently dropped by the browser there, and the login page shows a hint
+  when a `200` login is immediately followed by a failing `/api/auth/me` -
+  the symptom of this exact misconfiguration.
+
+`RequireAuth` reads the bearer header when present and the cookie otherwise;
+when both are present, the header wins and the cookie is ignored entirely - a
+malformed header never falls back to the cookie. A token presented either way
+is verified by exactly the same rules, including token-version revocation,
+and a rejected cookie token answers with the same `401` body as a rejected
+header token, so the transport never leaks through the response.
+
+### Same-origin proof for cookie mutations
+
+A request authenticated by the cookie whose method is not `GET`, `HEAD`, or
+`OPTIONS` must also carry the header `X-Kestrix-Request` (any non-empty
+value); without it, Kestrix answers `403` before the route's handler runs.
+Bearer-authenticated requests are exempt - a bearer token is never sent
+automatically by the browser, so it needs no such proof. The bundled UI sends
+this header on every request. This is the actual CSRF control: a browser
+only attaches a custom header cross-origin after a CORS preflight, and
+Kestrix sends no CORS headers, so that preflight fails and the request never
+reaches the server.
+
+### Logout and the current session
+
+`POST /api/auth/logout` clears the cookie and always answers `204`, whether
+or not a session was present; it is public (no credential required) so an
+already-expired session can still be cleaned up. It never changes
+`token_version`, so it has no effect on any bearer client holding a token for
+the same account.
+
+Logout still requires the `X-Kestrix-Request` header above, even though it
+authenticates no one: without it, a cross-site page could force any visitor
+to be signed out (the browser honors this response's clearing `Set-Cookie`
+regardless of the request being cross-site - `SameSite=Strict` governs
+attaching an *existing* cookie to a request, not accepting one from a
+response). The header is not a credential, so a session-less cleanup call
+that does send it is still served; the bundled UI always sends it.
+
+`GET /api/auth/me` returns the signed-in account's current identity -
+`{name, role, expires_at}`, from the stored role, never the token's - so a
+client that cannot decode its own `HttpOnly` cookie can still restore a
+session on reload:
+
+```bash
+curl -b cookies.txt http://localhost:8080/api/auth/me
+```
+
+### Swagger UI
+
+`/docs/*` lives outside `Path=/api`, so the browser never sends the session
+cookie there; its Authorize dialog keeps taking a bearer token exactly as
+before. Cookie sessions apply only to the bundled single-page UI, which is
+always served same-origin with the API.
 
 ## Roles
 
@@ -128,10 +209,14 @@ Every response carries `X-Content-Type-Options: nosniff`,
 styles, no framing). `KESTRIX_CONTENT_SECURITY_POLICY` overrides the policy
 for the application routes if you serve the UI from elsewhere; `/docs/*`
 keeps its own, separately relaxed policy for Swagger UI's inline script
-regardless of that setting. These headers narrow, but do not remove, the
-exposure from keeping the session token in `sessionStorage` rather than an
-`HttpOnly` cookie - see [design.md D8](../openspec/changes/rbac-hardening/design.md)
-for that trade-off.
+regardless of that setting. The bundled UI never holds the token in
+script-readable storage: the browser session lives entirely in the
+`HttpOnly` `kestrix_session` cookie described above, so a same-origin script
+that runs in the page cannot read or exfiltrate it. These headers, and the
+cookie's `HttpOnly` mark, are complementary defenses against different
+threats: a page-script compromise can still call the API as the signed-in
+user while it runs (see the CSRF section above for why it cannot forge a
+mutating request), but it can no longer walk away with a reusable token.
 
 ## Provisioning the signing key
 

@@ -24,6 +24,51 @@ const claimsContextKey contextKey = iota
 // user-authentication, "Token verification".
 const invalidTokenMessage = "invalid or expired token"
 
+// missingCredentialMessage is returned for a request with no usable
+// credential at all: no Authorization header and no session cookie, or a
+// header present but not a well-formed bearer token. The latter never falls
+// back to the cookie; see design.md D2.
+const missingCredentialMessage = "missing or malformed Authorization header"
+
+// csrfHeaderName is the custom header a cookie-authenticated, state-changing
+// request must carry; see design.md D3.
+const csrfHeaderName = "X-Kestrix-Request"
+
+// errMissingCredential is returned by credentialFromRequest when neither a
+// well-formed bearer header nor a session cookie is present.
+var errMissingCredential = errors.New(missingCredentialMessage)
+
+// isSafeMethod reports whether method never changes state, per design.md D3.
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+// credentialFromRequest extracts the token RequireAuth should verify: the
+// bearer header when present, or the session cookie otherwise. fromCookie
+// reports which source won. A header that is present but not a well-formed
+// bearer token is rejected here without falling back to the cookie; see
+// design.md D2.
+func credentialFromRequest(r *http.Request) (token string, fromCookie bool, err error) {
+	header := r.Header.Get("Authorization")
+	if header != "" {
+		const prefix = "Bearer "
+		if !strings.HasPrefix(header, prefix) || len(header) <= len(prefix) {
+			return "", false, errMissingCredential
+		}
+		return header[len(prefix):], false, nil
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", false, errMissingCredential
+	}
+	return cookie.Value, true, nil
+}
+
 // claimsFromContext returns the verified claims RequireAuth placed on the
 // request context, if any.
 func claimsFromContext(ctx context.Context) (domain.Claims, bool) {
@@ -47,13 +92,15 @@ func claimsFromContext(ctx context.Context) (domain.Claims, bool) {
 // design.md D3.
 func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(header, prefix) || len(header) <= len(prefix) {
-			writeError(w, http.StatusUnauthorized, "missing or malformed Authorization header")
+		token, fromCookie, err := credentialFromRequest(r)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, missingCredentialMessage)
 			return
 		}
-		token := header[len(prefix):]
+		if fromCookie && !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) == "" {
+			writeError(w, http.StatusForbidden, "missing "+csrfHeaderName+" header")
+			return
+		}
 		if s.tokenIssuer == nil {
 			writeError(w, http.StatusUnauthorized, "authentication is not configured")
 			return

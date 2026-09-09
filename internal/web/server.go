@@ -63,9 +63,13 @@ type Config struct {
 	// ContentSecurityPolicy overrides defaultContentSecurityPolicy on every
 	// route except /docs/*; see design.md D8. Empty keeps the default.
 	ContentSecurityPolicy string
-	Branch                string
-	Docker                DockerConfig
-	Signature             SignatureConfig
+	// CookieSecure marks the session cookie Secure; see session-cookie-auth
+	// design.md D4. config.Environment resolves the operator-facing true
+	// default before populating this in production wiring.
+	CookieSecure bool
+	Branch       string
+	Docker       DockerConfig
+	Signature    SignatureConfig
 	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
 	// store default.
 	WebhookHistoryLimit int
@@ -400,6 +404,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Get("/health", s.handleHealth)
 			r.With(s.throttleLogin).Post("/auth/login", s.handleLogin)
+			r.Post("/auth/logout", s.handleLogout)
 		})
 
 		r.Group(func(r chi.Router) {
@@ -407,6 +412,7 @@ func (s *Server) buildRouter() chi.Router {
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.RequireRole(domain.RoleViewer))
+				r.Get("/auth/me", s.handleMe)
 				r.Get("/dashboard", s.handleDashboard)
 				r.Get("/pipeline", s.handleGetPipeline)
 				r.Get("/pipeline/raw", s.handleGetPipelineRaw)

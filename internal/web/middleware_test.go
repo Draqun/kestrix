@@ -608,3 +608,170 @@ func TestRequireRole_AbsentGrantStillResolvesToGlobalRole(t *testing.T) {
 		t.Fatalf("status = %d, want 200 - an absent grant must fall back to the global role, not fail closed", w.Code)
 	}
 }
+
+// ── Cookie credential in RequireAuth (session-cookie-auth) ──
+
+func TestCredentialFromRequest(t *testing.T) {
+	cases := []struct {
+		name       string
+		header     string
+		cookie     string
+		wantToken  string
+		wantCookie bool
+		wantErr    bool
+	}{
+		{name: "header only", header: "Bearer h-token", wantToken: "h-token", wantCookie: false},
+		{name: "cookie only", cookie: "c-token", wantToken: "c-token", wantCookie: true},
+		{name: "both - header wins", header: "Bearer h-token", cookie: "c-token", wantToken: "h-token", wantCookie: false},
+		{name: "malformed header plus valid cookie - no fallback", header: "Basic xyz", cookie: "c-token", wantErr: true},
+		{name: "neither", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tc.cookie})
+			}
+			token, fromCookie, err := credentialFromRequest(req)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("err = nil, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if token != tc.wantToken {
+				t.Fatalf("token = %q, want %q", token, tc.wantToken)
+			}
+			if fromCookie != tc.wantCookie {
+				t.Fatalf("fromCookie = %v, want %v", fromCookie, tc.wantCookie)
+			}
+		})
+	}
+}
+
+func TestRequireAuth_CookieCSRF(t *testing.T) {
+	cases := []struct {
+		name       string
+		fromCookie bool
+		method     string
+		csrfHeader bool
+		wantStatus int
+	}{
+		{name: "cookie POST without header", fromCookie: true, method: http.MethodPost, csrfHeader: false, wantStatus: http.StatusForbidden},
+		{name: "cookie POST with header", fromCookie: true, method: http.MethodPost, csrfHeader: true, wantStatus: http.StatusOK},
+		{name: "cookie GET without header", fromCookie: true, method: http.MethodGet, csrfHeader: false, wantStatus: http.StatusOK},
+		{name: "bearer POST without header", fromCookie: false, method: http.MethodPost, csrfHeader: false, wantStatus: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newAuthTestServer(t)
+			backing := newErrUserStore()
+			token := authToken(t, srv, domain.RoleViewer)
+			user, err := srv.userStore.GetUser("test-" + string(domain.RoleViewer))
+			if err != nil {
+				t.Fatalf("GetUser: %v", err)
+			}
+			backing.users[user.Name] = user
+			srv.userStore = backing
+
+			req := httptest.NewRequest(tc.method, "/x", nil)
+			if tc.fromCookie {
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: strings.TrimPrefix(token, "Bearer ")})
+			} else {
+				req.Header.Set("Authorization", token)
+			}
+			if tc.csrfHeader {
+				req.Header.Set(csrfHeaderName, "1")
+			}
+			w := httptest.NewRecorder()
+			srv.RequireAuth(okHandler()).ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusForbidden && backing.getCalls != 0 {
+				t.Fatalf("GetUser called %d times, want 0 - a missing CSRF header must be rejected before identity resolution", backing.getCalls)
+			}
+		})
+	}
+}
+
+func TestRequireAuth_CookieTokenFailuresMatchHeaderPath(t *testing.T) {
+	srv := newAuthTestServer(t)
+	user := ensureTestUser(t, srv, "cookie-consistent", domain.RoleViewer)
+
+	otherKeyIssuer := auth.JWTIssuer{Key: func() ([]byte, error) {
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = byte(255 - i)
+		}
+		return key, nil
+	}}
+	badSigToken, _, err := otherKeyIssuer.Issue(user)
+	if err != nil {
+		t.Fatalf("Issue(other key): %v", err)
+	}
+	key, err := testSigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := expiredToken(t, key)
+	staleToken, _, err := srv.tokenIssuer.Issue(user)
+	if err != nil {
+		t.Fatalf("Issue(stale): %v", err)
+	}
+	if err := srv.userStore.UpdateUserRole(user.Name, domain.RoleAdmin); err != nil {
+		t.Fatalf("UpdateUserRole: %v", err)
+	}
+
+	for _, token := range []string{badSigToken, expired, staleToken} {
+		headerReq := httptest.NewRequest(http.MethodGet, "/x", nil)
+		headerReq.Header.Set("Authorization", "Bearer "+token)
+		headerW := httptest.NewRecorder()
+		srv.RequireAuth(okHandler()).ServeHTTP(headerW, headerReq)
+
+		cookieReq := httptest.NewRequest(http.MethodGet, "/x", nil)
+		cookieReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+		cookieW := httptest.NewRecorder()
+		srv.RequireAuth(okHandler()).ServeHTTP(cookieW, cookieReq)
+
+		if cookieW.Code != headerW.Code || cookieW.Body.String() != headerW.Body.String() {
+			t.Fatalf("cookie path = (%d, %q), want identical to header path = (%d, %q)",
+				cookieW.Code, cookieW.Body.String(), headerW.Code, headerW.Body.String())
+		}
+		if cookieW.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", cookieW.Code)
+		}
+	}
+}
+
+func TestRequireAuth_CookiePathLogsNoCookieValue(t *testing.T) {
+	buf := captureLog(t)
+	srv := newAuthTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "not-a-real-token"})
+	w := httptest.NewRecorder()
+	srv.RequireAuth(okHandler()).ServeHTTP(w, req)
+
+	if strings.Contains(buf.String(), "not-a-real-token") {
+		t.Fatalf("log output leaked the cookie value: %q", buf.String())
+	}
+}
+
+func TestRequireAuth_ValidCookieAuthenticatesGetRequest(t *testing.T) {
+	srv := newAuthTestServer(t)
+	token := authToken(t, srv, domain.RoleViewer)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: strings.TrimPrefix(token, "Bearer ")})
+	w := httptest.NewRecorder()
+	srv.RequireAuth(okHandler()).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}

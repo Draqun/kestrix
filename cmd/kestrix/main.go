@@ -270,6 +270,7 @@ func cmdServe(args []string) {
 		LoginWindow:           env.LoginWindow,
 		TrustProxyHeader:      env.TrustProxyHeader,
 		ContentSecurityPolicy: env.ContentSecurityPolicy,
+		CookieSecure:          env.CookieSecure,
 		Branch:                cfg.Branch,
 		SourceCache: web.SourceCacheConfig{
 			Directory: cfg.SourceCache.Directory,

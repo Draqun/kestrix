@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createCredential, createProject, getWebhookLogs, listCredentials, saveProjectPipeline,
-  login, setAuthToken, setUnauthorizedHandler, healthCheck, listProjects,
+  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
@@ -116,9 +116,9 @@ test('getWebhookLogs tolerates a response without items', async (t) => {
   assert.equal(data.pagination.total, 0);
 });
 
-test('every request attaches the bearer token once it is set', async (t) => {
+test('every request carries the same-origin header and no Authorization header', async (t) => {
   const originalFetch = globalThis.fetch;
-  t.after(() => { globalThis.fetch = originalFetch; setAuthToken(null); });
+  t.after(() => { globalThis.fetch = originalFetch; });
 
   const captured = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -126,30 +126,89 @@ test('every request attaches the bearer token once it is set', async (t) => {
     return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
 
-  setAuthToken('test-token-123');
   await healthCheck();
   await listProjects();
 
   assert.equal(captured.length, 2);
   for (const call of captured) {
-    assert.equal(call.headers.Authorization, 'Bearer test-token-123');
+    assert.equal(call.headers['X-Kestrix-Request'], '1');
+    assert.equal('Authorization' in call.headers, false);
   }
 });
 
-test('no request attaches a token before one is set', async (t) => {
+test('a POST request also carries the same-origin header', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
 
   let captured;
   globalThis.fetch = async (url, options = {}) => {
-    captured = options.headers || {};
-    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    captured = options;
+    return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
 
-  setAuthToken(null);
-  await healthCheck();
+  await createProject({ name: 'demo' });
 
-  assert.equal('Authorization' in captured, false);
+  assert.equal(captured.method, 'POST');
+  assert.equal(captured.headers['X-Kestrix-Request'], '1');
+});
+
+test('me returns the restored session', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ name: 'alice', role: 'admin', expires_at: '2026-01-01T00:00:00Z' }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+
+  const session = await me();
+  assert.equal(session.name, 'alice');
+  assert.equal(session.role, 'admin');
+});
+
+test('me throws on a 401 (no session), with .status attached', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  globalThis.fetch = async () => new Response('{}', { status: 401, headers: { 'Content-Type': 'application/json' } });
+
+  await assert.rejects(() => me(), (err) => err.status === 401);
+});
+
+test('me throws with .status = 503 on a store outage, distinct from 401', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  globalThis.fetch = async () => new Response('{}', { status: 503, headers: { 'Content-Type': 'application/json' } });
+
+  await assert.rejects(() => me(), (err) => err.status === 503);
+});
+
+test('logout posts to /api/auth/logout', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(null, { status: 204 });
+  };
+
+  await logout();
+
+  assert.equal(captured.url, '/api/auth/logout');
+  assert.equal(captured.options.method, 'POST');
+});
+
+test('logout always succeeds, even when the request itself fails', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+
+  // Must not throw - callers rely on this to unconditionally clear their
+  // own local session state.
+  await logout();
 });
 
 test('a 401 response invokes the unauthorized handler exactly once', async (t) => {
@@ -180,9 +239,8 @@ test('a non-401 response never invokes the unauthorized handler', async (t) => {
 
 test('login posts credentials without an Authorization header and returns the token', async (t) => {
   const originalFetch = globalThis.fetch;
-  t.after(() => { globalThis.fetch = originalFetch; setAuthToken(null); });
+  t.after(() => { globalThis.fetch = originalFetch; });
 
-  setAuthToken('stale-token-from-a-previous-session');
   let captured;
   globalThis.fetch = async (url, options = {}) => {
     captured = { url, options };
