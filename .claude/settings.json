@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_FILE_PATH\"; case \"$f\" in *.go) gofmt -l \"$f\"; go vet \"./$(dirname \"$f\")\" ;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}

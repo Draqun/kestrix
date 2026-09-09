@@ -380,6 +380,24 @@ make docker-up-all
 cd ui && npm install && npm run dev
 ```
 
+### Helper scripts
+
+`scripts/` wraps the fetch/test/CI-poll sequences used across most sessions in this repo,
+each starting with `set -euo pipefail` so a failing exit code is never hidden behind a pipe:
+
+```bash
+# Fetch, and confirm the working copy is on a bookmark and main isn't stale
+scripts/preflight.sh
+
+# Run every regression layer (or just the ones named), one PASS/FAIL line each
+scripts/test-all.sh
+scripts/test-all.sh unit coverage
+
+# Poll the current branch's GitLab pipeline until it finishes; read-only,
+# never merges or pushes
+scripts/wait-green.sh
+```
+
 ### Running a pipeline from the UI
 
 1. Start the application with `make ui-serve DIR=.`.
