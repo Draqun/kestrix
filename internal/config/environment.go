@@ -52,8 +52,12 @@ type Environment struct {
 	// every route except /docs/*; see design.md D8. Defaults to that
 	// bundled-UI policy.
 	ContentSecurityPolicy string
-	Docker                DockerEnvironment
-	SourceCache           SourceCacheEnvironment
+	// CookieSecure marks the session cookie Secure; see session-cookie-auth
+	// design.md D4. Defaults to true - false is a plain-HTTP-development
+	// downgrade for a non-loopback deployment with no TLS in front.
+	CookieSecure bool
+	Docker       DockerEnvironment
+	SourceCache  SourceCacheEnvironment
 	// RunnerEnvPassthrough names host environment variables forwarded to
 	// task processes verbatim, in addition to the fixed base set, CI_*
 	// variables, and resolved pipeline variables; see design.md D2 in the
@@ -204,6 +208,18 @@ func LoadEnvironment(environ []string) *Environment {
 			}
 		} else {
 			trustProxyHeader = parsed
+		}
+	}
+
+	cookieSecure := true
+	if raw := values[Prefix+"COOKIE_SECURE"]; raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_COOKIE_SECURE must be a boolean")
+			}
+		} else {
+			cookieSecure = parsed
 		}
 	}
 
@@ -360,6 +376,7 @@ func LoadEnvironment(environ []string) *Environment {
 		LoginWindow:           loginWindow,
 		TrustProxyHeader:      trustProxyHeader,
 		ContentSecurityPolicy: values[Prefix+"CONTENT_SECURITY_POLICY"],
+		CookieSecure:          cookieSecure,
 		Docker: DockerEnvironment{
 			Registry: values["DOCKER_REGISTRY"],
 			Image:    values["DOCKER_IMAGE"],

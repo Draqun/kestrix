@@ -250,6 +250,43 @@ fi
 AUTH_HEADER=(-H "Authorization: Bearer ${API_TOKEN}")
 echo "Authenticated as ${ADMIN_NAME}."
 
+# Cookie sessions: login also sets kestrix_session, and a cookie-authenticated
+# mutation must carry X-Kestrix-Request or is rejected with 403 - see
+# session-cookie-auth design.md D3. The bearer path above must stay
+# unaffected; this only exercises the cookie path a browser would use.
+echo "Verifying the cookie session and its CSRF header requirement..."
+COOKIE_JAR="${TEMP_DIR}/cookies.txt"
+status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -c "${COOKIE_JAR}" \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"${ADMIN_NAME}\",\"password\":\"${ADMIN_PASSWORD}\"}")"
+if [[ "${status}" != "200" ]]; then
+  echo "Cookie-session login returned HTTP ${status}." >&2
+  exit 1
+fi
+
+RESOLVE_BODY='{"changed":[],"dir":""}'
+BEARER_RESOLVE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+  "${AUTH_HEADER[@]}" -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/resolve" -d "${RESOLVE_BODY}")"
+
+status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -b "${COOKIE_JAR}" \
+  -H 'Content-Type: application/json' \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/resolve" -d "${RESOLVE_BODY}")"
+if [[ "${status}" != "403" ]]; then
+  echo "Cookie POST without X-Kestrix-Request returned HTTP ${status}, want 403." >&2
+  exit 1
+fi
+
+status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -b "${COOKIE_JAR}" \
+  -H 'Content-Type: application/json' -H 'X-Kestrix-Request: 1' \
+  -X POST "http://127.0.0.1:${BASE_PORT}/api/resolve" -d "${RESOLVE_BODY}")"
+if [[ "${status}" != "${BEARER_RESOLVE_STATUS}" ]]; then
+  echo "Cookie POST with X-Kestrix-Request returned HTTP ${status}, want ${BEARER_RESOLVE_STATUS} (the bearer path's own status)." >&2
+  exit 1
+fi
+echo "Cookie CSRF rule verified: 403 without the header, ${status} with it (matches the bearer path)."
+
 # Session revocation: a deleted account's token must stop working, and must
 # do so on the very next request - see design.md D2/D4 (rbac-hardening).
 # Deletion happens through this same running process, so no wait for the

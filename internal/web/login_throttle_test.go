@@ -204,6 +204,7 @@ func TestThrottleLogin_BlocksAfterLimitWithRetryAfter(t *testing.T) {
 	wrongBody, _ := json.Marshal(loginRequest{Name: "dana", Password: "wrong"})
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
+		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		srv.router.ServeHTTP(w, req)
 		if w.Code != http.StatusUnauthorized {
@@ -212,6 +213,7 @@ func TestThrottleLogin_BlocksAfterLimitWithRetryAfter(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
@@ -229,6 +231,7 @@ func TestThrottleLogin_ThrottledRequestNeverReachesAuthService(t *testing.T) {
 
 	wrongBody, _ := json.Marshal(loginRequest{Name: "erin", Password: "wrong"})
 	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(wrongBody))
+	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w1, req1)
 	if w1.Code != http.StatusUnauthorized {
@@ -239,6 +242,7 @@ func TestThrottleLogin_ThrottledRequestNeverReachesAuthService(t *testing.T) {
 	// this reach AuthService, it would succeed with 200. It must not.
 	rightBody, _ := json.Marshal(loginRequest{Name: "erin", Password: "correct-password"})
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(rightBody))
+	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusTooManyRequests {
@@ -252,6 +256,7 @@ func TestThrottleLogin_UnknownAccountThrottledIdentically(t *testing.T) {
 
 	unknownBody, _ := json.Marshal(loginRequest{Name: "never-existed", Password: "anything"})
 	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(unknownBody))
+	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w1, req1)
 	if w1.Code != http.StatusUnauthorized {
@@ -259,6 +264,7 @@ func TestThrottleLogin_UnknownAccountThrottledIdentically(t *testing.T) {
 	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(unknownBody))
+	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusTooManyRequests {
@@ -295,6 +301,7 @@ func TestThrottleLogin_OversizedBodyNeverIncrementsThrottle(t *testing.T) {
 	srv.loginThrottle = newLoginThrottle(5, time.Minute, 0, clock.now)
 	body, _ := json.Marshal(loginRequest{Name: "oversized", Password: "a-password-longer-than-the-bound"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 	if w.Code != http.StatusRequestEntityTooLarge {
@@ -311,9 +318,11 @@ func TestThrottleLogin_RetryAfterRoundsUpFractionalSeconds(t *testing.T) {
 	body, _ := json.Marshal(loginRequest{Name: "gina", Password: "wrong"})
 
 	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
 	srv.router.ServeHTTP(httptest.NewRecorder(), req1)
 
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusTooManyRequests {
@@ -331,6 +340,7 @@ func TestThrottleLogin_SuccessReachesRecordSuccess(t *testing.T) {
 
 	body, _ := json.Marshal(loginRequest{Name: "helen", Password: "correct-password"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -344,6 +354,7 @@ func TestThrottleLogin_ForgedForwardedForIgnoredWhenNotTrusted(t *testing.T) {
 
 	body1, _ := json.Marshal(loginRequest{Name: "frank-one", Password: "wrong"})
 	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
 	req1.RemoteAddr = "10.0.0.1:1"
 	req1.Header.Set("X-Forwarded-For", "1.1.1.1")
 	w1 := httptest.NewRecorder()
@@ -358,6 +369,7 @@ func TestThrottleLogin_ForgedForwardedForIgnoredWhenNotTrusted(t *testing.T) {
 	// trusted, both requests share the address key 10.0.0.1:1.
 	body2, _ := json.Marshal(loginRequest{Name: "frank-two", Password: "wrong"})
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
 	req2.RemoteAddr = "10.0.0.1:1"
 	req2.Header.Set("X-Forwarded-For", "2.2.2.2")
 	w2 := httptest.NewRecorder()
@@ -380,6 +392,7 @@ func TestThrottleLogin_SameIPDifferentPortsShareTheAddressThrottle(t *testing.T)
 
 	body1, _ := json.Marshal(loginRequest{Name: "sweep-one", Password: "wrong"})
 	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
 	req1.RemoteAddr = "203.0.113.9:11111"
 	w1 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w1, req1)
@@ -391,6 +404,7 @@ func TestThrottleLogin_SameIPDifferentPortsShareTheAddressThrottle(t *testing.T)
 	// source port - as a real second TCP connection would present.
 	body2, _ := json.Marshal(loginRequest{Name: "sweep-two", Password: "wrong"})
 	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
 	req2.RemoteAddr = "203.0.113.9:22222"
 	w2 := httptest.NewRecorder()
 	srv.router.ServeHTTP(w2, req2)

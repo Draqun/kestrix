@@ -16,7 +16,17 @@ export default function Login() {
     try {
       await login(name, password);
     } catch (err) {
-      setError(err.message || 'Invalid name or password');
+      if (err.code === 'SESSION_NOT_STARTED') {
+        // AuthContext signals this when login answered 200 but the session
+        // cookie never came back - the classic symptom of a Secure cookie
+        // on a plain-HTTP deployment; see design.md D4 risk.
+        setError(
+          'Signed in, but the session did not start. If this deployment is plain HTTP, ' +
+          'check KESTRIX_COOKIE_SECURE (see docs/authentication.md).',
+        );
+      } else {
+        setError(err.message || 'Invalid name or password');
+      }
     } finally {
       setSubmitting(false);
     }

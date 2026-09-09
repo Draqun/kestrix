@@ -37,3 +37,20 @@ test('disables submit until both fields are filled', () => {
   render(<Login />);
   assert.equal(screen.getByRole('button', { name: 'Sign in' }).disabled, true);
 });
+
+test('shows the cookie hint when login answers 200 but the session cookie never arrives', async () => {
+  // AuthContext.login signals this specific error code when the post-login
+  // /me call 401s - see design.md D4 risk (Secure cookie over plain HTTP).
+  // The exact wording is this page's own, not AuthContext's.
+  const err = new Error('Signed in, but the session did not start.');
+  err.code = 'SESSION_NOT_STARTED';
+  auth.login.mockRejectedValue(err);
+  const user = userEvent.setup();
+  render(<Login />);
+
+  await user.type(screen.getByLabelText('Name'), 'alice');
+  await user.type(screen.getByLabelText('Password'), 's3cret');
+  await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+  assert.ok(await screen.findByText(/KESTRIX_COOKIE_SECURE/));
+});

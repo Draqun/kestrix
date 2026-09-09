@@ -133,6 +133,28 @@ check achieves the same guarantee for one `if`.
 Alternative considered: synchronizer token stored server-side. Rejected for the
 same reason as the session table in D1.
 
+### D3a. Login requires `Content-Type: application/json`
+
+D3's header check only runs once a cookie exists to authenticate the
+request; login itself is public and unauthenticated, so it needs its own
+guard against the same class of attack. Login now has a side effect a
+cross-site request can exploit without ever reading the response: a form
+whose `Content-Type` is one of the browser's CORS-safelisted types (e.g.
+`text/plain`) needs no preflight, and Go's `json.Decoder` reads exactly one
+JSON value and ignores whatever the form appends after it — so a form body
+still decodes as valid credentials. Answering `200` with `Set-Cookie` for
+that request plants *the attacker's own account* in the victim's browser
+(login CSRF / session fixation), which was harmless before this change since
+nothing but an unreadable, cross-origin-opaque response resulted.
+
+`handleLogin` therefore rejects any request whose `Content-Type` is not
+exactly `application/json` with `415`, checked after `decodeJSON` (so an
+oversized or malformed body still answers `413`/`400` like every other
+route) but before calling `AuthService.Login`. No HTML form can produce that
+exact content type, so this closes the path the same way D3's header check
+does for an authenticated mutation, for the one route that runs before any
+session exists.
+
 ### D4. `Path=/api`, `SameSite=Strict`, `Secure` by default
 
 `Path=/api` keeps the cookie off static assets and `/docs/*`, so Swagger UI
@@ -177,8 +199,18 @@ runs out — harmless, but confusing). It does not bump `token_version`: the
 bearer clients of the same account are not the browser's to revoke, and an
 administrator who wants that has the existing password/role path.
 
-Cross-site logout is the only abuse: `SameSite=Strict` blocks the cookie on
-such a request, so the clearing `Set-Cookie` is a no-op there.
+Cross-site logout is the only abuse, and `SameSite=Strict` does *not* stop
+it: that attribute governs whether the browser *attaches* an existing cookie
+to an outgoing request, not whether it *accepts* a `Set-Cookie` from a
+response — and logout requires no credential at all, so the request needs no
+cookie in the first place. An auto-submitting cross-site form can reach
+`POST /api/auth/logout` and its `204` response's clearing `Set-Cookie` is
+honored normally, forcibly signing out any visitor who follows the link.
+Logout therefore requires the same `X-Kestrix-Request` header as a
+cookie-authenticated mutation (D3), even though it authenticates no one: the
+header is not a credential, so a session-less caller that does send it (the
+bundled UI, on every call) is still served, and the same CORS-preflight
+argument that makes D3 work applies unchanged.
 
 ### D7. Swagger UI stays bearer-only
 
@@ -231,3 +263,11 @@ No code change; the CSRF rule already produces this outcome for mutations.
   distinguished from an unknown account by cookie presence either.
 - Logging (`logAuthFailure`, `logDenial`) receives no token from the cookie
   path, matching the existing rule for the header path.
+- Login's `Content-Type` gate (D3a) and logout's `X-Kestrix-Request`
+  requirement (D6) close a login-CSRF/session-fixation path and a
+  forced-logout path respectively, neither of which existed before this
+  change gave login and logout a browser-visible side effect.
+- The UI's `me()` call distinguishes a `401` (no session - clear it) from
+  any other failure (a `503` store outage, a network error), so a transient
+  backend hiccup right after a successful login does not force a sign-out
+  or show the plain-HTTP cookie hint, which is specific to a `401` there.
