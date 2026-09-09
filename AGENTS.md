@@ -20,7 +20,7 @@ make quality        # fmt-check + vet + test + coverage
 make dev            # air hot-reload backend :8080
 make dev-all        # backend :8080 + vite UI :3000
 make ui-build       # production FE → ui/dist
-make docker-up      # postgres + redis (docker/)
+make docker-up      # postgres (docker/)
 make pipeline       # run dogfood pipeline locally
 ```
 Single package/test:

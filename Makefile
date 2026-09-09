@@ -230,7 +230,7 @@ ui-coverage: ui-install
 ui-serve: ui-build $(BINARY)
 	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples/demo-mono) --static $(or $(STATIC),./ui/dist)
 
-## docker-up: Start local development dependencies (PostgreSQL and Redis)
+## docker-up: Start local development dependencies (PostgreSQL)
 docker-up:
 	cd docker && make deps-up-d
 

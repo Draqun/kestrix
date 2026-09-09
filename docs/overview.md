@@ -16,7 +16,7 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 | [Frontend](fe.md) | React SPA with MUI, pipeline editor, DAG viewer |
 | [Backend](be.md) | Go HTTP server, parser, DAG engine, runner |
 | [CI Tools](ci-tools.md) | CI generator, dispatch client, runner modes |
-| [Terraform Provider](terraform-provider.md) | Infrastructure‑as‑code for project management |
+| [Terraform Provider](terraform-provider.md) | Infrastructure‑as‑code for project management, maintained in a separate repository |
 | [Business Pages](business.md) | Public‑facing documentation and onboarding |
 | [Authentication](authentication.md) | Login, roles, project grants, and account recovery |
 

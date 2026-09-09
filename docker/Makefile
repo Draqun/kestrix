@@ -26,18 +26,17 @@ up-d:
 	@echo "  Kestrix:   http://localhost:8080"
 	@echo "  Swagger:   http://localhost:8080/docs/"
 	@echo "  Postgres:  localhost:5433"
-	@echo "  Redis:     localhost:6380"
 	@echo ""
 	@echo "  make logs    — follow logs"
 	@echo "  make down    — stop services"
 
 ## deps-up: Start development dependencies only (foreground)
 deps-up:
-	$(COMPOSE) up postgres redis
+	$(COMPOSE) up postgres
 
 ## deps-up-d: Start development dependencies only (background)
 deps-up-d:
-	$(COMPOSE) up -d postgres redis
+	$(COMPOSE) up -d postgres
 
 ## down: Stop and remove all services
 down:
@@ -101,6 +100,3 @@ health:
 	@echo ""
 	@echo "Postgres:"
 	@$(COMPOSE) exec -T postgres pg_isready -U kestrix 2>/dev/null || echo "  Postgres: not running"
-	@echo ""
-	@echo "Redis:"
-	@$(COMPOSE) exec -T redis redis-cli ping 2>/dev/null || echo "  Redis: not running"

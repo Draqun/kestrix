@@ -44,7 +44,7 @@ signing key, and every `/api` route except `/api/health` and the login route
 requires an account. Provision all four once:
 
 ```bash
-# PostgreSQL: starts the local dependencies (PostgreSQL and Redis) on the
+# PostgreSQL: starts the local dependencies (PostgreSQL) on the
 # ports the default DATABASE_URL expects, :5433 among them. Run from the
 # repository root; `docker-up` is a target of the root Makefile, and the one
 # inside docker/ is called `deps-up-d`.

@@ -43,6 +43,10 @@ All notable changes to Kestrix are documented here.
 - `docker` runner mode now runs every task container with `--cap-drop ALL`, `--security-opt no-new-privileges`, a PID limit (`KESTRIX_RUNNER_DOCKER_PIDS`, default `256`), a memory limit (`KESTRIX_RUNNER_DOCKER_MEMORY`, default `2g`), and a CPU limit (`KESTRIX_RUNNER_DOCKER_CPUS`, default `2`); network is configurable via `KESTRIX_RUNNER_DOCKER_NETWORK` (default `bridge`, `none` disables egress) and an optional non-root user via `KESTRIX_RUNNER_DOCKER_USER`. The Docker socket is never mounted and `--privileged` is never passed.
 - Cancelling a run now terminates its executing task before the run is recorded as `canceled`: `local` and `gitlab-runner` mode send the task's process group SIGTERM then SIGKILL, and `docker` mode stops the container, after `KESTRIX_RUNNER_CANCEL_GRACE` (default `10s`). A run whose task cannot be confirmed terminated within grace plus 5s stays `running` and the cancel request fails with `504`, instead of falsely reporting `canceled`.
 
+### Removed
+
+- The `redis` Compose service and `redis_data` volume, from both the development and production profiles: no Go code ever connected to it. `REDIS_PORT` is removed from `.env.template` and `scripts/docker-deployment-e2e.sh`. An existing deployment keeps its orphaned `redis_data` volume until an operator runs `docker volume rm`; `docker compose up -d --remove-orphans` stops and removes the running container. The Terraform provider's resource schema and examples move to their own repository; `docs/terraform-provider.md` is now a pointer to it.
+
 ### Fixed
 
 - The Webhook Logs page no longer falls back to fabricated sample events, and no longer calls a hard-coded `http://localhost:8080`, which broke the Docker deployment profile on port `18080`.
