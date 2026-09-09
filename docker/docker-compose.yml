@@ -99,22 +99,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ─── Redis (for future rate limiting / caching) ───────────
-  redis:
-    image: redis:7-alpine
-    container_name: kestrix-dev-redis
-    ports:
-      - "${REDIS_PORT:-6380}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
 volumes:
   local_postgres_data:
     name: kestrix_local_postgres_data
-  redis_data:

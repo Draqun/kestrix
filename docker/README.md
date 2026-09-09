@@ -1,6 +1,6 @@
 # Kestrix Docker resources
 
-The Docker Compose configuration uses `kestrix` for application, Redis,
+The Docker Compose configuration uses `kestrix` for application,
 business-site, PostgreSQL database, and test-database identities. Runtime
 configuration uses only the canonical `KESTRIX_*` environment variables.
 

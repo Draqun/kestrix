@@ -101,7 +101,7 @@ make docker-e2e
 
 The test requires a running Docker daemon, Docker Compose, and `curl`. It builds
 a local test image, uses a unique Compose project, high local ports, and
-disposable PostgreSQL/Redis/cache volumes. It also registers a project from a
+disposable PostgreSQL/cache volumes. It also registers a project from a
 bare Git remote, verifies cache persistence across a Kestrix restart, proves a
 cached credential fails closed after revocation, and scans API responses and
 logs for the test secret. It removes only its own containers, network, image,
