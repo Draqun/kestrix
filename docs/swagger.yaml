@@ -69,6 +69,12 @@ definitions:
         type: string
       repo_url:
         type: string
+      sources:
+        description: Sources is derived and read-only; a client-supplied value is
+          ignored.
+        items:
+          $ref: '#/definitions/domain.ProjectSource'
+        type: array
       webhook_secret:
         description: |-
           WebhookSecret is write-only: it is accepted on create and update but
@@ -85,6 +91,15 @@ definitions:
       role:
         type: string
       user_name:
+        type: string
+    type: object
+  domain.ProjectSource:
+    properties:
+      name:
+        type: string
+      primary:
+        type: boolean
+      url:
         type: string
     type: object
   domain.Repo:
@@ -158,6 +173,12 @@ definitions:
       repo:
         type: string
       scope:
+        type: string
+      secret_ref:
+        description: |-
+          SecretRef names a `secret` credential to resolve at run start and
+          inject as this variable's value; see runtime-secrets. Mutually
+          exclusive with Value and Default, and always masked.
         type: string
       value:
         type: string

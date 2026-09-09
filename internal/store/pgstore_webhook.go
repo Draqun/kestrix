@@ -66,9 +66,9 @@ func (s *PGStore) RecordWebhookEvent(event WebhookEvent) error {
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO webhook_events (received_at, project_name, repo, branch, revision, commits, triggered_tasks, status, error, dispatch)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		receivedAt, projectName, event.Repo, event.Branch, event.Revision,
+		`INSERT INTO webhook_events (received_at, project_name, source_name, repo, branch, revision, commits, triggered_tasks, status, error, dispatch)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		receivedAt, projectName, event.SourceName, event.Repo, event.Branch, event.Revision,
 		event.Commits, string(tasksJSON), event.Status, event.Error, string(dispatchJSON),
 	); err != nil {
 		return fmt.Errorf("insert webhook event: %w", err)
@@ -132,7 +132,7 @@ func (s *PGStore) ListWebhookEvents(filter WebhookEventFilter, limit, offset int
 		offset = 0
 	}
 	where, args := webhookFilterClauses(filter, 1)
-	query := `SELECT id, received_at, project_name, repo, branch, revision, commits, triggered_tasks, status, error, dispatch FROM webhook_events` +
+	query := `SELECT id, received_at, project_name, source_name, repo, branch, revision, commits, triggered_tasks, status, error, dispatch FROM webhook_events` +
 		where +
 		` ORDER BY received_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1) +
 		` OFFSET $` + strconv.Itoa(len(args)+2)
@@ -149,7 +149,7 @@ func (s *PGStore) ListWebhookEvents(filter WebhookEventFilter, limit, offset int
 		var e WebhookEvent
 		var projectName sql.NullString
 		var tasksJSON, dispatchJSON []byte
-		if err := rows.Scan(&e.ID, &e.ReceivedAt, &projectName, &e.Repo, &e.Branch,
+		if err := rows.Scan(&e.ID, &e.ReceivedAt, &projectName, &e.SourceName, &e.Repo, &e.Branch,
 			&e.Revision, &e.Commits, &tasksJSON, &e.Status, &e.Error, &dispatchJSON); err != nil {
 			return nil, err
 		}

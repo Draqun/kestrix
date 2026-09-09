@@ -30,6 +30,9 @@ type GitLabProject struct {
 	ID                int    `json:"id"`
 	PathWithNamespace string `json:"path_with_namespace"`
 	DefaultBranch     string `json:"default_branch"`
+	GitHTTPURL        string `json:"git_http_url"`
+	GitSSHURL         string `json:"git_ssh_url"`
+	WebURL            string `json:"web_url"`
 }
 
 // GitLabCommit holds a single commit's file-change data.
@@ -65,6 +68,13 @@ type PushEvent struct {
 
 	// CheckoutSHA is the immutable commit selected by the provider for this push.
 	CheckoutSHA string
+
+	// RepoURLs are the repository URLs the provider reported for the pushed
+	// repository (HTTP, SSH, web), in payload order with empty values dropped.
+	// The receiver routes on the same URLs read by probeWebhook before the
+	// payload is parsed; they are carried here so the normalized event is
+	// complete for consumers of PushEvent, per the webhook-receiver spec.
+	RepoURLs []string
 }
 
 // IsEmpty returns true if the event contains no file changes.
@@ -217,5 +227,18 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 		CommitCount:     len(raw.Commits),
 		GitLabProjectID: raw.Project.ID,
 		CheckoutSHA:     checkoutSHA,
+		RepoURLs:        collectRepoURLs(raw.Project),
 	}, nil
+}
+
+// collectRepoURLs returns the repository URLs a payload's project object
+// carries (HTTP, SSH, web), in that order, with empty values dropped.
+func collectRepoURLs(p GitLabProject) []string {
+	var urls []string
+	for _, u := range []string{p.GitHTTPURL, p.GitSSHURL, p.WebURL} {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }

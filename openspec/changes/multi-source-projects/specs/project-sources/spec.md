@@ -11,7 +11,9 @@ Every registered project SHALL have a set of sources consisting of exactly:
 its primary repository (`repo_url`), marked primary, and one entry for each
 `ci_repo` block in its parsed pipeline that declares a `url`. Kestrix SHALL
 recompute the set whenever the project is created, updated, or its pipeline
-definition is loaded from Git, replacing the previous set in full. A source
+definition is loaded from Git **at its configured ref**, replacing the previous
+set in full. A load of any other revision, such as the immutable SHA of a push
+to the primary repository, SHALL NOT change the set. A source
 SHALL NOT be created, edited, or deleted directly through the API.
 
 #### Scenario: Registration derives the primary source
@@ -107,4 +109,5 @@ definition is loaded after the upgrade.
 
 - **WHEN** a project predates this change and its pipeline has not been loaded since the upgrade
 - **AND** a push arrives from a repository its pipeline declares as a remote `ci_repo`
+- **AND** the delivery verifies against the global webhook secret
 - **THEN** Kestrix SHALL record the delivery as `ignored` with reason `unknown project`

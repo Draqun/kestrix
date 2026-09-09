@@ -51,6 +51,8 @@ TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/kestrix-docker-e2e.XXXXXX")"
 OVERRIDE_FILE="${TEMP_DIR}/docker-compose.override.yml"
 REMOTE_BARE="${TEMP_DIR}/remote.git"
 REMOTE_WORK="${TEMP_DIR}/remote-work"
+SHARED_BARE="${TEMP_DIR}/shared.git"
+SHARED_WORK="${TEMP_DIR}/shared-work"
 MASTER_KEY_FILE="${TEMP_DIR}/master.key"
 JWT_SIGNING_KEY_FILE="${TEMP_DIR}/jwt.key"
 ADMIN_NAME="e2e-admin"
@@ -63,6 +65,10 @@ git -C "${REMOTE_WORK}" remote add origin "${REMOTE_BARE}"
 printf '%s\n' \
   'project "docker-remote" {' \
   '  ci_repo "app" { path = "." }' \
+  '  ci_repo "shared" {' \
+  '    url = "file:///e2e/shared.git"' \
+  '    ref = "main"' \
+  '  }' \
   '  ci_task "verify" {' \
   '    trigger = "repo.app.changed"' \
   '    execute {' \
@@ -84,12 +90,30 @@ printf '%s\n' \
   '      script = "sleep 120"' \
   '    }' \
   '  }' \
+  '  ci_task "sync_shared" {' \
+  '    trigger = "repo.shared.changed"' \
+  '    execute {' \
+  '      repo = "shared"' \
+  '      script = "test -f lib/util.go"' \
+  '    }' \
+  '  }' \
   '}' > "${REMOTE_WORK}/ci/pipeline.tf"
 printf '%s\n' 'docker-e2e-source' > "${REMOTE_WORK}/version.txt"
 git -C "${REMOTE_WORK}" add .
 git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
 git -C "${REMOTE_WORK}" push --quiet -u origin main
 REMOTE_COMMIT_SHA="$(git -C "${REMOTE_WORK}" rev-parse HEAD)"
+
+# A second bare remote declared by the pipeline as ci_repo "shared": a push to
+# it must reach the project through its derived sources (multi-source-projects).
+mkdir -p "${SHARED_WORK}/lib"
+git init --quiet --bare --initial-branch=main "${SHARED_BARE}"
+git -C "${SHARED_WORK}" init --quiet --initial-branch=main
+git -C "${SHARED_WORK}" remote add origin "${SHARED_BARE}"
+printf '%s\n' 'package util' > "${SHARED_WORK}/lib/util.go"
+git -C "${SHARED_WORK}" add .
+git -C "${SHARED_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
+git -C "${SHARED_WORK}" push --quiet -u origin main
 
 dd if=/dev/urandom of="${MASTER_KEY_FILE}" bs=32 count=1 status=none
 chmod 600 "${MASTER_KEY_FILE}"
@@ -106,6 +130,7 @@ STARTUP_SCRIPT='apk add --no-cache docker-cli bash >/dev/null'
 STARTUP_SCRIPT="${STARTUP_SCRIPT} && mkdir -p /root/.kestrix"
 STARTUP_SCRIPT="${STARTUP_SCRIPT} && printf 'runner:\n  mode: docker\n' > /root/.kestrix/config.yaml"
 STARTUP_SCRIPT="${STARTUP_SCRIPT} && git config --global --add safe.directory /e2e/remote.git"
+STARTUP_SCRIPT="${STARTUP_SCRIPT} && git config --global --add safe.directory /e2e/shared.git"
 STARTUP_SCRIPT="${STARTUP_SCRIPT} && exec /kestrix serve --addr :8080 --static ./ui/dist"
 printf '%s\n' \
   'services:' \
@@ -115,6 +140,7 @@ printf '%s\n' \
   '    volumes:' \
   '      - source_cache:/var/lib/kestrix/cache/git' \
   "      - ${REMOTE_BARE}:/e2e/remote.git:ro" \
+  "      - ${SHARED_BARE}:/e2e/shared.git:ro" \
   '      - /var/run/docker.sock:/var/run/docker.sock' \
   '      - /tmp:/tmp' > "${OVERRIDE_FILE}"
 
@@ -404,6 +430,61 @@ if [[ "${status}" != "200" ]]; then
   exit 1
 fi
 echo "Webhook delivery with the project's own secret accepted with 200."
+
+# multi-source-projects: loading the definition derives the project's sources
+# (the row above was seeded straight into PostgreSQL, so nothing derived them
+# yet): the primary first, then the shared remote declared by the pipeline.
+curl -fsS --max-time 30 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/definition" > "${TEMP_DIR}/definition.json"
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote" > "${TEMP_DIR}/project-sources.json"
+if ! grep -q '"name":"shared"' "${TEMP_DIR}/project-sources.json" \
+  || ! grep -q '"url":"file:///e2e/shared.git"' "${TEMP_DIR}/project-sources.json" \
+  || ! grep -q '"primary":true' "${TEMP_DIR}/project-sources.json"; then
+  echo "Project sources were not derived from the pipeline:" >&2
+  sed -n '1,40p' "${TEMP_DIR}/project-sources.json" >&2
+  exit 1
+fi
+echo "/api/projects/docker-remote: derived sources verified"
+
+# Push to the shared remote and deliver its webhook. No global secret is
+# configured, so the delivery is accepted only because it presents the
+# matched project's own secret; it must resolve docker-remote through the
+# secondary source and trigger only sync_shared.
+echo "Verifying a push to the shared remote resolves the project through its secondary source..."
+printf '%s\n' 'package util // v2' > "${SHARED_WORK}/lib/util.go"
+git -C "${SHARED_WORK}" add .
+git -C "${SHARED_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m 'shared v2'
+git -C "${SHARED_WORK}" push --quiet origin main
+SHARED_SHA="$(git -C "${SHARED_WORK}" rev-parse HEAD)"
+SHARED_PAYLOAD="{\"object_kind\":\"push\",\"ref\":\"refs/heads/main\",\"checkout_sha\":\"${SHARED_SHA}\",\"project\":{\"id\":0,\"path_with_namespace\":\"e2e/shared\",\"git_http_url\":\"file:///e2e/shared.git\"},\"commits\":[{\"id\":\"${SHARED_SHA}\",\"added\":[],\"modified\":[\"lib/util.go\"],\"removed\":[]}]}"
+status="$(curl -sS -o "${TEMP_DIR}/shared-unauthenticated.json" -w '%{http_code}' --max-time 20 \
+  -X POST "${API_BASE}/webhook" -H 'Content-Type: application/json' -d "${SHARED_PAYLOAD}")"
+if [[ "${status}" != "401" ]]; then
+  echo "Unauthenticated secondary-source webhook returned HTTP ${status}, want 401." >&2
+  exit 1
+fi
+SHARED_WEBHOOK_RESPONSE="${TEMP_DIR}/shared-webhook.json"
+status="$(curl -sS -o "${SHARED_WEBHOOK_RESPONSE}" -w '%{http_code}' --max-time 30 \
+  -X POST "${API_BASE}/webhook" \
+  -H 'Content-Type: application/json' \
+  -H "X-Gitlab-Token: ${WEBHOOK_SECRET_VALUE}" \
+  -d "${SHARED_PAYLOAD}")"
+if [[ "${status}" != "200" ]]; then
+  echo "Secondary-source webhook returned HTTP ${status}:" >&2
+  sed -n '1,40p' "${SHARED_WEBHOOK_RESPONSE}" >&2
+  exit 1
+fi
+if ! grep -q '"source_name":"shared"' "${SHARED_WEBHOOK_RESPONSE}" || ! grep -q '"project":"docker-remote"' "${SHARED_WEBHOOK_RESPONSE}" || ! grep -q '"tasks":\["sync_shared"\]' "${SHARED_WEBHOOK_RESPONSE}"; then
+  echo "Secondary-source webhook did not resolve the project through its shared source:" >&2
+  sed -n '1,40p' "${SHARED_WEBHOOK_RESPONSE}" >&2
+  exit 1
+fi
+curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/logs?project=docker-remote" > "${TEMP_DIR}/logs.json"
+if ! grep -q '"source_name":"shared"' "${TEMP_DIR}/logs.json"; then
+  echo "Webhook history does not attribute the delivery to the shared source:" >&2
+  sed -n '1,40p' "${TEMP_DIR}/logs.json" >&2
+  exit 1
+fi
+echo "/webhook: secondary source resolved docker-remote (source_name=shared)"
 
 # task-execution-isolation: a task process must never see a control-plane
 # secret, even running as a container in the deployment image.

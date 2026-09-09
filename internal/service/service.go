@@ -15,6 +15,7 @@ import (
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
+	"kestrix/internal/source"
 	"kestrix/internal/variables"
 )
 
@@ -97,6 +98,19 @@ func validateProject(cfg *domain.ProjectConfig) error {
 // webhook-ingress-hardening design.md D6. The checks are syntactic only -
 // no DNS resolution and no network access.
 func validateRepoURL(raw string) error {
+	if err := validateRepoURLForm(raw); err != nil {
+		return err
+	}
+	// The same key routes webhooks and identifies the primary source; a URL
+	// without one (no repository path) would register but never be reached.
+	if _, err := source.SourceMatchKey(raw); err != nil {
+		return fmt.Errorf("%w: repo_url must name a repository path", ErrValidation)
+	}
+	return nil
+}
+
+// validateRepoURLForm checks the scheme, address form, and host of raw.
+func validateRepoURLForm(raw string) error {
 	if host, _, ok := splitSCPLikeAddress(raw); ok {
 		if isDisallowedRepoHost(host) {
 			return fmt.Errorf("%w: repo_url host is not allowed", ErrValidation)
@@ -180,8 +194,13 @@ func (s *ProjectService) Create(cfg *domain.ProjectConfig) error {
 	return s.CreateValidated(cfg, nil)
 }
 
+// SourceValidator checks a candidate registration against its remote and
+// returns the pipeline it parsed there, so the service can derive the
+// project's sources from the same parse instead of a second Git operation.
+type SourceValidator func(*domain.ProjectConfig) (model.Project, error)
+
 // CreateValidated validates the complete remote source before persistence.
-func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSource func(*domain.ProjectConfig) error) error {
+func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSource SourceValidator) error {
 	if err := validateProject(cfg); err != nil {
 		return err
 	}
@@ -197,12 +216,25 @@ func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSour
 	if err := s.checkRepoCredential(cfg); err != nil {
 		return err
 	}
+	return s.persistValidated(cfg, validateSource)
+}
+
+// persistValidated runs the remote validation, then stores the project and its
+// derived sources in one store operation, so a failure leaves the registration
+// untouched instead of half applied behind an error response. A client-supplied
+// Sources value is overwritten here, so no caller can register a source by
+// hand. Without a validator only the primary source is known; the next load of
+// the configured ref adds the rest.
+func (s *ProjectService) persistValidated(cfg *domain.ProjectConfig, validateSource SourceValidator) error {
+	var proj model.Project
 	if validateSource != nil {
-		if err := validateSource(cfg); err != nil {
+		var err error
+		if proj, err = validateSource(cfg); err != nil {
 			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
 		}
 	}
-	return s.store.Upsert(cfg)
+	cfg.Sources = DeriveSources(cfg, proj)
+	return s.store.UpsertWithSources(cfg, cfg.Sources)
 }
 
 // Update validates and updates an existing project.
@@ -212,7 +244,7 @@ func (s *ProjectService) Update(name string, cfg *domain.ProjectConfig) error {
 
 // UpdateValidated replaces a project only after the candidate source and
 // pipeline definition have been validated successfully.
-func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig, validateSource func(*domain.ProjectConfig) error) error {
+func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig, validateSource SourceValidator) error {
 	existing, err := s.store.Get(name)
 	if err != nil {
 		return fmt.Errorf("check project: %w", err)
@@ -245,12 +277,7 @@ func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig,
 	if err := s.checkRepoCredential(cfg); err != nil {
 		return err
 	}
-	if validateSource != nil {
-		if err := validateSource(cfg); err != nil {
-			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
-		}
-	}
-	return s.store.Upsert(cfg)
+	return s.persistValidated(cfg, validateSource)
 }
 
 // Delete removes a project by name.

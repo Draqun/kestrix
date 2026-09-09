@@ -966,6 +966,13 @@ const docTemplate = `{
                 "repo_url": {
                     "type": "string"
                 },
+                "sources": {
+                    "description": "Sources is derived and read-only; a client-supplied value is ignored.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.ProjectSource"
+                    }
+                },
                 "webhook_secret": {
                     "description": "WebhookSecret is write-only: it is accepted on create and update but\nSHALL NOT appear in any response - see webhook-ingress-hardening D4.\nResponses carry HasWebhookSecret instead; callers encoding a\nProjectConfig for the wire MUST go through the web package's\npublicProject helper first.",
                     "type": "string"
@@ -982,6 +989,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "user_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "domain.ProjectSource": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "primary": {
+                    "type": "boolean"
+                },
+                "url": {
                     "type": "string"
                 }
             }
@@ -1086,6 +1107,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "scope": {
+                    "type": "string"
+                },
+                "secret_ref": {
+                    "description": "SecretRef names a ` + "`" + `secret` + "`" + ` credential to resolve at run start and\ninject as this variable's value; see runtime-secrets. Mutually\nexclusive with Value and Default, and always masked.",
                     "type": "string"
                 },
                 "value": {

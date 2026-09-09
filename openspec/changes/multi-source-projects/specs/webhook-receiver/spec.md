@@ -89,13 +89,24 @@ matches, it SHALL record the delivery as `ignored` and respond
 #### Scenario: Nothing matches
 
 - **WHEN** a push arrives whose URLs match no source and whose `project.id` matches no project
+- **AND** the delivery verifies against the global webhook secret
 - **THEN** the server SHALL respond HTTP 200 with `{"status": "ignored", "reason": "unknown project"}`
 - **AND** SHALL record one history event with status `ignored`
 
+#### Scenario: Unverified delivery is rejected before resolution is reported
+
+- **WHEN** a push arrives that verifies against neither a matched project's `webhook_secret` nor the global webhook secret
+- **THEN** the server SHALL respond HTTP 401 `{"error": "unauthorized"}`
+- **AND** SHALL NOT record a history event
+- **AND** the response SHALL NOT reveal whether any project matched
+
 ### Requirement: Delivery fans out to every matching project
 
-When a delivery matches more than one project, the server SHALL resolve,
-record, and (when configured) dispatch each project independently. A failure
+When a delivery matches more than one project, the server SHALL verify the
+delivery against each matched project's `webhook_secret` (or the global
+secret), skip a project that does not verify without recording it, and
+resolve, record, and (when configured) dispatch each verified project
+independently. A failure
 in one project SHALL NOT prevent the others from being processed. The
 response SHALL list each project's outcome.
 

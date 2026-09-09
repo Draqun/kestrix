@@ -49,6 +49,19 @@ test('WebhookLogs renders live events from the server', async () => {
   assert.ok(String(requests[0]).startsWith('/api/logs'));
 });
 
+test('WebhookLogs names the matched source when it is not the project itself', async () => {
+  globalThis.fetch = vi.fn(async () => respond([
+    { ...triggeredEvent, id: 1, project_name: 'checkout', source_name: 'shared', repo: 'team/shared' },
+    { ...triggeredEvent, id: 2, project_name: 'checkout', source_name: 'checkout', repo: 'team/checkout' },
+  ]));
+
+  render(<WebhookLogs />);
+
+  await screen.findByText('team/shared');
+  assert.ok(screen.getByText('via shared'));
+  assert.equal(screen.queryByText('via checkout'), null);
+});
+
 test('WebhookLogs shows an empty state instead of placeholder rows', async () => {
   globalThis.fetch = vi.fn(async () => respond([]));
 

@@ -43,14 +43,18 @@ ci_repo "private_auth" {
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `path` | string | One of `path`/`url` | Relative subdirectory of the acquired primary project checkout |
-| `url` | string | One of `path`/`url` | Standard HTTPS or SSH Git URL on any Git host |
+| `url` | string | One of `path`/`url` | Standard HTTPS or SSH Git URL on any Git host; also makes the repository a webhook source of the project (see [Remote projects](remote-projects.md#sources)) |
 | `ref` | string | Yes for remote repositories | Branch, tag, or commit SHA; the resolved SHA is recorded per run |
 | `credential_ref` | string | No | Reference to runtime credentials; values never belong in HCL or URLs |
 | `kind` | string | No | Retained for compatibility; `subpath` describes local monorepo paths |
 
 `path` and `url` are mutually exclusive. A `path` must be relative, cannot
 escape the primary checkout with `..`, and never names an arbitrary server
-filesystem location. URLs containing passwords, tokens,
+filesystem location. A `url` additionally wires the webhook: once the project
+has loaded a pipeline declaring it, a push to that repository (with a webhook
+pointing at Kestrix) marks the `ci_repo` as changed and evaluates the
+project's triggers, with the pipeline loaded from the primary repository at
+its configured ref. URLs containing passwords, tokens,
 or other embedded credentials are rejected. Remote sources are cloned into a
 private isolated workspace before the first task starts. Reusable bare Git
 objects live in the private source cache, but writable task files never do.

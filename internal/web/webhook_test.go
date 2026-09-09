@@ -14,7 +14,10 @@ func TestParseGitLabPushEvent(t *testing.T) {
 		"checkout_sha": "immutable123",
 		"project": {
 			"path_with_namespace": "org/service-a",
-			"default_branch": "main"
+			"default_branch": "main",
+			"git_http_url": "https://git.example.test/org/service-a.git",
+			"git_ssh_url": "",
+			"web_url": "https://git.example.test/org/service-a"
 		},
 		"commits": [
 			{
@@ -52,6 +55,27 @@ func TestParseGitLabPushEvent(t *testing.T) {
 	}
 	if !event.FilesChanged["docs/README.md"] {
 		t.Error("expected docs/README.md in changed files")
+	}
+	// URLs keep payload order (http, ssh, web); the empty ssh URL is dropped.
+	if len(event.RepoURLs) != 2 || event.RepoURLs[0] != "https://git.example.test/org/service-a.git" || event.RepoURLs[1] != "https://git.example.test/org/service-a" {
+		t.Errorf("repo URLs = %v", event.RepoURLs)
+	}
+}
+
+func TestParseGitLabPushEventCollectsAllRepoURLs(t *testing.T) {
+	event, err := ParseGitLabPushEvent([]byte(`{"object_kind":"push","ref":"refs/heads/main","project":{
+		"git_http_url":"https://h/a.git","git_ssh_url":"git@h:a.git","web_url":"https://h/a"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"https://h/a.git", "git@h:a.git", "https://h/a"}
+	if len(event.RepoURLs) != 3 {
+		t.Fatalf("repo URLs = %v, want %v", event.RepoURLs, want)
+	}
+	for i := range want {
+		if event.RepoURLs[i] != want[i] {
+			t.Errorf("repo URL %d = %q, want %q", i, event.RepoURLs[i], want[i])
+		}
 	}
 }
 
@@ -239,6 +263,9 @@ func TestParseGitLabPushEventEmpty(t *testing.T) {
 	}
 	if !event.IsEmpty() {
 		t.Error("expected empty event for push with no commits")
+	}
+	if len(event.RepoURLs) != 0 {
+		t.Errorf("repo URLs = %v, want none for a payload without URL fields", event.RepoURLs)
 	}
 }
 

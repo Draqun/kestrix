@@ -71,17 +71,22 @@ See proposal.md - Why. The constraints that shape this design:
                  ▼                ▼                 ▼
           resolveOne()     resolveOne()      ignored → 1 history row
             │ primary?  yes ─▶ load pipeline @ event SHA, MatchRepos(files)
-            │           no  ─▶ load pipeline @ repo_ref, changed = {source.Name}
+            │           no  ─▶ load pipeline @ repo_ref, changed = {pushed ci_repo}
             │                   (if HasCodeChanges)
             ├─▶ dag.Resolve ─▶ dispatch(gitlab_project_id) ─▶ history row
             └─▶ result{project, source_name, status, tasks, dispatch}
                                   │
                        response {status, results: [...]}
 
-  writes that refresh sources:
-    POST/PUT /api/projects/{name} ─┐
-    GET .../definition (pipeline)  ─┼─▶ deriveSources(cfg, proj) ─▶ ReplaceSources
-    webhook primary load           ─┘        primary + ci_repo{url}
+  writes that refresh sources - every one is a load of the configured ref:
+    POST/PUT /api/projects/{name} ──▶ deriveSources ──▶ UpsertWithSources (1 tx)
+    GET .../definition (pipeline) ─┐
+    webhook secondary load        ─┴▶ deriveSources ──▶ ReplaceSources
+      (always @ repo_ref)                primary + ci_repo{url}
+
+    a webhook primary load never refreshes: its SHA need not be repo_ref's
+    head, so an out-of-order or retried delivery would resurrect a removed
+    ci_repo (see D1)
 ```
 
 ## Decisions
@@ -92,8 +97,20 @@ See proposal.md - Why. The constraints that shape this design:
 with `PRIMARY KEY (project_name, match_key)`. `ReplaceSources(name, []Source)`
 deletes and re-inserts inside one transaction. It runs after a successful
 `CreateValidated`/`UpdateValidated` (the pipeline was just parsed there
-anyway), after `loadProjectPipeline` on the definition route, and after the
-primary-source load in the webhook path.
+anyway), after `loadProjectPipeline` on the definition route, and after a
+secondary webhook delivery, which loads the configured ref. A primary delivery
+never rewrites the set: it loads its own immutable SHA, which is normally the
+ref's head but need not be - deliveries can arrive out of order or be retried,
+and deriving from an older commit would resurrect a `ci_repo` that a later
+commit removed, letting a correctly signed replay quietly restore routing. The
+cost is that a `ci_repo` added on the primary repository reaches routing at the
+next load of the configured ref rather than on the push that added it.
+
+`UpsertWithSources` writes the project row and the whole set in one
+transaction, so a rejected set leaves the registration exactly as it was and an
+error response never hides a half-applied create or update. `Upsert` remains
+for callers with no derived set to hand over (seeding, tests) and keeps the
+primary row in step with `repo_url`.
 
 Alternative considered: a `sources` array on the registration payload,
 maintained by the operator. Rejected - it would drift from the HCL the moment
@@ -142,8 +159,10 @@ current when the secondary SHA was pushed. Rejected - there is no such
 relation between two repositories; the configured ref is the only honest
 answer and it is what a manual run uses too.
 
-The changed set for a secondary delivery is `{source.Name}` if
-`HasCodeChanges(files)`, else empty - not `MatchRepos` over all repos. Running
+The changed set for a secondary delivery is the name of the `ci_repo` in the
+just-parsed pipeline whose URL matches the pushed repository (falling back to
+the stored source name) if `HasCodeChanges(files)`, else empty - not
+`MatchRepos` over all repos. Running
 `MatchRepos` would test the secondary repo's file paths against the primary
 repo's subpath prefixes and produce false positives when directory names
 coincide.
@@ -181,13 +200,14 @@ load (D1).
 
 ### D6. Ordering against `webhook-ingress-hardening`
 
-`webhook-ingress-hardening` is implemented first (see `openspec/roadmap.md`).
-It reads the capped body once, probes the minimal `{"project":{"id":N}}`
-fields, and calls a pure `verifyDelivery(method, headers, body,
-projectSecret, globalSecret)` for the one project it resolved. This change
-keeps that function and moves the call: the probe also reads the repository
-URLs, `resolveOne` runs once per matched project, and each call verifies the
-delivery against that project's `webhook_secret` before doing anything else.
+`webhook-ingress-hardening` landed first (see `openspec/roadmap.md`). It reads
+the capped body once, probes the minimal `{"project":{"id":N}}` fields, and
+calls a pure `verifyDelivery(method, headers, body, projectSecret,
+globalSecret)` for the one project it resolved. This change keeps that
+function and widens the step: the probe also reads the repository URLs, the
+matching projects are resolved from it, and the delivery is verified against
+each matched project's `webhook_secret` before the payload is parsed; only the
+projects that verify reach `resolveOne`.
 
 The rules from the hardening change hold per match: a project whose secret
 does not verify is skipped without a history row (unverified deliveries never

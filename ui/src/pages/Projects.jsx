@@ -98,13 +98,17 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   useEffect(() => {
     if (!selectedName) { setConfig(null); setDetail(null); return; }
     setDetailLoading(true);
-    Promise.all([
-      getProject(selectedName).catch(() => null),
-      getProjectDefinition(selectedName).catch(() => null),
-    ]).then(([cfg, def]) => {
-      setConfig(cfg);
-      setDetail(def);
-    }).finally(() => setDetailLoading(false));
+    // The definition route re-derives the project's sources as a side effect,
+    // so it has to finish before the config is read. Running both in parallel
+    // rendered the source list from before the refresh, and nothing re-read it.
+    getProjectDefinition(selectedName)
+      .catch(() => null)
+      .then(async (def) => {
+        const cfg = await getProject(selectedName).catch(() => null);
+        setConfig(cfg);
+        setDetail(def);
+      })
+      .finally(() => setDetailLoading(false));
   }, [selectedName]);
 
   const handleCreate = async (e) => {
@@ -211,6 +215,21 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>Pipeline directory</Typography>
             <Typography variant="body1" sx={{ mb: 2 }}>{config?.pipeline_dir || 'ci'}</Typography>
+
+            {/* Sources are derived from repo_url and the pipeline's remote ci_repo blocks; a push to any of them reaches this project. */}
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>Sources ({config?.sources?.length ?? 0})</Typography>
+            <Stack spacing={0.5} sx={{ mb: 2 }} data-testid="project-sources">
+              {(config?.sources || []).map(src => (
+                <Box key={src.url} data-testid={`project-source-${src.url}`} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2">{src.name}</Typography>
+                  <Typography variant="body2" color="text.secondary">{src.url}</Typography>
+                  {src.primary && <Chip label="Primary" size="small" variant="outlined" color="primary" sx={{ fontSize: 10 }} />}
+                </Box>
+              ))}
+              {(config?.sources || []).length === 0 && (
+                <Typography variant="body2" color="text.secondary">Derived on the next pipeline load.</Typography>
+              )}
+            </Stack>
 
             {detail && (
               <>

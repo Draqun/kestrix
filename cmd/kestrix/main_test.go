@@ -5,25 +5,60 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
-// buildKestrix compiles the kestrix binary into t.TempDir()/kestrix.
+var (
+	kestrixBinOnce     sync.Once
+	kestrixBinDir      string
+	kestrixBinPath     string
+	kestrixBinErr      error
+	kestrixBinReported atomic.Bool
+)
+
+// TestMain removes the binary the tests share once they are all done.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if kestrixBinDir != "" {
+		_ = os.RemoveAll(kestrixBinDir)
+	}
+	os.Exit(code)
+}
+
+// buildKestrix compiles the kestrix binary once per package run and returns
+// the path every test shares. Building it per test cost a linker pass each
+// time - minutes in CI across the twenty-odd tests here, enough to exceed
+// go test's package timeout - and they all drive the same binary.
 func buildKestrix(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "kestrix")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = "."
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go build -o %s: %v\n%s", bin, err, out)
+	kestrixBinOnce.Do(func() {
+		kestrixBinDir, kestrixBinErr = os.MkdirTemp("", "kestrix-cli-bin-")
+		if kestrixBinErr != nil {
+			return
+		}
+		kestrixBinPath = filepath.Join(kestrixBinDir, "kestrix")
+		cmd := exec.Command("go", "build", "-o", kestrixBinPath, ".")
+		cmd.Dir = "."
+		if out, err := cmd.CombinedOutput(); err != nil {
+			kestrixBinErr = fmt.Errorf("go build -o %s: %v\n%s", kestrixBinPath, err, out)
+		}
+	})
+	if kestrixBinErr != nil {
+		// Every test here needs the same binary, so a broken build would
+		// otherwise repeat one message twenty times and bury the first.
+		if kestrixBinReported.Swap(true) {
+			t.Skip("kestrix binary could not be built; see the first failure in this package")
+		}
+		t.Fatalf("build kestrix: %v", kestrixBinErr)
 	}
-	return bin
+	return kestrixBinPath
 }
 
 func runKestrix(t *testing.T, bin string, args ...string) (stdout, stderr string, exitCode int) {

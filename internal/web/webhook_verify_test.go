@@ -167,14 +167,18 @@ func TestVerifyDelivery(t *testing.T) {
 	}
 }
 
-func TestProbeGitLabProjectID(t *testing.T) {
-	if id := probeGitLabProjectID([]byte("not json")); id != 0 {
-		t.Errorf("non-JSON body: id = %d, want 0", id)
+func TestProbeWebhook(t *testing.T) {
+	if p := probeWebhook([]byte("not json")); p.ID != 0 || len(collectRepoURLs(p)) != 0 {
+		t.Errorf("non-JSON body: probe = %+v, want empty", p)
 	}
-	if id := probeGitLabProjectID([]byte(`{"ref":"refs/heads/main"}`)); id != 0 {
-		t.Errorf("body without an id: id = %d, want 0", id)
+	if p := probeWebhook([]byte(`{"ref":"refs/heads/main"}`)); p.ID != 0 {
+		t.Errorf("body without an id: id = %d, want 0", p.ID)
 	}
-	if id := probeGitLabProjectID([]byte(`{"project":{"id":42}}`)); id != 42 {
-		t.Errorf("id = %d, want 42", id)
+	p := probeWebhook([]byte(`{"project":{"id":42,"git_http_url":"https://h/a.git","git_ssh_url":"git@h:a.git"}}`))
+	if p.ID != 42 {
+		t.Errorf("id = %d, want 42", p.ID)
+	}
+	if urls := collectRepoURLs(p); len(urls) != 2 || urls[0] != "https://h/a.git" || urls[1] != "git@h:a.git" {
+		t.Errorf("repo URLs = %v", urls)
 	}
 }

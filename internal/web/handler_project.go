@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -128,12 +130,12 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.projectService.CreateValidated(&req, func(candidate *domain.ProjectConfig) error {
-		_, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-create-validation")
+	if err := s.projectService.CreateValidated(&req, func(candidate *domain.ProjectConfig) (model.Project, error) {
+		proj, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-create-validation")
 		if err == nil {
 			session.Cleanup()
 		}
-		return err
+		return proj, err
 	}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -181,12 +183,12 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !decodeProjectConfig(w, r, &update) {
 		return
 	}
-	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) error {
-		_, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-update-validation")
+	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) (model.Project, error) {
+		proj, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-update-validation")
 		if err == nil {
 			session.Cleanup()
 		}
-		return err
+		return proj, err
 	}); err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -338,8 +340,26 @@ func (s *Server) handleGetProjectDefinition(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer session.Cleanup()
+	s.refreshSources(p, proj)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(proj)
+}
+
+// refreshSources re-derives a project's sources from a pipeline just loaded
+// from its primary repository and stores them when they differ from what is
+// recorded; an unchanged definition costs no write. Failing to record them is
+// logged, not fatal: the caller already has the definition, and the next
+// load retries.
+func (s *Server) refreshSources(p *domain.ProjectConfig, proj model.Project) {
+	derived := service.DeriveSources(p, proj)
+	if slices.Equal(p.Sources, derived) {
+		return
+	}
+	if err := s.projectStore.ReplaceSources(p.Name, derived); err != nil {
+		log.Printf("project %s: record sources: %v", p.Name, err)
+		return
+	}
+	p.Sources = derived
 }
 
 // handleSaveProjectPipeline godoc
