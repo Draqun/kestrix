@@ -49,6 +49,7 @@ All notable changes to Kestrix are documented here.
 
 ### Fixed
 
+- Cancelling a single-task re-run or an approved manual task now terminates the task's process group (SIGTERM, then SIGKILL after `KESTRIX_RUNNER_CANCEL_GRACE`) and records the run as `canceled`: previously only the stored status was rewritten while the process kept running, and a late local verdict could overwrite the cancellation. A run already `canceled` also keeps that status against late writes.
 - The Webhook Logs page no longer falls back to fabricated sample events, and no longer calls a hard-coded `http://localhost:8080`, which broke the Docker deployment profile on port `18080`.
 
 ## [v0.2.0] - 2026-07-31

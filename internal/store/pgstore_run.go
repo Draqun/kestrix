@@ -187,6 +187,7 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 	errMsg := ""
 	canExecute := false
 	failed := false
+	canceled := false
 	for _, result := range latest {
 		switch result.Status {
 		case "manual", "pending", "running":
@@ -196,10 +197,18 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 			if errMsg == "" {
 				errMsg = result.Error
 			}
+		case "canceled":
+			// A task terminated by our own cancellation is not a pipeline
+			// failure; the run is canceled rather than failed, mirroring
+			// runStatus in internal/service.
+			canceled = true
 		}
 	}
 	if canExecute {
 		status = "running"
+	} else if canceled {
+		status = "canceled"
+		errMsg = "canceled"
 	} else if failed {
 		status = "failed"
 	}

@@ -576,9 +576,10 @@ func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 
 // trackActive registers runID in active/done so Cancel terminates the
 // run's executing task, returning a derived context and a cleanup func the
-// caller must defer. Cleanup deletes the maps, cancels the context, then
-// closes done — the same order Start's goroutine defers rely on. When
-// runStore is nil there is nothing Cancel could record into, so no
+// caller must defer. Cleanup removes this call's entry (only if a concurrent
+// call for the same runID has not already replaced it), cancels the
+// context, then closes done — the same order Start's goroutine defers rely
+// on. When runStore is nil there is nothing Cancel could record into, so no
 // registration happens and cleanup is a no-op; this preserves Cancel's
 // invariant that an active entry implies a non-nil runStore.
 func (s *RunService) trackActive(ctx context.Context, runID int) (context.Context, func()) {
@@ -592,9 +593,16 @@ func (s *RunService) trackActive(ctx context.Context, runID int) (context.Contex
 	s.done[runID] = doneCh
 	s.mu.Unlock()
 	return runCtx, func() {
+		// Delete only when this call's entry is still current: a second
+		// concurrent RunTask/ApproveManualTask for the same runID
+		// overwrites these maps, and an unconditional delete here would
+		// remove the still-running call's entry so Cancel misses it.
+		// Channels are comparable, unlike the CancelFunc.
 		s.mu.Lock()
-		delete(s.active, runID)
-		delete(s.done, runID)
+		if cur, ok := s.done[runID]; ok && cur == doneCh {
+			delete(s.active, runID)
+			delete(s.done, runID)
+		}
 		s.mu.Unlock()
 		cancel()
 		close(doneCh)

@@ -996,6 +996,53 @@ func TestRunService_ApproveManualTask_RejectsNilTaskRunner(t *testing.T) {
 	}
 }
 
+func TestRunService_TrackActive_ConcurrentCallsDoNotClobber(t *testing.T) {
+	store := &mocks.MockRunStore{}
+	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+
+	const runID = 76
+	_, cleanupA := svc.trackActive(context.Background(), runID)
+	runCtxB, cleanupB := svc.trackActive(context.Background(), runID)
+
+	// The first call finishing must not remove the second, still-running
+	// call's entry, or Cancel would miss it entirely.
+	cleanupA()
+	if runCtxB.Err() != nil {
+		t.Fatal("first cleanup canceled the second call's context")
+	}
+	svc.mu.Lock()
+	_, hasActive := svc.active[runID]
+	_, hasDone := svc.done[runID]
+	svc.mu.Unlock()
+	if !hasActive || !hasDone {
+		t.Fatal("first cleanup removed the still-running call's entry")
+	}
+
+	cancelErrCh := make(chan error, 1)
+	go func() {
+		cancelErrCh <- svc.Cancel(context.Background(), runID, "user:alice")
+	}()
+	// Cancel blocks on the second call's done channel until it returns.
+	time.Sleep(50 * time.Millisecond)
+	cleanupB()
+
+	select {
+	case err := <-cancelErrCh:
+		if err != nil {
+			t.Fatalf("Cancel: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for Cancel to terminate the second call")
+	}
+	if runCtxB.Err() == nil {
+		t.Fatal("Cancel did not terminate the second call's context")
+	}
+	if len(store.CancelRunCalls) != 1 {
+		t.Fatalf("CancelRunCalls = %+v, want exactly 1", store.CancelRunCalls)
+	}
+	waitActiveAbsent(t, svc, runID)
+}
+
 func TestRunService_Cancel_TerminatesActiveRunTask(t *testing.T) {
 	const runID = 73
 	store := &mocks.MockRunStore{}

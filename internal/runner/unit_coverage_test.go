@@ -737,6 +737,20 @@ func TestRunOneUnitBranches(t *testing.T) {
 	commandContext = old
 }
 
+func TestRunOneReportsCanceledWhenContextCanceled(t *testing.T) {
+	installFakeCommands(t, true)
+	project := runnerProject("run")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := RunOne(ctx, project, "task", Options{WorkDir: t.TempDir(), SourcesPrepared: true})
+	if err == nil {
+		t.Fatal("expected an error when the context is canceled")
+	}
+	if result.Status != "canceled" || result.Error != "canceled" {
+		t.Fatalf("result=%+v, want canceled/canceled like the DAG taskLoop path", result)
+	}
+}
+
 func TestRepoDir_DefaultPath(t *testing.T) {
 	root := t.TempDir()
 	got, err := repoDir(root, model.Repo{Name: "repo", Kind: "subpath"})
