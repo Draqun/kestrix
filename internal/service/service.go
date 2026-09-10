@@ -574,6 +574,33 @@ func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 	return false
 }
 
+// trackActive registers runID in active/done so Cancel terminates the
+// run's executing task, returning a derived context and a cleanup func the
+// caller must defer. Cleanup deletes the maps, cancels the context, then
+// closes done — the same order Start's goroutine defers rely on. When
+// runStore is nil there is nothing Cancel could record into, so no
+// registration happens and cleanup is a no-op; this preserves Cancel's
+// invariant that an active entry implies a non-nil runStore.
+func (s *RunService) trackActive(ctx context.Context, runID int) (context.Context, func()) {
+	if s.runStore == nil {
+		return ctx, func() {}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	doneCh := make(chan struct{})
+	s.mu.Lock()
+	s.active[runID] = cancel
+	s.done[runID] = doneCh
+	s.mu.Unlock()
+	return runCtx, func() {
+		s.mu.Lock()
+		delete(s.active, runID)
+		delete(s.done, runID)
+		s.mu.Unlock()
+		cancel()
+		close(doneCh)
+	}
+}
+
 // RunTask executes a single task and appends the result to an existing run.
 // It registers the run in active/done like Start so Cancel terminates the
 // task's process (via the runner's process-group wiring) instead of only
@@ -585,20 +612,8 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	doneCh := make(chan struct{})
-	s.mu.Lock()
-	s.active[runID] = cancel
-	s.done[runID] = doneCh
-	s.mu.Unlock()
-	defer close(doneCh)
-	defer cancel()
-	defer func() {
-		s.mu.Lock()
-		delete(s.active, runID)
-		delete(s.done, runID)
-		s.mu.Unlock()
-	}()
+	runCtx, untrack := s.trackActive(ctx, runID)
+	defer untrack()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 
@@ -749,20 +764,8 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	doneCh := make(chan struct{})
-	s.mu.Lock()
-	s.active[runID] = cancel
-	s.done[runID] = doneCh
-	s.mu.Unlock()
-	defer close(doneCh)
-	defer cancel()
-	defer func() {
-		s.mu.Lock()
-		delete(s.active, runID)
-		delete(s.done, runID)
-		s.mu.Unlock()
-	}()
+	runCtx, untrack := s.trackActive(ctx, runID)
+	defer untrack()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 

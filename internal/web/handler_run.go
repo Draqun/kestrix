@@ -164,7 +164,12 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			errMsg = tr.Error
 		}
 	}
-	if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
+	// Cancel records its outcome via CancelRun once RunTask's done channel
+	// closes, which happens before this point; do not overwrite a run it
+	// already marked canceled with this handler's local verdict.
+	if run, _ := s.runStore.GetRun(runID); run != nil && run.Status == "canceled" {
+		log.Printf("run: task finished after cancel, keeping canceled status run=%d", runID)
+	} else if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
 		log.Printf("warning: could not finish run record: %v", err)
 	}
 
