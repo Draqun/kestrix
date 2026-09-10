@@ -103,6 +103,123 @@ func TestValidateRepoURL(t *testing.T) {
 	}
 }
 
+// TestParseLegacyIPv4Literal pins repo-url-literal-ip-hardening design.md D1:
+// the inet_aton-style rule (1-4 components, decimal/octal/hex, last component
+// absorbing the remaining bits).
+func TestParseLegacyIPv4Literal(t *testing.T) {
+	cases := []struct {
+		host string
+		want string
+		ok   bool
+	}{
+		{"2130706433", "127.0.0.1", true},
+		{"0x7f000001", "127.0.0.1", true},
+		{"0177.0.0.1", "127.0.0.1", true},
+		{"127.1", "127.0.0.1", true},
+		{"10.0.0.5", "10.0.0.5", true},
+		{"2852039166", "169.254.169.254", true},
+		{"0xA9FEA9FE", "169.254.169.254", true},
+		{"0251.0376.0251.0376", "169.254.169.254", true},
+		{"169.254.43518", "169.254.169.254", true},
+		{"169.16689662", "169.254.169.254", true},
+		{"0", "0.0.0.0", true},
+		{"0x0", "0.0.0.0", true},
+		{"git.example.test", "", false},
+		{"0x1.example.test", "", false},
+		{"08", "", false},
+		{"1..2.3", "", false},
+		{".1.2.3", "", false},
+		{"1.2.3.", "", false},
+		{"0xZZ", "", false},
+		{"256.1", "", false},
+		{"256.1.1", "", false},
+		{"256.1.1.1", "", false},
+		{"127.0.0.1.5", "", false},
+		{"99999999999", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.host, func(t *testing.T) {
+			got, ok := parseLegacyIPv4Literal(tc.host)
+			if ok != tc.ok {
+				t.Fatalf("parseLegacyIPv4Literal(%q) ok = %v, want %v", tc.host, ok, tc.ok)
+			}
+			if !tc.ok {
+				return
+			}
+			if got.String() != tc.want {
+				t.Fatalf("parseLegacyIPv4Literal(%q) = %q, want %q", tc.host, got.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestIsDisallowedRepoHostLegacyEncodings pins repo-url-literal-ip-hardening
+// design.md D1: every alternate encoding of a disallowed literal is rejected,
+// while a private address and ordinary hostnames stay allowed.
+func TestIsDisallowedRepoHostLegacyEncodings(t *testing.T) {
+	disallowed := []string{
+		"127.0.0.1",
+		"2130706433",
+		"0x7f000001",
+		"0177.0.0.1",
+		"127.1",
+		"169.254.169.254",
+		"2852039166",
+		"0xA9FEA9FE",
+		"0251.0376.0251.0376",
+		"169.254.43518",
+		"169.16689662",
+		"0",
+		"0x0",
+	}
+	for _, host := range disallowed {
+		t.Run("disallowed/"+host, func(t *testing.T) {
+			if !isDisallowedRepoHost(host) {
+				t.Fatalf("isDisallowedRepoHost(%q) = false, want true", host)
+			}
+		})
+	}
+
+	allowed := []string{
+		"10.0.0.5",
+		"git.example.test",
+		"0x1.example.test",
+		"8.8.8.8",
+	}
+	for _, host := range allowed {
+		t.Run("allowed/"+host, func(t *testing.T) {
+			if isDisallowedRepoHost(host) {
+				t.Fatalf("isDisallowedRepoHost(%q) = true, want false", host)
+			}
+		})
+	}
+}
+
+// TestValidateRepoURLRejectsLegacyIPEncodings pins the end-to-end requirement:
+// a legacy-encoded loopback literal fails exactly like its canonical form.
+func TestValidateRepoURLRejectsLegacyIPEncodings(t *testing.T) {
+	canonical := &domain.ProjectConfig{Name: "x", RepoURL: "https://127.0.0.1/x.git", RepoRef: "main"}
+	canonicalErr := validateProject(canonical)
+	if !errors.Is(canonicalErr, ErrValidation) {
+		t.Fatalf("validateProject(canonical) = %v, want ErrValidation", canonicalErr)
+	}
+	for _, raw := range []string{
+		"https://2130706433/x.git",
+		"https://0x7f000001/x.git",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			err := validateProject(&domain.ProjectConfig{Name: "x", RepoURL: raw, RepoRef: "main"})
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("validateProject(%q) = %v, want ErrValidation", raw, err)
+			}
+			if err.Error() != canonicalErr.Error() {
+				t.Fatalf("validateProject(%q) = %q, want same text as canonical %q", raw, err.Error(), canonicalErr.Error())
+			}
+		})
+	}
+}
+
 func TestProjectService_Create_Happy(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)

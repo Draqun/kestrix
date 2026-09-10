@@ -20,9 +20,11 @@ MAY include a provider-neutral `repo_url`, `repo_ref`, and
 (including plaintext `http://`, `file://`, `git://`, and transport helpers such
 as `ext::`) SHALL be rejected. The host SHALL be rejected when it is a literal
 loopback address (`127.0.0.0/8`, `::1`, the name `localhost`), a literal
-link-local address (`169.254.0.0/16`, `fe80::/10`), or the unspecified address.
-These checks SHALL run before any network access and SHALL apply to both
-project creation and project update. A rejected `repo_url` SHALL fail with a
+link-local address (`169.254.0.0/16`, `fe80::/10`), or the unspecified address —
+including any of those addresses written in a non-canonical literal form
+(decimal, hexadecimal, octal, or short-form IPv4, e.g. `2130706433` or
+`0x7f000001` for `127.0.0.1`). These checks SHALL run before any network
+access and SHALL apply to both project creation and project update. A rejected `repo_url` SHALL fail with a
 validation error that names the rule, not the address class table.
 
 #### Scenario: Project config includes required fields
@@ -73,6 +75,11 @@ validation error that names the rule, not the address class table.
 
 - **WHEN** a project is created or updated with a `repo_url` whose host is `localhost`, `127.0.0.1`, `[::1]`, `169.254.169.254`, or `[fe80::1]`
 - **THEN** validation SHALL fail with `400` before any network access
+
+#### Scenario: Rejected alternate-encoding loopback or link-local host
+
+- **WHEN** a project is created or updated with a `repo_url` whose host is a decimal, hexadecimal, octal, or short-form literal for `127.0.0.1` or `169.254.169.254` (for example `2130706433`, `0x7f000001`, `0177.0.0.1`, or `127.1`)
+- **THEN** validation SHALL fail with `400` before any network access, identically to the canonical dotted-quad form
 
 #### Scenario: Private network host is allowed
 
