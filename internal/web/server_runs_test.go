@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -522,6 +523,131 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	}
 	if tr.ApprovedAt == nil {
 		t.Error("ApprovedAt = nil, want set")
+	}
+}
+
+// blockingRunTaskRunner holds RunTask until releaseCh closes or ctx is
+// cancelled, signalling startedCh on entry so a test can Cancel mid-task.
+type blockingRunTaskRunner struct {
+	startedCh   chan struct{}
+	releaseCh   chan struct{}
+	startedOnce sync.Once
+}
+
+func (r *blockingRunTaskRunner) Run(_ context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	return nil, nil
+}
+
+func (r *blockingRunTaskRunner) RunTask(ctx context.Context, _ domain.Project, taskName string, _ domain.RunnerOptions) (domain.TaskResult, error) {
+	r.startedOnce.Do(func() { close(r.startedCh) })
+	select {
+	case <-r.releaseCh:
+	case <-ctx.Done():
+	}
+	return domain.TaskResult{Name: taskName, Status: "failed", Error: "signal: terminated"}, nil
+}
+
+// TestHandleRunTask_SkipsFinishRunWhenCanceled pins the Cancel-vs-FinishRun
+// ordering: when Cancel records the run canceled while the task is
+// executing, the handler must not overwrite it with its local verdict.
+func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo hello-from-task"
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mocks.MockRunStore{
+		CreateRunID:  1,
+		GetRunResult: &domain.Run{ID: 1, ProjectName: "demo", Status: "canceled"},
+	}
+	runner := &blockingRunTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	cfg := &domain.ProjectConfig{
+		Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main",
+		PipelineDir: "ci", PipelineFile: "pipeline.tf",
+	}
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
+		projectStore:   &mocks.MockProjectStore{GetResult: cfg},
+		runStore:       mock,
+		pipelineRunner: runner,
+		taskRunner:     runner,
+		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
+		runService:     service.NewRunService(mock, runner, runner),
+		sourceSessions: &testSourceSessions{},
+	}
+
+	handlerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
+		r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
+		r = runCtx(r, "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		handlerDone <- w
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task to start")
+	}
+
+	cancelErrCh := make(chan error, 1)
+	go func() {
+		cancelErrCh <- srv.runService.Cancel(context.Background(), 1, "user:dave")
+	}()
+	time.Sleep(50 * time.Millisecond) // let Cancel reach its wait on done
+	close(runner.releaseCh)
+
+	select {
+	case err := <-cancelErrCh:
+		if err != nil {
+			t.Fatalf("Cancel: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for Cancel to return")
+	}
+	select {
+	case w := <-handlerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("handler status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// The stored run is canceled, so the response must agree with it
+		// instead of reporting the locally computed kill failure.
+		if resp["status"] != "canceled" {
+			t.Errorf("response status = %v, want canceled", resp["status"])
+		}
+		if resp["error"] != "canceled" {
+			t.Errorf("response error = %v, want canceled", resp["error"])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for handler to return")
+	}
+
+	if len(mock.CancelRunCalls) != 1 {
+		t.Fatalf("CancelRunCalls = %+v, want exactly 1", mock.CancelRunCalls)
+	}
+	if len(mock.FinishRunCalls) != 0 {
+		t.Fatalf("FinishRunCalls = %+v, want none (run already canceled)", mock.FinishRunCalls)
 	}
 }
 

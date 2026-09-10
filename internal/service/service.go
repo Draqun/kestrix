@@ -574,15 +574,59 @@ func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 	return false
 }
 
+// trackActive registers runID in active/done so Cancel terminates the
+// run's executing task, returning a derived context and a cleanup func the
+// caller must defer. Cleanup removes this call's entry (only if a concurrent
+// call for the same runID has not already replaced it), cancels the
+// context, then closes done — the same order Start's goroutine defers rely
+// on. When runStore is nil there is nothing Cancel could record into, so no
+// registration happens and cleanup is a no-op; this preserves Cancel's
+// invariant that an active entry implies a non-nil runStore.
+func (s *RunService) trackActive(ctx context.Context, runID int) (context.Context, func()) {
+	if s.runStore == nil {
+		return ctx, func() {}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	doneCh := make(chan struct{})
+	s.mu.Lock()
+	s.active[runID] = cancel
+	s.done[runID] = doneCh
+	s.mu.Unlock()
+	return runCtx, func() {
+		// Delete only when this call's entry is still current: a second
+		// concurrent RunTask/ApproveManualTask for the same runID
+		// overwrites these maps, and an unconditional delete here would
+		// remove the still-running call's entry so Cancel misses it.
+		// Channels are comparable, unlike the CancelFunc.
+		s.mu.Lock()
+		if cur, ok := s.done[runID]; ok && cur == doneCh {
+			delete(s.active, runID)
+			delete(s.done, runID)
+		}
+		s.mu.Unlock()
+		cancel()
+		close(doneCh)
+	}
+}
+
 // RunTask executes a single task and appends the result to an existing run.
+// It registers the run in active/done like Start so Cancel terminates the
+// task's process (via the runner's process-group wiring) instead of only
+// rewriting the run's status in the store; see design.md D1/D2.
 func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
-	_ = projectName
 	if proj == nil {
 		return domain.TaskResult{}, fmt.Errorf("project not loaded")
 	}
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
+	runCtx, untrack := s.trackActive(ctx, runID)
+	defer untrack()
+	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+}
+
+func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	_ = projectName
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
 	}
@@ -722,7 +766,15 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	}
 
 	log.Printf("run: approved actor=%q project=%q run=%d task=%q", opts.Actor, projectName, runID, taskName)
-	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
+	if proj == nil {
+		return domain.TaskResult{}, fmt.Errorf("project not loaded")
+	}
+	if s.taskRunner == nil {
+		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
+	}
+	runCtx, untrack := s.trackActive(ctx, runID)
+	defer untrack()
+	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 
 // WebhookService handles webhook event processing.

@@ -616,7 +616,8 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 	if opts.Variables != nil {
 		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
 	}
-	env := config.Current().TaskEnv(ci, vars)
+	envSettings := config.Current()
+	env := envSettings.TaskEnv(ci, vars)
 
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
@@ -625,9 +626,11 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 	cmd.Env = env
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
+	stopCancelTimer := setCancelViaProcessGroup(cmd, envSettings.RunnerCancelGrace)
 
 	start := time.Now()
 	runErr := cmd.Run()
+	stopCancelTimer()
 	dur := time.Since(start)
 
 	tr := TaskResult{
@@ -635,7 +638,14 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		Output:   taskOut.String(),
 		Duration: dur,
 	}
-	if runErr != nil {
+	if runErr != nil && ctx.Err() != nil {
+		// The run was canceled while this task was executing: its
+		// termination is expected, not a pipeline failure. Mirrors the
+		// taskLoop reclassification for DAG tasks.
+		tr.Status = "canceled"
+		tr.Error = "canceled"
+		fmt.Fprintf(opts.Stdout, "[DONE] %s (canceled)\n", task.Name)
+	} else if runErr != nil {
 		tr.Status = "failed"
 		tr.Error = runErr.Error()
 		fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)

@@ -745,6 +745,51 @@ func TestPG_ApplyTaskResult_Failed(t *testing.T) {
 	}
 }
 
+func TestPG_ApplyTaskResult_Canceled(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "ac", "/ac")
+	id := mustCreateRun(t, pg, "ac", nil)
+
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(running): %v", err)
+	}
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "canceled", Error: "canceled"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(canceled): %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+	if run.FinishedAt == nil {
+		t.Error("FinishedAt not set for canceled run")
+	}
+}
+
+func TestPG_ApplyTaskResult_CanceledOutranksFailed(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "acf", "/acf")
+	id := mustCreateRun(t, pg, "acf", nil)
+
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(failed): %v", err)
+	}
+	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "test", Status: "canceled", Error: "canceled"}, ""); err != nil {
+		t.Fatalf("ApplyTaskResult(canceled): %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+}
+
 func TestPG_ApplyTaskResult_FailureRemainsNonTerminalWhileManualWorkExists(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "afm", "/afm")
@@ -901,6 +946,44 @@ func TestPG_CancelRun_Running(t *testing.T) {
 	}
 	if run.CanceledBy != "user:bob" {
 		t.Errorf("CanceledBy = %q, want user:bob", run.CanceledBy)
+	}
+}
+
+func TestPG_FinishRun_DoesNotOverwriteCanceled(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fc", "/")
+	id := mustCreateRun(t, pg, "fc", nil)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "test", Status: "running"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.CancelRun(id, "user:bob"); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+
+	// A late non-canceled write (a handler racing Cancel, or a panic
+	// recovery landing after it) must not overwrite the cancellation.
+	if err := pg.FinishRun(id, "failed", "signal: terminated", "exit 143", []domain.TaskResult{{Name: "test", Status: "failed"}}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+	if run.CanceledBy != "user:bob" {
+		t.Errorf("CanceledBy = %q, want user:bob", run.CanceledBy)
+	}
+
+	// Recording a cancellation over a cancellation stays allowed.
+	if err := pg.FinishRun(id, "canceled", "", "canceled", []domain.TaskResult{{Name: "test", Status: "canceled"}}); err != nil {
+		t.Fatalf("FinishRun canceled: %v", err)
+	}
+	if run, err := pg.GetRun(id); err != nil {
+		t.Fatalf("GetRun: %v", err)
+	} else if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
 	}
 }
 

@@ -480,6 +480,21 @@ func TestLocalAndGitLabExecutorsWireProcessGroupCancel(t *testing.T) {
 	if captured.WaitDelay <= 0 {
 		t.Error("GitLabRunnerExecutor: WaitDelay not set")
 	}
+
+	captured = nil
+	project := runnerProject("true")
+	if _, err := RunOne(context.Background(), project, "task", Options{WorkDir: root, SourcesPrepared: true, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("RunOne: %v", err)
+	}
+	if captured.SysProcAttr == nil || !captured.SysProcAttr.Setpgid {
+		t.Error("RunOne: SysProcAttr.Setpgid not set")
+	}
+	if captured.Cancel == nil {
+		t.Error("RunOne: Cancel not set")
+	}
+	if captured.WaitDelay <= 0 {
+		t.Error("RunOne: WaitDelay not set")
+	}
 }
 
 func TestDockerExecutorCancelStopsContainerByName(t *testing.T) {
@@ -720,6 +735,20 @@ func TestRunOneUnitBranches(t *testing.T) {
 		t.Fatalf("failed result=%+v err=%v", result, err)
 	}
 	commandContext = old
+}
+
+func TestRunOneReportsCanceledWhenContextCanceled(t *testing.T) {
+	installFakeCommands(t, true)
+	project := runnerProject("run")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := RunOne(ctx, project, "task", Options{WorkDir: t.TempDir(), SourcesPrepared: true})
+	if err == nil {
+		t.Fatal("expected an error when the context is canceled")
+	}
+	if result.Status != "canceled" || result.Error != "canceled" {
+		t.Fatalf("result=%+v, want canceled/canceled like the DAG taskLoop path", result)
+	}
 }
 
 func TestRepoDir_DefaultPath(t *testing.T) {
