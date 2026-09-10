@@ -1001,8 +1001,8 @@ func TestRunService_TrackActive_ConcurrentCallsDoNotClobber(t *testing.T) {
 	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 
 	const runID = 76
-	_, cleanupA := svc.trackActive(context.Background(), runID)
-	runCtxB, cleanupB := svc.trackActive(context.Background(), runID)
+	_, cleanupA := svc.trackActive(context.Background(), runID, "proj")
+	runCtxB, cleanupB := svc.trackActive(context.Background(), runID, "proj")
 
 	// The first call finishing must not remove the second, still-running
 	// call's entry, or Cancel would miss it entirely.
@@ -1280,5 +1280,186 @@ func TestWebhookService_Record_NilReceiverAndSink(t *testing.T) {
 	svc.Record(domain.WebhookEvent{Repo: "org/service-a", Status: domain.WebhookStatusTriggered})
 	if len(sink.Entries) != 1 {
 		t.Fatalf("expected 1 recorded event, got %d", len(sink.Entries))
+	}
+}
+
+// seqRunStore returns incrementing run IDs so two concurrent Starts occupy
+// distinct active entries. Only CreateRun/FinishRun/AppendTaskResult matter
+// for Start's lifecycle; the rest are no-ops satisfying domain.RunStore.
+type seqRunStore struct {
+	mu     sync.Mutex
+	next   int
+	finish int
+}
+
+func (s *seqRunStore) CreateRun(string, []string, bool, *model.Project, string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	return 100 + s.next, nil
+}
+
+func (s *seqRunStore) FinishRun(int, string, string, string, []domain.TaskResult) error {
+	s.mu.Lock()
+	s.finish++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *seqRunStore) AppendTaskResult(int, domain.TaskResult) error { return nil }
+func (s *seqRunStore) FlushRunOutput(int, string) error              { return nil }
+func (s *seqRunStore) CancelRun(int, string) error                   { return nil }
+func (s *seqRunStore) ApplyTaskResult(int, domain.TaskResult, string) error {
+	return nil
+}
+func (s *seqRunStore) GetRun(int) (*domain.Run, error)                 { return nil, nil }
+func (s *seqRunStore) CountRuns(string) (int, error)                   { return 0, nil }
+func (s *seqRunStore) ListRuns(string, int, int) ([]domain.Run, error) { return nil, nil }
+func (s *seqRunStore) ListAllRuns(int) ([]domain.Run, error)           { return nil, nil }
+func (s *seqRunStore) CountRunsByStatus() (map[string]int, error)      { return nil, nil }
+
+// twoSlotBlockRunner blocks each Run call on its own release channel so a
+// test can complete one run while the other stays active. started is
+// buffered for the two expected calls.
+type twoSlotBlockRunner struct {
+	mu       sync.Mutex
+	calls    int
+	started  chan struct{}
+	release1 chan struct{}
+	release2 chan struct{}
+}
+
+func (r *twoSlotBlockRunner) Run(ctx context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	r.mu.Lock()
+	idx := r.calls
+	r.calls++
+	r.mu.Unlock()
+	r.started <- struct{}{}
+	if idx == 0 {
+		select {
+		case <-r.release1:
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case <-r.release2:
+		case <-ctx.Done():
+		}
+	}
+	return []domain.TaskResult{{Name: "t", Status: "passed"}}, nil
+}
+
+func (r *twoSlotBlockRunner) RunTask(context.Context, domain.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+func TestRunService_ActiveRunIDsForProject_TracksConcurrentRuns(t *testing.T) {
+	store := &seqRunStore{}
+	runner := &twoSlotBlockRunner{
+		started:  make(chan struct{}, 2),
+		release1: make(chan struct{}),
+		release2: make(chan struct{}),
+	}
+	svc := NewRunService(store, runner, runner)
+	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
+
+	id1, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start 1: %v", err)
+	}
+	id2, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start 2: %v", err)
+	}
+	if id1 == id2 {
+		t.Fatalf("expected distinct run IDs, got %d twice", id1)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-runner.started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for both runs to start")
+		}
+	}
+
+	got := svc.ActiveRunIDsForProject("proj")
+	if len(got) != 2 {
+		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want 2 entries", got)
+	}
+	if got[0] != min(id1, id2) || got[1] != max(id1, id2) {
+		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want %d and %d in ascending order", got, id1, id2)
+	}
+	if forOther := svc.ActiveRunIDsForProject("other"); len(forOther) != 0 {
+		t.Fatalf("ActiveRunIDsForProject(other) = %v, want empty", forOther)
+	}
+
+	close(runner.release1)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got = svc.ActiveRunIDsForProject("proj")
+		if len(got) == 1 && (got[0] == id1 || got[0] == id2) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after completing one run, ActiveRunIDsForProject(proj) = %v, want exactly one of [%d %d]", got, id1, id2)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	close(runner.release2)
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if len(svc.ActiveRunIDsForProject("proj")) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after completing both runs, ActiveRunIDsForProject(proj) = %v, want empty", svc.ActiveRunIDsForProject("proj"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun covers the
+// second registration site: RunTask records the run through trackActive,
+// not through Start, and the project it records is what lets the delete
+// guard refuse a project whose single-task run is still executing.
+func TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun(t *testing.T) {
+	runner := &blockingTaskRunner{
+		startedCh: make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+	svc := NewRunService(&mocks.MockRunStore{}, runner, runner)
+
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		svc.RunTask(context.Background(), 7, "proj", &model.Project{
+			Name:  "proj",
+			Tasks: []model.Task{{Name: "manual"}},
+		}, "manual", domain.RunnerOptions{})
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the task to start")
+	}
+
+	if got := svc.ActiveRunIDsForProject("proj"); len(got) != 1 || got[0] != 7 {
+		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want [7]", got)
+	}
+	if got := svc.ActiveRunIDsForProject("other"); len(got) != 0 {
+		t.Fatalf("ActiveRunIDsForProject(other) = %v, want empty", got)
+	}
+
+	close(runner.releaseCh)
+	select {
+	case <-doneCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return")
+	}
+	if got := svc.ActiveRunIDsForProject("proj"); len(got) != 0 {
+		t.Fatalf("after the task returned, ActiveRunIDsForProject(proj) = %v, want empty", got)
 	}
 }

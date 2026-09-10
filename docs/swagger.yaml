@@ -570,6 +570,11 @@ paths:
           schema:
             additionalProperties: true
             type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties: true
+            type: object
       summary: Delete a project config
       tags:
       - projects

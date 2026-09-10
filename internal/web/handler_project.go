@@ -211,9 +211,21 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param name path string true "Project name"
 // @Success 200 {object} map[string]interface{}
+// @Failure 409 {object} map[string]interface{}
 // @Router /api/projects/{name} [delete]
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if s.runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	// ActiveRunIDsForProject reads the projects recorded in the
+	// in-memory active set, so the guard needs no store lookup and cannot
+	// fail open into a delete.
+	if blocking := s.runService.ActiveRunIDsForProject(name); len(blocking) > 0 {
+		writeError(w, http.StatusConflict, fmt.Sprintf("project %q has active run(s) %v; cancel the run(s) first", name, blocking))
+		return
+	}
 	if err := s.projectService.Delete(name); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

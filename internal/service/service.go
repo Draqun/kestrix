@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -420,6 +421,15 @@ func (s *ProjectService) FindByGitLabID(id int) (*domain.ProjectConfig, error) {
 	return s.store.FindByGitLabID(id)
 }
 
+// activeRun tracks one in-flight run: its cancellation func and the project
+// it belongs to, so callers can ask which projects have runs in flight
+// without loading run rows from the store (see project-delete-run-guard
+// design.md D1).
+type activeRun struct {
+	cancel  context.CancelFunc
+	project string
+}
+
 // RunService handles run lifecycle with background execution.
 type RunService struct {
 	runStore   domain.RunStore
@@ -432,7 +442,7 @@ type RunService struct {
 	CancelGrace time.Duration
 
 	mu     sync.Mutex
-	active map[int]context.CancelFunc
+	active map[int]activeRun
 	done   map[int]chan struct{}
 }
 
@@ -442,9 +452,26 @@ func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, tas
 		runStore:   runStore,
 		pipeline:   pipeline,
 		taskRunner: taskRunner,
-		active:     make(map[int]context.CancelFunc),
+		active:     make(map[int]activeRun),
 		done:       make(map[int]chan struct{}),
 	}
+}
+
+// ActiveRunIDsForProject returns the sorted IDs of runs currently tracked
+// in active that belong to projectName. Project deletion must be refused
+// (409) while the result is non-empty rather than cascading those runs'
+// rows from under them.
+func (s *RunService) ActiveRunIDsForProject(projectName string) []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []int
+	for id, entry := range s.active {
+		if entry.project == projectName {
+			ids = append(ids, id)
+		}
+	}
+	sort.Ints(ids)
+	return ids
 }
 
 // Start creates a run and executes the pipeline in the background.
@@ -464,7 +491,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	runCtx, cancel := context.WithCancel(ctx)
 	doneCh := make(chan struct{})
 	s.mu.Lock()
-	s.active[runID] = cancel
+	s.active[runID] = activeRun{cancel: cancel, project: projectName}
 	s.done[runID] = doneCh
 	s.mu.Unlock()
 
@@ -493,11 +520,11 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 // directly, with no termination attempted.
 func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error {
 	s.mu.Lock()
-	cancel, hasCancel := s.active[runID]
+	entry, hasEntry := s.active[runID]
 	doneCh, hasDone := s.done[runID]
 	s.mu.Unlock()
 
-	if !hasCancel || !hasDone {
+	if !hasEntry || !hasDone {
 		if s.runStore == nil {
 			return fmt.Errorf("runs not supported")
 		}
@@ -508,7 +535,7 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 		return nil
 	}
 
-	cancel()
+	entry.cancel()
 	grace := s.CancelGrace
 	if grace <= 0 {
 		grace = defaultCancelGrace
@@ -691,20 +718,22 @@ func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 
 // trackActive registers runID in active/done so Cancel terminates the
 // run's executing task, returning a derived context and a cleanup func the
-// caller must defer. Cleanup removes this call's entry (only if a concurrent
+// caller must defer. The entry records projectName alongside the cancel func
+// so ActiveRunIDsForProject can scope by project without a store round trip.
+// Cleanup removes this call's entry (only if a concurrent
 // call for the same runID has not already replaced it), cancels the
 // context, then closes done — the same order Start's goroutine defers rely
 // on. When runStore is nil there is nothing Cancel could record into, so no
 // registration happens and cleanup is a no-op; this preserves Cancel's
 // invariant that an active entry implies a non-nil runStore.
-func (s *RunService) trackActive(ctx context.Context, runID int) (context.Context, func()) {
+func (s *RunService) trackActive(ctx context.Context, runID int, projectName string) (context.Context, func()) {
 	if s.runStore == nil {
 		return ctx, func() {}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	doneCh := make(chan struct{})
 	s.mu.Lock()
-	s.active[runID] = cancel
+	s.active[runID] = activeRun{cancel: cancel, project: projectName}
 	s.done[runID] = doneCh
 	s.mu.Unlock()
 	return runCtx, func() {
@@ -735,7 +764,7 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
-	runCtx, untrack := s.trackActive(ctx, runID)
+	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	defer untrack()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
@@ -887,7 +916,7 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
-	runCtx, untrack := s.trackActive(ctx, runID)
+	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	defer untrack()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
