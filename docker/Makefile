@@ -3,7 +3,10 @@
 # Run from this directory: cd docker && make up
 # ─────────────────────────────────────────────────────────────
 
-COMPOSE := docker compose
+COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo docker-compose)
+
+# Deps-only targets do not start kestrix, so its required key paths get a placeholder.
+DEPS_ENV := KESTRIX_MASTER_KEY_PATH=$${KESTRIX_MASTER_KEY_PATH:-/dev/null} KESTRIX_JWT_SIGNING_KEY_PATH=$${KESTRIX_JWT_SIGNING_KEY_PATH:-/dev/null}
 
 .PHONY: help up up-d deps-up deps-up-d down restart logs rebuild clean ps shell
 
@@ -32,11 +35,11 @@ up-d:
 
 ## deps-up: Start development dependencies only (foreground)
 deps-up:
-	$(COMPOSE) up postgres
+	$(DEPS_ENV) $(COMPOSE) up postgres
 
 ## deps-up-d: Start development dependencies only (background)
 deps-up-d:
-	$(COMPOSE) up -d postgres
+	$(DEPS_ENV) $(COMPOSE) up -d postgres
 
 ## down: Stop and remove all services
 down:

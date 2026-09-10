@@ -8,7 +8,7 @@ Define encrypted, provider-neutral credentials for remote Git source acquisition
 
 ### Requirement: Encrypted provider-neutral credential storage
 
-Kestrix SHALL store Git credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key.
+Kestrix SHALL store Git credentials and run-time `secret` credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key. The credential type SHALL be bound to the ciphertext so that a stored record cannot be reinterpreted as a different type.
 
 #### Scenario: Store a GitHub or GitLab token
 
@@ -21,6 +21,12 @@ Kestrix SHALL store Git credentials in PostgreSQL as authenticated encrypted dat
 - **WHEN** an operator creates a Bitbucket app-password credential
 - **THEN** Kestrix SHALL store it using the provider-neutral username/password representation
 - **AND** the database row SHALL contain ciphertext rather than either secret value
+
+#### Scenario: Store a run-time secret
+
+- **WHEN** an administrator creates a credential of type `secret`
+- **THEN** Kestrix SHALL encrypt its value under the same master key and store it in the same table
+- **AND** metadata responses SHALL report type `secret` and omit the value
 
 ### Requirement: Credential lifecycle API
 
@@ -40,7 +46,7 @@ The system SHALL provide create, rotate, inspect-metadata, and revoke operations
 
 ### Requirement: Secure runtime resolution
 
-The source-acquisition port SHALL resolve credentials by reference at runtime and SHALL expose plaintext values only to the Git child process. Temporary credential files SHALL use restrictive permissions and SHALL be removed after success, failure, cancellation, or timeout.
+The source-acquisition port SHALL resolve Git credentials by reference at runtime and SHALL expose plaintext values only to the Git child process. Temporary credential files SHALL use restrictive permissions and SHALL be removed after success, failure, cancellation, or timeout. Git credential types (`token`, `basic`, `ssh`) SHALL NOT be injected into task processes or deployment environments; only a credential of type `secret`, referenced from a pipeline variable, reaches a task, and only as specified by the `runtime-secrets` capability. The source-acquisition port SHALL refuse a credential of type `secret`.
 
 #### Scenario: HTTPS token acquisition
 
@@ -54,11 +60,27 @@ The source-acquisition port SHALL resolve credentials by reference at runtime an
 - **THEN** Kestrix SHALL remove temporary key and known-hosts material
 - **AND** Git diagnostics SHALL be redacted before being returned or logged
 
+#### Scenario: Git credential never reaches a task
+
+- **WHEN** a task runs in a project whose sources were acquired with a Git credential
+- **THEN** the task process environment SHALL NOT contain that credential's token, password, or private key
+
+#### Scenario: Secret credential refused for Git
+
+- **WHEN** source acquisition resolves a `credential_ref` whose credential type is `secret`
+- **THEN** acquisition SHALL fail before any Git process starts
+- **AND** the error SHALL name the type mismatch and SHALL NOT contain the value
+
 ### Requirement: Support standard Git credential forms
 
-The credential model SHALL support HTTPS token, HTTPS username/password or app password, SSH private key, and optional SSH known-hosts data without requiring provider-specific API clients.
+The credential model SHALL support HTTPS token, HTTPS username/password or app password, SSH private key, and optional SSH known-hosts data without requiring provider-specific API clients. The model SHALL additionally support a `secret` form holding one opaque value for run-time use; `provider` and `host` metadata are optional for it and SHALL remain descriptive only.
 
 #### Scenario: Generic Git host
 
 - **WHEN** a source points to a self-hosted or arbitrary Git server
 - **THEN** Kestrix SHALL use the same credential resolver and standard Git transport as for GitHub, GitLab, and Bitbucket
+
+#### Scenario: Secret form has one value field
+
+- **WHEN** a `secret` credential is created with `username`, `password`, `token`, or `private_key` fields
+- **THEN** Kestrix SHALL reject the request as an invalid `secret` credential

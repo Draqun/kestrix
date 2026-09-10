@@ -50,11 +50,14 @@ func boundPipelineDir(root, requested string) (string, error) {
 // absolute path plus symlink resolution, both of which fail for a path that
 // does not exist.
 var resolvePipelinePath = func(path string) (string, error) {
+	// Single exit so every statement is reachable on every platform: Darwin's
+	// getcwd still answers after the working directory is removed, so the
+	// Abs-failure branch cannot be driven from a test there.
 	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
+	if err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
 	}
-	return filepath.EvalSymlinks(abs)
+	return abs, err
 }
 
 // handleGetPipeline godoc

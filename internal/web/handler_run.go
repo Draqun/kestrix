@@ -237,8 +237,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
 		return
 	}
+	// The role check ran against the project named in the URL, so the run
+	// must belong to that project or a grant on project A could read B's runs.
 	run, err := s.runStore.GetRun(runID)
-	if err != nil || run == nil {
+	if err != nil || run == nil || run.ProjectName != chi.URLParam(r, "name") {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
@@ -335,6 +337,13 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.runService == nil {
 		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	// The role check ran against the project named in the URL, so the run
+	// must belong to that project or a grant on project A could cancel B's runs.
+	run, err := s.runStore.GetRun(runID)
+	if err != nil || run == nil || run.ProjectName != chi.URLParam(r, "name") {
+		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
 	if err := s.runService.Cancel(r.Context(), runID, actorFrom(r)); err != nil {

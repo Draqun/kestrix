@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change centralize-runtime-environment. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Canonical Kestrix environment names
 
 Kestrix-owned runtime environment variables SHALL use the `KESTRIX_` prefix. The `.env.template`, CLI help, Docker examples, scripts, and documentation SHALL advertise canonical `KESTRIX_*` names. Generic variables such as `DATABASE_URL` and `DOCKER_*` and provider-owned variables SHALL retain their established names unless explicitly classified as Kestrix-owned.
@@ -54,6 +56,8 @@ For each migrated setting, explicit CLI flags SHALL override config-file values,
 
 The configuration boundary SHALL provide typed fields for known application settings and a controlled Kestrix-prefixed environment map for child processes or dispatch. Application code SHALL read known settings from those typed fields rather than passing environment variable names as string keys. Code that forwards variables SHALL use the canonical map rather than scanning legacy names directly.
 
+Task processes started by a runner are not child processes in this sense: they SHALL NOT receive the Kestrix process environment or the canonical Kestrix-prefixed map. They SHALL receive only the allowlist defined by the `task-execution-isolation` capability, built through one function at the configuration boundary so that no executor assembles a task environment on its own.
+
 #### Scenario: Dispatch context uses canonical names
 
 - **WHEN** Kestrix forwards triggered-task or changed-repository variables to a child pipeline
@@ -71,6 +75,12 @@ The configuration boundary SHALL provide typed fields for known application sett
 - **THEN** it SHALL read the corresponding typed field from the environment/configuration object
 - **AND** the environment variable name SHALL appear only in the loader's alias mapping
 
+#### Scenario: Task process does not inherit the process environment
+
+- **WHEN** any runner executor starts a task process or container
+- **THEN** the environment it passes SHALL come from the task-environment function of the configuration boundary
+- **AND** SHALL NOT be the full process environment or the Kestrix-prefixed map
+
 ### Requirement: Secrets remain private
 
 The singleton, diagnostics, and API layers SHALL not log, serialize, or expose secret values loaded from the environment. Compatibility warnings MAY name a deprecated variable but SHALL omit its value.
@@ -79,4 +89,3 @@ The singleton, diagnostics, and API layers SHALL not log, serialize, or expose s
 
 - **WHEN** a legacy secret variable is used
 - **THEN** it SHALL have no effect on application configuration or child-process environment
-
