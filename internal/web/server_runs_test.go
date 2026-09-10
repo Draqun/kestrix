@@ -591,14 +591,14 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 		sourceSessions: &testSourceSessions{},
 	}
 
-	handlerDone := make(chan int, 1)
+	handlerDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
 		r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
 		r = runCtx(r, "name", "demo", "task", "test")
 		srv.handleRunTask(w, r)
-		handlerDone <- w.Code
+		handlerDone <- w
 	}()
 
 	select {
@@ -623,9 +623,21 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 		t.Fatal("timeout waiting for Cancel to return")
 	}
 	select {
-	case code := <-handlerDone:
-		if code != http.StatusOK {
-			t.Fatalf("handler status = %d, want 200", code)
+	case w := <-handlerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("handler status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// The stored run is canceled, so the response must agree with it
+		// instead of reporting the locally computed kill failure.
+		if resp["status"] != "canceled" {
+			t.Errorf("response status = %v, want canceled", resp["status"])
+		}
+		if resp["error"] != "canceled" {
+			t.Errorf("response error = %v, want canceled", resp["error"])
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for handler to return")

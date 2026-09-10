@@ -30,7 +30,11 @@ func (s *PGStore) CreateRun(projectName string, changed []string, includeManual 
 	return id, err
 }
 
-// FinishRun updates a run with its result.
+// FinishRun updates a run with its result. A run already recorded as
+// canceled keeps that status: a late non-canceled write (for example a
+// single-task handler racing Cancel, or a panic recovery landing after
+// CancelRun) must not overwrite the operator's cancel. Canceled writes
+// stay allowed so recording a cancellation itself is idempotent.
 func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error {
 	taskResultsJSON := "[]"
 	if len(taskResults) > 0 {
@@ -41,12 +45,12 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 	var err error
 	if finished {
 		_, err = s.db.Exec(
-			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5`,
+			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5 AND (status <> 'canceled' OR $1 = 'canceled')`,
 			status, output, errMsg, taskResultsJSON, id,
 		)
 	} else {
 		_, err = s.db.Exec(
-			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = NULL WHERE id = $5`,
+			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = NULL WHERE id = $5 AND (status <> 'canceled' OR $1 = 'canceled')`,
 			status, output, errMsg, taskResultsJSON, id,
 		)
 	}
