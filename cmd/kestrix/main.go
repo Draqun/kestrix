@@ -125,6 +125,19 @@ func cmdRun(args []string) {
 	}
 }
 
+func resolveWebhookMethod(flagMethod string, env *config.Environment) string {
+	// Effective webhook verification method: an explicit --method flag
+	// wins, otherwise KESTRIX_WEBHOOK_METHOD applies. Empty means the
+	// verifier default (gitlab).
+	if flagMethod != "" {
+		return flagMethod
+	}
+	if env == nil {
+		return ""
+	}
+	return env.WebhookMethod
+}
+
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("config", config.DefaultPath(), "config file path")
@@ -187,6 +200,7 @@ func cmdServe(args []string) {
 	if *secret == "" {
 		*secret = env.WebhookSecret
 	}
+	*method = resolveWebhookMethod(*method, env)
 	if *dispatchFlag == "" {
 		*dispatchFlag = env.DispatchProject
 	}
