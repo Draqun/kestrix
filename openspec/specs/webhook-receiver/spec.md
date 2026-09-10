@@ -15,6 +15,8 @@ The server SHALL expose a `POST /webhook` endpoint that accepts JSON payloads fr
 
 Every delivery to `POST /webhook` SHALL be authenticated before any part of its payload is trusted, and verification SHALL fail closed. A delivery is accepted only if it verifies, using the configured method (`gitlab` header comparison or `hmac` body signature), against either the matched registered project's own webhook secret or the global webhook secret. A delivery that verifies against neither, including one for which no secret is configured at all, SHALL be rejected with `401`, SHALL NOT be recorded in webhook history, and SHALL NOT trigger any pipeline load, source acquisition, resolution, or dispatch. Secret comparison SHALL be constant time. The rejection response SHALL be identical regardless of whether the project is unknown, has no secret, or presented a wrong secret, and SHALL NOT disclose which secret was consulted.
 
+The verification method SHALL be configurable by the `--method` command-line flag or, when the flag is unset, by the `KESTRIX_WEBHOOK_METHOD` environment variable — the same flag/environment-variable equivalence the webhook secret itself already has. When neither sets a method, the server SHALL default to `gitlab`.
+
 The request body SHALL be read at most once and SHALL be bounded by the configured webhook body limit; a body exceeding it SHALL be rejected with `413` and SHALL NOT be recorded.
 
 #### Scenario: Health check
@@ -73,6 +75,17 @@ The request body SHALL be read at most once and SHALL be bounded by the configur
 - **AND** a delivery carries an `X-Hub-Signature-256` header whose HMAC-SHA256 over the raw body matches the applicable secret
 - **THEN** the server SHALL accept the delivery
 - **AND** a delivery carrying only a matching `X-Gitlab-Token` header SHALL be rejected with `401`
+
+#### Scenario: Method configured by environment variable
+
+- **WHEN** `KESTRIX_WEBHOOK_METHOD=hmac` is set and `--method` is not passed
+- **THEN** the server SHALL verify deliveries using HMAC body-signature comparison
+- **AND** a delivery presenting only a matching `X-Gitlab-Token` header SHALL be rejected with `401`
+
+#### Scenario: Flag takes precedence over the environment variable
+
+- **WHEN** `KESTRIX_WEBHOOK_METHOD=hmac` is set and `--method=gitlab` is also passed
+- **THEN** the server SHALL verify deliveries using `gitlab` header comparison
 
 #### Scenario: Oversized delivery
 
