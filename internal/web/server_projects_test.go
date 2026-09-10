@@ -5,13 +5,17 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
@@ -833,5 +837,307 @@ func TestHandleValidate_DefaultDir(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"project":"demo"`) {
 		t.Errorf("body = %q, want project name", w.Body.String())
+	}
+}
+
+// deleteGuardBlockRunner blocks Run until releaseCh closes (or ctx is
+// cancelled) so a test can hold a run in RunService.active while it
+// exercises DELETE /api/projects/{name}.
+type deleteGuardBlockRunner struct {
+	startedCh chan struct{}
+	releaseCh chan struct{}
+}
+
+func (r *deleteGuardBlockRunner) Run(ctx context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	close(r.startedCh)
+	select {
+	case <-r.releaseCh:
+	case <-ctx.Done():
+	}
+	return []domain.TaskResult{{Name: "t", Status: "passed"}}, nil
+}
+
+func (r *deleteGuardBlockRunner) RunTask(context.Context, domain.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+func deleteGuardServer(t *testing.T, runID int, runProject string, runner *deleteGuardBlockRunner) (*Server, *mocks.MockProjectStore, *mocks.MockRunStore, *service.RunService) {
+	t.Helper()
+	projectStore := &mocks.MockProjectStore{Projects: map[string]*domain.ProjectConfig{
+		"demo": {Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"},
+	}}
+	runStore := &mocks.MockRunStore{
+		CreateRunID:  runID,
+		GetRunResult: &domain.Run{ID: runID, ProjectName: runProject},
+	}
+	runSvc := service.NewRunService(runStore, runner, runner)
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0"},
+		projectStore:   projectStore,
+		runStore:       runStore,
+		projectService: service.NewProjectService(projectStore),
+		runService:     runSvc,
+		sourceSessions: &testSourceSessions{},
+	}
+	return srv, projectStore, runStore, runSvc
+}
+
+func TestHandleDeleteProject_NoActiveRuns_Deletes(t *testing.T) {
+	runner := &deleteGuardBlockRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	srv, projectStore, _, _ := deleteGuardServer(t, 42, "demo", runner)
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 1 || projectStore.DeleteCalls[0] != "demo" {
+		t.Fatalf("DeleteCalls = %v, want [demo]", projectStore.DeleteCalls)
+	}
+}
+
+func TestHandleDeleteProject_ActiveRunSameProject_Conflict(t *testing.T) {
+	runner := &deleteGuardBlockRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	srv, projectStore, _, runSvc := deleteGuardServer(t, 42, "demo", runner)
+
+	if _, err := runSvc.Start(context.Background(), "demo", &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run to start")
+	}
+	t.Cleanup(func() { close(runner.releaseCh) })
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "42") {
+		t.Errorf("body = %q, want it to name blocking run 42", w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 0 {
+		t.Fatalf("Delete should not be called on conflict, got %v", projectStore.DeleteCalls)
+	}
+}
+
+func TestHandleDeleteProject_ActiveRunOtherProject_Deletes(t *testing.T) {
+	runner := &deleteGuardBlockRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	srv, projectStore, _, runSvc := deleteGuardServer(t, 99, "other", runner)
+
+	if _, err := runSvc.Start(context.Background(), "other", &domain.Project{Name: "other", Tasks: []domain.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run to start")
+	}
+	t.Cleanup(func() { close(runner.releaseCh) })
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 1 {
+		t.Fatalf("DeleteCalls = %v, want one delete for demo", projectStore.DeleteCalls)
+	}
+}
+
+func TestHandleDeleteProject_AfterRunFinishes_Deletes(t *testing.T) {
+	runner := &deleteGuardBlockRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	srv, projectStore, _, runSvc := deleteGuardServer(t, 7, "demo", runner)
+
+	if _, err := runSvc.Start(context.Background(), "demo", &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run to start")
+	}
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("while running: status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+
+	close(runner.releaseCh)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(runSvc.ActiveRunIDsForProject("demo")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("run did not leave active set, ids=%v", runSvc.ActiveRunIDsForProject("demo"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	w2 := httptest.NewRecorder()
+	r2 := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("after finish: status = %d, want 200 (body=%s)", w2.Code, w2.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 1 || projectStore.DeleteCalls[0] != "demo" {
+		t.Fatalf("DeleteCalls = %v, want [demo] after run finished", projectStore.DeleteCalls)
+	}
+}
+
+func TestHandleDeleteProject_NilRunService_InternalError(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{Projects: map[string]*domain.ProjectConfig{
+		"demo": {Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"},
+	}}
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0"},
+		projectStore:   projectStore,
+		projectService: service.NewProjectService(projectStore),
+		sourceSessions: &testSourceSessions{},
+	}
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 0 {
+		t.Fatalf("Delete should not be called without a run service, got %v", projectStore.DeleteCalls)
+	}
+}
+
+// seqIDRunStore hands out increasing run IDs so two concurrent Starts
+// occupy distinct entries in RunService.active. Everything else behaves
+// like the embedded MockRunStore.
+type seqIDRunStore struct {
+	*mocks.MockRunStore
+	mu   sync.Mutex
+	next int
+}
+
+func (s *seqIDRunStore) CreateRun(p string, c []string, im bool, snap *domain.Project, startedBy string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	return s.next, nil
+}
+
+// twoRunBlockRunner blocks both of its Run calls until release closes, so
+// a test can hold two runs of the same project in active at once. started
+// is buffered for the two expected calls.
+type twoRunBlockRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *twoRunBlockRunner) Run(ctx context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	r.started <- struct{}{}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+	}
+	return []domain.TaskResult{{Name: "t", Status: "passed"}}, nil
+}
+
+func (r *twoRunBlockRunner) RunTask(context.Context, domain.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+func TestHandleDeleteProject_MultipleActiveRuns_ConflictListsSortedIDs(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{Projects: map[string]*domain.ProjectConfig{
+		"demo": {Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"},
+	}}
+	runStore := &seqIDRunStore{MockRunStore: &mocks.MockRunStore{}, next: 10}
+	runner := &twoRunBlockRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
+	runSvc := service.NewRunService(runStore, runner, runner)
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0"},
+		projectStore:   projectStore,
+		runStore:       runStore,
+		projectService: service.NewProjectService(projectStore),
+		runService:     runSvc,
+		sourceSessions: &testSourceSessions{},
+	}
+	proj := &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "t"}}}
+
+	for i := 0; i < 2; i++ {
+		if _, err := runSvc.Start(context.Background(), "demo", proj, nil, domain.RunnerOptions{}); err != nil {
+			t.Fatalf("Start %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-runner.started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for both runs to start")
+		}
+	}
+	t.Cleanup(func() { close(runner.release) })
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	// Both IDs must appear, in ascending order - active is a map, so
+	// without the sort the message order would be random.
+	if !strings.Contains(w.Body.String(), fmt.Sprintf("%v", []int{11, 12})) {
+		t.Errorf("body = %q, want it to name runs [11 12] in ascending order", w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 0 {
+		t.Fatalf("Delete should not be called on conflict, got %v", projectStore.DeleteCalls)
+	}
+}
+
+func TestHandleDeleteProject_AfterRunCanceled_Deletes(t *testing.T) {
+	runner := &deleteGuardBlockRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	srv, projectStore, _, runSvc := deleteGuardServer(t, 7, "demo", runner)
+
+	if _, err := runSvc.Start(context.Background(), "demo", &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run to start")
+	}
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("while running: status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+
+	// Cancel returns only once the run's goroutine has left active, so no
+	// polling is needed before the second delete - unlike the finish path,
+	// where the handler races the goroutine's cleanup.
+	if err := runSvc.Cancel(context.Background(), 7, "tester"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if ids := runSvc.ActiveRunIDsForProject("demo"); len(ids) != 0 {
+		t.Fatalf("after Cancel, ActiveRunIDsForProject(demo) = %v, want empty", ids)
+	}
+
+	w2 := httptest.NewRecorder()
+	r2 := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("after cancel: status = %d, want 200 (body=%s)", w2.Code, w2.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 1 || projectStore.DeleteCalls[0] != "demo" {
+		t.Fatalf("DeleteCalls = %v, want [demo] after run canceled", projectStore.DeleteCalls)
 	}
 }

@@ -5,8 +5,10 @@
 Deleting a project whose run is currently executing SHALL be refused with
 `409 Conflict` naming the run(s) still active, rather than deleting the
 project and letting the run's underlying process continue against rows that
-no longer exist. A project with no active run SHALL delete exactly as
-before, cascading its runs and their task results.
+no longer exist. "Currently executing" means a run with a live execution
+goroutine; a run waiting for manual approval has none and SHALL NOT block
+the delete. A project with no active run SHALL delete exactly as before,
+cascading its runs and their task results.
 
 #### Scenario: Delete refused while a run is active
 
