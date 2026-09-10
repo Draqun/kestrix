@@ -20,11 +20,15 @@ export default defineConfig({
     // the change under test. These timeouts bound a starved worker, not a
     // hanging test - a genuinely stuck test still fails, just later.
     //
-    // Why 20s and not some other number: the slowest test here takes 838ms
-    // locally, and the runner's execution phase came out 12-16x slower than
-    // local in the red run, so the worst case lands around 10-13.5s. Twenty
-    // leaves roughly 1.5-2x headroom over that; the 5s default sat below it.
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    // Why 60s and not some other number: the slowest test here is now
+    // CredentialSelectField's inline-creation flow at ~2.3s locally, not the
+    // 838ms this comment assumed when it justified 20s. Measured against that
+    // red run, the runner ran individual tests 5.7-9.2x slower than local
+    // (21040ms vs 2285ms for that same test, which is exactly how it blew
+    // through the 20s ceiling by a second). Worst case therefore lands around
+    // 21s; 60s keeps roughly 2.8x headroom over it. Re-derive this number if a
+    // test lands that is materially slower than ~2.3s locally.
+    testTimeout: 60000,
+    hookTimeout: 60000,
   },
 });
