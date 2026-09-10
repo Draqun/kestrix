@@ -176,16 +176,47 @@ func TestHandleGetRun_Happy(t *testing.T) {
 	}
 }
 
+// A run belonging to another project must not be readable through this
+// project's URL: RequireRole only checked the caller's grant on {name}.
+func TestHandleGetRun_ForeignProject(t *testing.T) {
+	mock := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 5, ProjectName: "other"}}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, mock)
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/5", nil), "name", "demo", "runID", "5")
+	srv.handleGetRun(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
 // ── handleCancelRun ─────────────────────────────────────────────
 
-func TestHandleCancelRun_EmptyStore(t *testing.T) {
+func TestHandleCancelRun_UnknownRun(t *testing.T) {
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, &mocks.MockRunStore{})
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/1/cancel", nil), "name", "demo", "runID", "1")
 	srv.handleCancelRun(w, r)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+// A run belonging to another project must not be cancelable through this
+// project's URL: RequireRole only checked the caller's grant on {name}.
+func TestHandleCancelRun_ForeignProject(t *testing.T) {
+	mock := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 5, ProjectName: "other"}}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, mock)
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/runs/5/cancel", nil), "name", "demo", "runID", "5")
+	srv.handleCancelRun(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(mock.CancelRunCalls) != 0 {
+		t.Fatalf("CancelRun must not be called for a foreign project's run, got %d calls", len(mock.CancelRunCalls))
 	}
 }
 
@@ -201,7 +232,7 @@ func TestHandleCancelRun_InvalidID(t *testing.T) {
 }
 
 func TestHandleCancelRun_Happy(t *testing.T) {
-	mock := &mocks.MockRunStore{}
+	mock := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 5, ProjectName: "demo"}}
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, mock)
 	manager := srv.sourceSessions.(*testSourceSessions)
 	w := httptest.NewRecorder()
@@ -265,7 +296,7 @@ func (r *blockingCancelRunner) RunTask(_ context.Context, _ domain.Project, _ st
 }
 
 func TestHandleCancelRun_Timeout(t *testing.T) {
-	store := &mocks.MockRunStore{CreateRunID: 99}
+	store := &mocks.MockRunStore{CreateRunID: 99, GetRunResult: &domain.Run{ID: 99, ProjectName: "demo"}}
 	runner := &blockingCancelRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	svc := service.NewRunService(store, runner, runner)
 	svc.CancelGrace = time.Millisecond

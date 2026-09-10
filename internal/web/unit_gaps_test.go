@@ -332,10 +332,10 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 	}
 
 	// CancelRun backend failure.
-	runs = &mocks.MockRunStore{CancelRunErr: errors.New("cancel")}
+	runs = &mocks.MockRunStore{CancelRunErr: errors.New("cancel"), GetRunResult: &domain.Run{ID: 3, ProjectName: "demo"}}
 	srv = setupRunServer(t, store, runs)
 	w = httptest.NewRecorder()
-	srv.handleCancelRun(w, runCtx(httptest.NewRequest("POST", "/", nil), "runID", "3"))
+	srv.handleCancelRun(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "3"))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("cancel error=%d", w.Code)
 	}

@@ -235,6 +235,7 @@ func TestCLI_UserCreate_ThenLoginThroughAPI(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"name": name, "password": password})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, req)
 

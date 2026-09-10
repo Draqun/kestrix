@@ -13,7 +13,10 @@ PKGS=$(go list ./... | grep -v '/docs')
 if [ "$MODE" = "unit" ]; then
   go test $PKGS -short -v -count=1 -coverprofile=coverage.out -covermode=atomic -race
 else
-  go test $PKGS -v -count=1 -coverprofile=coverage.out -covermode=atomic -race
+  # -p 1: integration packages share one kestrix_test database and internal/store
+  # wipes tables (DELETE FROM users, DROP TABLE project_sources) between cases,
+  # so packages must not run concurrently or cmd/kestrix sees its rows vanish.
+  go test $PKGS -p 1 -v -count=1 -coverprofile=coverage.out -covermode=atomic -race
 fi
 
 # PostgreSQL integration tests require an explicitly configured test database.

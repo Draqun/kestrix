@@ -42,6 +42,11 @@ func TestBoundPipelineDir_Child(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boundPipelineDir: %v", err)
 	}
+	// boundPipelineDir resolves symlinks; on macOS t.TempDir() lives under
+	// /var -> /private/var, so compare against the resolved path.
+	if child, err = filepath.EvalSymlinks(child); err != nil {
+		t.Fatal(err)
+	}
 	if got != child {
 		t.Fatalf("got = %q, want %q", got, child)
 	}

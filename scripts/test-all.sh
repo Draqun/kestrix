@@ -10,14 +10,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-declare -A LAYERS=(
-  [unit]="make test"
-  [coverage]="make test-coverage"
-  [integration]="make test-integration"
-  [e2e]="make test-e2e"
-  [runner-coverage]="make runner-unit-coverage"
-  [ui]="make ui-test"
-)
+# bash 3.2 (macOS default) has no associative arrays, so use a case lookup.
+layer_cmd() {
+  case "$1" in
+    unit) echo "make test" ;;
+    coverage) echo "make test-coverage" ;;
+    integration) echo "make test-integration" ;;
+    e2e) echo "make test-e2e" ;;
+    runner-coverage) echo "make runner-unit-coverage" ;;
+    ui) echo "make ui-test" ;;
+    *) echo "" ;;
+  esac
+}
 ORDER=(unit coverage integration e2e runner-coverage ui)
 
 selected=("$@")
@@ -27,7 +31,7 @@ fi
 
 failed=()
 for layer in "${selected[@]}"; do
-  cmd="${LAYERS[$layer]:-}"
+  cmd="$(layer_cmd "$layer")"
   if [[ -z "${cmd}" ]]; then
     echo "test-all: unknown layer '${layer}' (known: ${ORDER[*]})" >&2
     exit 2

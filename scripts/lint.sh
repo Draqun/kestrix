@@ -4,7 +4,8 @@ set -euo pipefail
 echo "=== Lint ==="
 
 echo "--- gofmt ---"
-mapfile -t GO_FILES < <(find . -type f -name '*.go' \
+GO_FILES=()
+while IFS= read -r f; do GO_FILES+=("$f"); done < <(find . -type f -name '*.go' \
   -not -path './.gocache/*' \
   -not -path './.gomodcache/*' \
   -not -path './.gopath/*' \

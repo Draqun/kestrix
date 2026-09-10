@@ -452,7 +452,9 @@ func TestDefaultPathEmptyHomeFallback(t *testing.T) {
 // Load on a path that exists but is a directory triggers a non-IsNotExist
 // error from os.ReadFile, exercising the second branch in Load.
 func TestLoadNonExistentError(t *testing.T) {
-	_, err := Load("/proc")
+	// A directory, not a file: readFile fails with EISDIR on every platform.
+	// (/proc did not exist on macOS, so the test silently took the IsNotExist path.)
+	_, err := Load(t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for non-existent config in non-IsNotExist branch")
 	}
