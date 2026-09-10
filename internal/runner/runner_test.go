@@ -390,6 +390,57 @@ func TestRunLocal_CancelKillsProcessGroup(t *testing.T) {
 	}
 }
 
+// TestRunOne_CancelKillsProcessGroup mirrors
+// TestRunLocal_CancelKillsProcessGroup for the single-task path: cancelling
+// the context mid-RunOne must terminate the whole process group within
+// grace plus two seconds. See the "Cancel a running single-task re-run"
+// scenario. Excluded from unit coverage like its DAG-executor equivalent.
+func TestRunOne_CancelKillsProcessGroup(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skip("pgrep not available")
+	}
+
+	dir := t.TempDir()
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	project := simpleProject("cancel-one", "repo.repo.changed", "sleep 31 & sleep 31 & wait")
+	var out bytes.Buffer
+
+	go func() {
+		<-started
+		time.Sleep(300 * time.Millisecond) // let both sleeps actually start
+		cancel()
+	}()
+
+	grace := config.Current().RunnerCancelGrace
+	_, runErr := RunOne(ctx, project, "t", Options{
+		WorkDir: dir, Stdout: &out, Stderr: &out,
+		OnTaskStart: func(string) { close(started) },
+	})
+	if runErr == nil {
+		t.Fatal("RunOne: expected an error after cancellation, got nil")
+	}
+
+	deadline := time.Now().Add(grace + 2*time.Second)
+	for {
+		output, lookErr := exec.Command("pgrep", "-f", "sleep 31").Output()
+		if lookErr != nil {
+			return // pgrep exits non-zero when no process matches
+		}
+		if strings.TrimSpace(string(output)) == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sleep processes still running after grace(%v)+2s: %s", grace, output)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func TestRunLocal_Fail(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {

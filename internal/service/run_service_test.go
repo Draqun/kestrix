@@ -816,6 +816,245 @@ func (r *blockingPipelineRunner) RunTask(ctx context.Context, project domain.Pro
 	return domain.TaskResult{}, nil
 }
 
+// blockingTaskRunner blocks RunTask until either releaseCh is closed or ctx
+// is cancelled (a well-behaved executor honoring cancellation), signalling
+// startedCh once it has begun so a test can synchronize on it. It mirrors
+// blockingPipelineRunner for the single-task path.
+type blockingTaskRunner struct {
+	startedCh   chan struct{}
+	releaseCh   chan struct{}
+	ignoreCtx   bool
+	sawCancel   bool
+	returnedCh  chan struct{}
+	startedOnce sync.Once
+}
+
+func (r *blockingTaskRunner) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
+	return nil, nil
+}
+
+func (r *blockingTaskRunner) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	r.startedOnce.Do(func() { close(r.startedCh) })
+	if r.ignoreCtx {
+		<-r.releaseCh
+	} else {
+		select {
+		case <-r.releaseCh:
+		case <-ctx.Done():
+		}
+	}
+	r.sawCancel = ctx.Err() != nil
+	if r.returnedCh != nil {
+		close(r.returnedCh)
+	}
+	return domain.TaskResult{Name: taskName, Status: "passed"}, nil
+}
+
+func waitActiveAbsent(t *testing.T, svc *RunService, runID int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		svc.mu.Lock()
+		_, stillActive := svc.active[runID]
+		_, stillDone := svc.done[runID]
+		svc.mu.Unlock()
+		if !stillActive && !stillDone {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("run entry not removed from active/done maps after completion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRunService_RunTask_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
+	store := &mocks.MockRunStore{}
+	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+
+	const runID = 71
+	retCh := make(chan error, 1)
+	go func() {
+		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		retCh <- err
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task to start")
+	}
+
+	svc.mu.Lock()
+	_, hasCancel := svc.active[runID]
+	_, hasDone := svc.done[runID]
+	svc.mu.Unlock()
+	if !hasCancel || !hasDone {
+		t.Fatal("run not registered in active/done maps while RunTask is executing")
+	}
+
+	close(runner.releaseCh)
+
+	select {
+	case err := <-retCh:
+		if err != nil {
+			t.Fatalf("RunTask: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return")
+	}
+	waitActiveAbsent(t, svc, runID)
+}
+
+func manualApprovalFixture(runID int) (*mocks.MockRunStore, *model.Project) {
+	proj := &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "manual", Manual: true, DependsOn: []string{"build"}},
+		},
+	}
+	store := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          runID,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "manual", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: "passed"},
+				{Name: "manual", Status: "manual"},
+			},
+		},
+	}
+	return store, proj
+}
+
+func TestRunService_ApproveManualTask_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
+	const runID = 72
+	store, proj := manualApprovalFixture(runID)
+	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+
+	retCh := make(chan error, 1)
+	go func() {
+		_, err := svc.ApproveManualTask(context.Background(), runID, "proj", proj, "manual", domain.RunnerOptions{SourcesPrepared: true})
+		retCh <- err
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task to start")
+	}
+
+	svc.mu.Lock()
+	_, hasCancel := svc.active[runID]
+	_, hasDone := svc.done[runID]
+	svc.mu.Unlock()
+	if !hasCancel || !hasDone {
+		t.Fatal("run not registered in active/done maps while ApproveManualTask is executing")
+	}
+
+	close(runner.releaseCh)
+
+	select {
+	case err := <-retCh:
+		if err != nil {
+			t.Fatalf("ApproveManualTask: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for ApproveManualTask to return")
+	}
+	waitActiveAbsent(t, svc, runID)
+}
+
+func TestRunService_ApproveManualTask_RejectsNilProjectAfterApproval(t *testing.T) {
+	const runID = 74
+	store, _ := manualApprovalFixture(runID)
+	runner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(store, runner, runner)
+
+	if _, err := svc.ApproveManualTask(context.Background(), runID, "proj", nil, "manual", domain.RunnerOptions{}); err == nil {
+		t.Fatal("expected error for nil project")
+	}
+}
+
+func TestRunService_ApproveManualTask_RejectsNilTaskRunner(t *testing.T) {
+	const runID = 75
+	store, proj := manualApprovalFixture(runID)
+	svc := NewRunService(store, nil, nil)
+
+	if _, err := svc.ApproveManualTask(context.Background(), runID, "proj", proj, "manual", domain.RunnerOptions{}); err == nil {
+		t.Fatal("expected error for nil task runner")
+	}
+}
+
+func TestRunService_Cancel_TerminatesActiveRunTask(t *testing.T) {
+	const runID = 73
+	store := &mocks.MockRunStore{}
+	runner := &blockingTaskRunner{
+		startedCh:  make(chan struct{}),
+		releaseCh:  make(chan struct{}),
+		returnedCh: make(chan struct{}),
+	}
+	svc := NewRunService(store, runner, runner)
+
+	runTaskErrCh := make(chan error, 1)
+	go func() {
+		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		runTaskErrCh <- err
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task to start")
+	}
+
+	cancelErrCh := make(chan error, 1)
+	go func() {
+		cancelErrCh <- svc.Cancel(context.Background(), runID, "user:alice")
+	}()
+
+	select {
+	case <-runner.returnedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the blocking task to return after Cancel")
+	}
+	if !runner.sawCancel {
+		t.Fatal("blocking taskRunner did not observe context cancellation after Cancel")
+	}
+
+	select {
+	case err := <-runTaskErrCh:
+		if err != nil {
+			t.Fatalf("RunTask: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return")
+	}
+
+	select {
+	case err := <-cancelErrCh:
+		if err != nil {
+			t.Fatalf("Cancel: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for Cancel to return after the task returned")
+	}
+
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0].ID != runID {
+		t.Fatalf("CancelRunCalls = %+v, want exactly one call for run %d after the task returned", store.CancelRunCalls, runID)
+	}
+}
+
 func TestRunService_Start_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 7}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}

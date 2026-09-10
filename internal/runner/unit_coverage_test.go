@@ -480,6 +480,21 @@ func TestLocalAndGitLabExecutorsWireProcessGroupCancel(t *testing.T) {
 	if captured.WaitDelay <= 0 {
 		t.Error("GitLabRunnerExecutor: WaitDelay not set")
 	}
+
+	captured = nil
+	project := runnerProject("true")
+	if _, err := RunOne(context.Background(), project, "task", Options{WorkDir: root, SourcesPrepared: true, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("RunOne: %v", err)
+	}
+	if captured.SysProcAttr == nil || !captured.SysProcAttr.Setpgid {
+		t.Error("RunOne: SysProcAttr.Setpgid not set")
+	}
+	if captured.Cancel == nil {
+		t.Error("RunOne: Cancel not set")
+	}
+	if captured.WaitDelay <= 0 {
+		t.Error("RunOne: WaitDelay not set")
+	}
 }
 
 func TestDockerExecutorCancelStopsContainerByName(t *testing.T) {

@@ -575,14 +575,35 @@ func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 }
 
 // RunTask executes a single task and appends the result to an existing run.
+// It registers the run in active/done like Start so Cancel terminates the
+// task's process (via the runner's process-group wiring) instead of only
+// rewriting the run's status in the store; see design.md D1/D2.
 func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
-	_ = projectName
 	if proj == nil {
 		return domain.TaskResult{}, fmt.Errorf("project not loaded")
 	}
 	if s.taskRunner == nil {
 		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	doneCh := make(chan struct{})
+	s.mu.Lock()
+	s.active[runID] = cancel
+	s.done[runID] = doneCh
+	s.mu.Unlock()
+	defer close(doneCh)
+	defer cancel()
+	defer func() {
+		s.mu.Lock()
+		delete(s.active, runID)
+		delete(s.done, runID)
+		s.mu.Unlock()
+	}()
+	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+}
+
+func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	_ = projectName
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
 	}
@@ -722,7 +743,27 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	}
 
 	log.Printf("run: approved actor=%q project=%q run=%d task=%q", opts.Actor, projectName, runID, taskName)
-	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
+	if proj == nil {
+		return domain.TaskResult{}, fmt.Errorf("project not loaded")
+	}
+	if s.taskRunner == nil {
+		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	doneCh := make(chan struct{})
+	s.mu.Lock()
+	s.active[runID] = cancel
+	s.done[runID] = doneCh
+	s.mu.Unlock()
+	defer close(doneCh)
+	defer cancel()
+	defer func() {
+		s.mu.Lock()
+		delete(s.active, runID)
+		delete(s.done, runID)
+		s.mu.Unlock()
+	}()
+	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 
 // WebhookService handles webhook event processing.
