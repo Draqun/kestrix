@@ -19,7 +19,8 @@ if some of those accounts belong to the same person.
 |---|---|---|
 | Small | 1–3 | $3/month |
 | Team | 4–15 | $25/month |
-| Scale | 16+ | $50/month |
+| Scale | 16-50 | $50/month |
+| Enterprise | 50+ | Please contact |
 
 Each plan is a flat monthly price for its whole account range, not a
 per-seat charge — adding one more account within your current range does
