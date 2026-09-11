@@ -175,6 +175,14 @@ source_cache:
   directory: "/var/lib/kestrix/cache/git"
   max_age: "720h"
   max_bytes: 10737418240
+
+runner:
+  docker_pids: 256
+  docker_memory: "2g"
+  docker_cpus: "2"
+  docker_user: ""
+  docker_network: "bridge"
+  cancel_grace: "10s"
 ```
 
 **Precedence:** config file → env vars → CLI flags.

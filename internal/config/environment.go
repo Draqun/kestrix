@@ -429,6 +429,30 @@ func Current() *Environment {
 	return Initialize()
 }
 
+// WithRunnerConfig returns a copy of the snapshot with the six runner
+// settings taken from the reconciled Config.Runner. The receiver is not
+// mutated; shared maps stay shared because snapshots are immutable.
+func (e *Environment) WithRunnerConfig(c *Config) *Environment {
+	derived := *e
+	derived.RunnerDockerPIDs = c.Runner.DockerPIDs
+	derived.RunnerDockerMemory = c.Runner.DockerMemory
+	derived.RunnerDockerCPUs = c.Runner.DockerCPUs
+	derived.RunnerDockerUser = c.Runner.DockerUser
+	derived.RunnerDockerNetwork = c.Runner.DockerNetwork
+	derived.RunnerCancelGrace = time.Duration(c.Runner.CancelGrace)
+	return &derived
+}
+
+// ReplaceCurrent installs env as the process snapshot and returns the
+// previous snapshot so tests can restore it via t.Cleanup. It MUST be called
+// after Initialize (a call made first would be overwritten by the sync.Once
+// body) and only once, during startup while still single-threaded.
+func ReplaceCurrent(env *Environment) *Environment {
+	previous := environmentLive
+	environmentLive = env
+	return previous
+}
+
 // Prefixed returns environment entries matching prefix, sorted by
 // variable name. It is used when Kestrix forwards variables to child jobs.
 func (e *Environment) Prefixed(prefix string) []string {

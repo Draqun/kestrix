@@ -49,13 +49,13 @@ an inherited host variable must list it explicitly - see `.env.template`.
 `docker` mode runs every task container with capabilities dropped, privilege
 escalation disabled, and bounded resources by default:
 
-| Setting | Env var | Default |
-|---------|---------|---------|
-| Process limit | `KESTRIX_RUNNER_DOCKER_PIDS` | `256` |
-| Memory limit | `KESTRIX_RUNNER_DOCKER_MEMORY` | `2g` |
-| CPU limit | `KESTRIX_RUNNER_DOCKER_CPUS` | `2` |
-| Network | `KESTRIX_RUNNER_DOCKER_NETWORK` | `bridge` (`none` disables egress) |
-| User | `KESTRIX_RUNNER_DOCKER_USER` | image default (unset) |
+| Setting | Env var | Config file | Default |
+|---------|---------|-------------|---------|
+| Process limit | `KESTRIX_RUNNER_DOCKER_PIDS` | `runner.docker_pids` | `256` |
+| Memory limit | `KESTRIX_RUNNER_DOCKER_MEMORY` | `runner.docker_memory` | `2g` |
+| CPU limit | `KESTRIX_RUNNER_DOCKER_CPUS` | `runner.docker_cpus` | `2` |
+| Network | `KESTRIX_RUNNER_DOCKER_NETWORK` | `runner.docker_network` | `bridge` (`none` disables egress) |
+| User | `KESTRIX_RUNNER_DOCKER_USER` | `runner.docker_user` | image default (unset) |
 
 `--cap-drop ALL` and `--security-opt no-new-privileges` are always applied.
 Kestrix never mounts the Docker socket or passes `--privileged` into a task
@@ -66,7 +66,7 @@ container.
 Cancelling a run terminates its executing task before the run is recorded as
 `canceled`: the `local` and `gitlab-runner` executors send the task's whole
 process group SIGTERM, then SIGKILL after `KESTRIX_RUNNER_CANCEL_GRACE`
-(default `10s`); the `docker` executor stops the container with the same
+(default `10s`, also `runner.cancel_grace` in the config file); the `docker` executor stops the container with the same
 grace period. A run whose task cannot be confirmed terminated within grace
 plus 5s stays `running` and the cancel request fails, rather than reporting
 `canceled` while the task keeps executing.
