@@ -173,6 +173,12 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := cfg.ApplyRunnerEnvironment(env); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	env = env.WithRunnerConfig(cfg)
+	config.ReplaceCurrent(env)
 	cacheAgeSet, cacheBytesSet := false, false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
