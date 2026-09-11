@@ -1,0 +1,4 @@
+# Agent review workflow configuration.
+# Managed by the mr-fix skill: persists the issue-tracker choice so future
+# runs file deferred follow-ups without asking again.
+issue_tracker: gitlab
