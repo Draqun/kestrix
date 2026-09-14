@@ -358,11 +358,9 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 		t.Fatalf("backend status=%d", w.Code)
 	}
 
-	// service.BuildVarStore no longer seeds Docker registry credentials into
-	// a task's variables - a task must go through
-	// KESTRIX_RUNNER_ENV_PASSTHROUGH instead; see handler_helpers.go's
-	// former buildVarStore doc comment.
-	srv.cfg.Docker = DockerConfig{Registry: "r", Image: "i", Username: "u", Password: "p"}
+	// service.BuildVarStore never seeds Docker registry credentials into a
+	// task's variables: tasks receive only the task-environment allowlist
+	// plus host variables named in KESTRIX_RUNNER_ENV_PASSTHROUGH.
 	vs, _, err := service.BuildVarStore(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildVarStore(nil): %v", err)

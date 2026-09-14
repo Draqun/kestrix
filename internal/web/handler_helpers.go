@@ -21,8 +21,9 @@ func actorFrom(r *http.Request) string {
 //
 // It used to also seed every KESTRIX_* environment variable (prefix
 // stripped) and the configured Docker registry credentials unconditionally,
-// via variables.FromKestrix() and s.cfg.Docker. Those variables flow
-// straight into a task's environment as pipeline variables - the highest-
+// via variables.FromKestrix() and the config file's since-removed `docker:`
+// block. Those variables flow straight into a task's environment as pipeline
+// variables - the highest-
 // priority, always-included tier of config.Environment.TaskEnv - which
 // bypassed the task-execution-isolation allowlist entirely: every task in
 // every project could always read KESTRIX_MASTER_KEY_PATH,

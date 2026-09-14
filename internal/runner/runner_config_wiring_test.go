@@ -43,8 +43,8 @@ func installRunnerSnapshot(t *testing.T, yamlContent string, envOverride func(*c
 	if envOverride != nil {
 		envOverride(&envCopy)
 	}
-	if err := cfg.ApplyRunnerEnvironment(&envCopy); err != nil {
-		t.Fatalf("ApplyRunnerEnvironment: %v", err)
+	if err := cfg.ApplyEnvironment(&envCopy); err != nil {
+		t.Fatalf("ApplyEnvironment: %v", err)
 	}
 	previous := config.ReplaceCurrent(envCopy.WithRunnerConfig(cfg))
 	t.Cleanup(func() { config.ReplaceCurrent(previous) })

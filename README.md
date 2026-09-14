@@ -156,6 +156,7 @@ Kestrix loads config from `~/.kestrix/config.yaml` (auto-discovered).
 
 ```yaml
 listen_addr: ":8080"
+database_url: "postgres://kestrix:kestrix@localhost:5433/kestrix_local?sslmode=disable"
 default_branch: "main"
 
 pipeline:
@@ -164,6 +165,7 @@ pipeline:
 
 webhook:
   secret: "your-webhook-secret"
+  history_limit: 1000
 
 dispatch:
   enabled: true
@@ -177,6 +179,7 @@ source_cache:
   max_bytes: 10737418240
 
 runner:
+  mode: "local"
   docker_pids: 256
   docker_memory: "2g"
   docker_cpus: "2"
@@ -185,7 +188,11 @@ runner:
   cancel_grace: "10s"
 ```
 
-**Precedence:** config file → env vars → CLI flags.
+**Precedence:** explicit CLI flag over config-file value over `KESTRIX_*`
+environment over default. An explicitly empty file value counts as set and is
+never filled from the environment. Unknown keys in `config.yaml` fail startup
+naming the key. `webhook.method` has no file form: `--method` wins over
+`KESTRIX_WEBHOOK_METHOD`.
 
 Required to start:
 
@@ -199,11 +206,14 @@ Optional:
 
 | Env Variable | CLI Flag | Description |
 |---|---|---|
+| `KESTRIX_ADDR` | `--addr` | Listen address (effective when the file omits `listen_addr`) |
+| `KESTRIX_DIR` | `--dir` | Pipeline directory (effective when the file omits `pipeline.dir`) |
+| `KESTRIX_GITLAB_URL` | `--gitlab-url` | GitLab base URL (effective when the file omits `dispatch.gitlab_url`) |
 | `KESTRIX_WEBHOOK_SECRET` | `--secret` | Global webhook secret, used when the matched project has none of its own |
 | `KESTRIX_WEBHOOK_METHOD` | `--method` | `gitlab` (X-Gitlab-Token comparison, default) or `hmac` (HMAC-SHA256 body signature) |
 | `KESTRIX_WEBHOOK_HISTORY_LIMIT` | — | Retained webhook events (default `1000`) |
 | `KESTRIX_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
-| `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID |
+| `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID (must be a positive integer; startup fails otherwise) |
 | `KESTRIX_SOURCE_CACHE_DIR` | `--source-cache-dir` | Private bare-mirror cache directory |
 | `KESTRIX_SOURCE_CACHE_MAX_AGE` | `--source-cache-max-age` | Maximum unused-entry age |
 | `KESTRIX_SOURCE_CACHE_MAX_BYTES` | `--source-cache-max-bytes` | Maximum cache size in bytes |
@@ -217,7 +227,9 @@ Further settings cover HTTP timeouts and body bounds
 defaults.
 
 `KESTRIX_*` is the only supported prefix for Kestrix-owned settings. Generic
-variables such as `DATABASE_URL` and `DOCKER_*` keep their existing names.
+variables such as `DATABASE_URL` keep their existing names. `DOCKER_*` are not
+Kestrix settings: they reach task processes only as host variables named in
+`KESTRIX_RUNNER_ENV_PASSTHROUGH`.
 
 ## Project identity and repository location
 

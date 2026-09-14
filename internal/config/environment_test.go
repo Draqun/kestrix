@@ -230,8 +230,10 @@ func TestLoadEnvironmentPreservesGenericVariables(t *testing.T) {
 	if env.ListenAddr != ":9090" {
 		t.Fatalf("address = %q", env.ListenAddr)
 	}
-	if env.Docker.Image != "kestrix:test" {
-		t.Fatalf("typed Docker image = %q", env.Docker.Image)
+	// DOCKER_* has no typed field: it reaches tasks only through
+	// KESTRIX_RUNNER_ENV_PASSTHROUGH, but the raw value stays in the snapshot.
+	if got, ok := env.Lookup("DOCKER_IMAGE"); !ok || got != "kestrix:test" {
+		t.Fatalf("DOCKER_IMAGE lookup = %q, %v", got, ok)
 	}
 	if got := env.Prefixed(Prefix); !reflect.DeepEqual(got, []string{"KESTRIX_ADDR=:9090"}) {
 		t.Fatalf("prefixed values = %#v", got)

@@ -23,6 +23,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -138,6 +139,57 @@ func resolveWebhookMethod(flagMethod string, env *config.Environment) string {
 	return env.WebhookMethod
 }
 
+// buildServeConfig converts the reconciled config plus the environment-only
+// settings into web.Config. Every file-or-flag setting comes from cfg; only
+// env-only settings (key paths, throttle, CSP, cookie, HTTP bounds) come
+// from env. It is pure so the precedence table can test it without starting
+// the server.
+func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, method string) web.Config {
+	dbURL := cfg.DatabaseURL
+	if dbURL == "" {
+		dbURL = defaultLocalDatabaseURL
+	}
+	return web.Config{
+		ListenAddr:            cfg.ListenAddr,
+		PipelineDir:           cfg.Pipeline.Dir,
+		StaticDir:             staticDir,
+		DatabaseURL:           dbURL,
+		MasterKeyPath:         env.MasterKeyPath,
+		JWTSigningKeyPath:     env.JWTSigningKeyPath,
+		IdentityCacheTTL:      env.IdentityCacheTTL,
+		LoginMaxAttempts:      env.LoginMaxAttempts,
+		LoginWindow:           env.LoginWindow,
+		TrustProxyHeader:      env.TrustProxyHeader,
+		ContentSecurityPolicy: env.ContentSecurityPolicy,
+		CookieSecure:          env.CookieSecure,
+		Branch:                cfg.Branch,
+		SourceCache: web.SourceCacheConfig{
+			Directory: cfg.SourceCache.Directory,
+			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),
+			MaxBytes:  cfg.SourceCache.MaxBytes,
+		},
+		HTTPReadTimeout:     env.HTTPReadTimeout,
+		HTTPWriteTimeout:    env.HTTPWriteTimeout,
+		HTTPIdleTimeout:     env.HTTPIdleTimeout,
+		MaxBodyBytes:        env.HTTPMaxBodyBytes,
+		WebhookMaxBodyBytes: env.WebhookMaxBodyBytes,
+		Signature: web.SignatureConfig{
+			Secret: cfg.Webhook.Secret,
+			Method: method,
+		},
+		WebhookHistoryLimit: cfg.Webhook.HistoryLimit,
+		Dispatch: web.DispatchConfig{
+			Enabled:     cfg.Dispatch.Enabled,
+			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),
+			GitLabURL:   cfg.Dispatch.GitLabURL,
+			GitLabToken: cfg.Dispatch.GitLabToken,
+		},
+		Runner: web.RunnerConfig{
+			Mode: cfg.Runner.Mode,
+		},
+	}
+}
+
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("config", config.DefaultPath(), "config file path")
@@ -151,10 +203,6 @@ func cmdServe(args []string) {
 	branchFlag := fs.String("branch", "", "default branch (overrides config)")
 	staticDir := fs.String("static", "", "directory to serve as static files (e.g. ../ui/dist)")
 	dbURL := fs.String("database-url", "", "PostgreSQL connection URL (env: DATABASE_URL)")
-	dockerRegistry := fs.String("docker-registry", "", "Docker registry URL (env: DOCKER_REGISTRY)")
-	dockerImage := fs.String("docker-image", "", "Docker image name (env: DOCKER_IMAGE)")
-	dockerUsername := fs.String("docker-username", "", "Docker registry username (env: DOCKER_USERNAME)")
-	dockerPassword := fs.String("docker-password", "", "Docker registry password (env: DOCKER_PASSWORD)")
 	sourceCacheDir := fs.String("source-cache-dir", "", "Git object cache directory (env: KESTRIX_SOURCE_CACHE_DIR)")
 	sourceCacheMaxAge := fs.Duration("source-cache-max-age", 0, "maximum age of an unused Git cache entry (env: KESTRIX_SOURCE_CACHE_MAX_AGE)")
 	sourceCacheMaxBytes := fs.Int64("source-cache-max-bytes", 0, "maximum total Git cache bytes (env: KESTRIX_SOURCE_CACHE_MAX_BYTES)")
@@ -163,17 +211,14 @@ func cmdServe(args []string) {
 	}
 	env := config.Current()
 
-	// Load config from file (defaults if missing).
+	// Load config from file (defaults if missing), then reconcile once:
+	// file → environment (absent keys only) → flags (non-zero wins).
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := cfg.ApplySourceCacheEnvironment(env); err != nil {
-		fmt.Fprintf(os.Stderr, "config: %v\n", err)
-		os.Exit(1)
-	}
-	if err := cfg.ApplyRunnerEnvironment(env); err != nil {
+	if err := cfg.ApplyEnvironment(env); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
@@ -196,140 +241,32 @@ func cmdServe(args []string) {
 		fmt.Fprintln(os.Stderr, "config: source-cache-max-bytes must be positive")
 		os.Exit(1)
 	}
-	cfg.ApplySourceCacheFlags(*sourceCacheDir, *sourceCacheMaxAge, *sourceCacheMaxBytes)
+	if err := cfg.ApplyFlags(config.FlagValues{
+		ListenAddr:          *addr,
+		PipelineDir:         *dir,
+		Branch:              *branchFlag,
+		WebhookSecret:       *secret,
+		DispatchProjectRaw:  *dispatchFlag,
+		GitLabURL:           *gitlabURL,
+		GitLabToken:         *gitlabToken,
+		DatabaseURL:         *dbURL,
+		SourceCacheDir:      *sourceCacheDir,
+		SourceCacheMaxAge:   *sourceCacheMaxAge,
+		SourceCacheMaxBytes: *sourceCacheMaxBytes,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
 	if err := cfg.SourceCache.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Resolve secrets from env.
-	if *secret == "" {
-		*secret = env.WebhookSecret
-	}
+	// Webhook method has no yaml form: flag wins, otherwise env.
 	*method = resolveWebhookMethod(*method, env)
-	if *dispatchFlag == "" {
-		*dispatchFlag = env.DispatchProject
-	}
-	if *gitlabToken == "" {
-		*gitlabToken = env.GitLabToken
-	}
-	if *dbURL == "" {
-		*dbURL = env.DatabaseURL
-	}
-	if *dbURL == "" {
-		*dbURL = defaultLocalDatabaseURL
-	}
-	if *dockerRegistry == "" {
-		*dockerRegistry = env.Docker.Registry
-	}
-	if *dockerImage == "" {
-		*dockerImage = env.Docker.Image
-	}
-	if *dockerUsername == "" {
-		*dockerUsername = env.Docker.Username
-	}
-	if *dockerPassword == "" {
-		*dockerPassword = env.Docker.Password
-	}
 
-	// Apply env secrets to config.
-	if *secret != "" {
-		cfg.Webhook.Secret = *secret
-	}
-	if err := cfg.ApplyWebhookEnvironment(env); err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
-		os.Exit(1)
-	}
-	if *gitlabURL != "" {
-		cfg.Dispatch.GitLabURL = *gitlabURL
-	}
-	if *gitlabToken != "" {
-		cfg.Dispatch.GitLabToken = *gitlabToken
-	}
-	if *dispatchFlag != "" {
-		cfg.Dispatch.Enabled = true
-		fmt.Sscanf(*dispatchFlag, "%d", &cfg.Dispatch.ProjectID)
-	}
-	if *branchFlag != "" {
-		cfg.Branch = *branchFlag
-	}
-
-	// Apply CLI flags (non-empty overrides config).
-	if *addr != "" {
-		cfg.ListenAddr = *addr
-	}
-	if *dir != "" {
-		cfg.Pipeline.Dir = *dir
-	}
-	if *method != "" {
-		// method is used for SignatureConfig
-	}
-	if *dockerRegistry != "" {
-		cfg.Docker.Registry = *dockerRegistry
-	}
-	if *dockerImage != "" {
-		cfg.Docker.Image = *dockerImage
-	}
-	if *dockerUsername != "" {
-		cfg.Docker.Username = *dockerUsername
-	}
-	if *dockerPassword != "" {
-		cfg.Docker.Password = *dockerPassword
-	}
-
-	// Convert to web.Config.
-	webCfg := web.Config{
-		ListenAddr:            cfg.ListenAddr,
-		PipelineDir:           cfg.Pipeline.Dir,
-		StaticDir:             *staticDir,
-		DatabaseURL:           *dbURL,
-		MasterKeyPath:         env.MasterKeyPath,
-		JWTSigningKeyPath:     env.JWTSigningKeyPath,
-		IdentityCacheTTL:      env.IdentityCacheTTL,
-		LoginMaxAttempts:      env.LoginMaxAttempts,
-		LoginWindow:           env.LoginWindow,
-		TrustProxyHeader:      env.TrustProxyHeader,
-		ContentSecurityPolicy: env.ContentSecurityPolicy,
-		CookieSecure:          env.CookieSecure,
-		Branch:                cfg.Branch,
-		SourceCache: web.SourceCacheConfig{
-			Directory: cfg.SourceCache.Directory,
-			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),
-			MaxBytes:  cfg.SourceCache.MaxBytes,
-		},
-		HTTPReadTimeout:     env.HTTPReadTimeout,
-		HTTPWriteTimeout:    env.HTTPWriteTimeout,
-		HTTPIdleTimeout:     env.HTTPIdleTimeout,
-		MaxBodyBytes:        env.HTTPMaxBodyBytes,
-		WebhookMaxBodyBytes: env.WebhookMaxBodyBytes,
-		Docker: web.DockerConfig{
-			Registry: cfg.Docker.Registry,
-			Image:    cfg.Docker.Image,
-			Username: cfg.Docker.Username,
-			Password: cfg.Docker.Password,
-		},
-		Signature: web.SignatureConfig{
-			Secret: cfg.Webhook.Secret,
-			Method: *method,
-		},
-		WebhookHistoryLimit: cfg.Webhook.HistoryLimit,
-		Dispatch: web.DispatchConfig{
-			Enabled:     cfg.Dispatch.Enabled,
-			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),
-			GitLabURL:   cfg.Dispatch.GitLabURL,
-			GitLabToken: cfg.Dispatch.GitLabToken,
-		},
-		Runner: web.RunnerConfig{
-			Mode:     cfg.Runner.Mode,
-			Executor: cfg.Runner.Executor,
-		},
-	}
-
-	// Show config file location.
-	fmt.Fprintf(os.Stderr, "config: %s\n", *configPath)
-	if _, statErr := os.Stat(*configPath); os.IsNotExist(statErr) {
-		fmt.Fprintf(os.Stderr, "config: no config file found, using defaults + CLI flags\n")
-	}
+	webCfg := buildServeConfig(cfg, env, *staticDir, *method)
+	logConfigSources(os.Stderr, cfg, *configPath)
 
 	server, err := buildServer(webCfg)
 	if err != nil {
@@ -339,6 +276,18 @@ func cmdServe(args []string) {
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// logConfigSources names which source won for each multi-form setting
+// without printing any value, so operators can audit precedence flips.
+func logConfigSources(w io.Writer, cfg *config.Config, configPath string) {
+	fmt.Fprintf(w, "config: %s\n", configPath)
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+		fmt.Fprintf(w, "config: no config file found, using defaults + CLI flags\n")
+	}
+	for _, line := range cfg.SourceReport() {
+		fmt.Fprintf(w, "config: %s\n", line)
 	}
 }
 

@@ -5,9 +5,12 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -32,20 +35,110 @@ type Config struct {
 	Pipeline    PipelineConfig    `yaml:"pipeline"`
 	Webhook     WebhookConfig     `yaml:"webhook"`
 	Dispatch    DispatchConfig    `yaml:"dispatch"`
-	Docker      DockerConfig      `yaml:"docker"`
 	Runner      RunnerConfig      `yaml:"runner"`
 	SourceCache SourceCacheConfig `yaml:"source_cache"`
 
-	sourceCacheDirectorySet bool
-	sourceCacheMaxAgeSet    bool
-	sourceCacheMaxBytesSet  bool
+	// presence records which multi-form settings (multiFormSettingKeys) the
+	// config file explicitly set, even to an empty/zero value. Only Load
+	// writes it; ApplyEnvironment only reads it via isSet.
+	presence map[string]bool
 
-	runnerDockerPIDsSet    bool
-	runnerDockerMemorySet  bool
-	runnerDockerCPUsSet    bool
-	runnerDockerUserSet    bool
-	runnerDockerNetworkSet bool
-	runnerCancelGraceSet   bool
+	sources map[string]string
+}
+
+func (c *Config) isSet(key string) bool {
+	return c.presence[key]
+}
+
+func (c *Config) markSet(key string) {
+	if c.presence == nil {
+		c.presence = make(map[string]bool, len(multiFormSettingKeys))
+	}
+	c.presence[key] = true
+}
+
+// Multi-form setting keys: named constants so a typo at a call site is a
+// compile error (undefined identifier) instead of a silently-ignored string
+// mismatch. Exported so other packages (e.g. cmd/kestrix's precedence table)
+// reference the same identifiers instead of hand-authoring the key strings.
+// multiFormSettingKeys itself stays unexported: nothing outside this package
+// needs the full ordered list, and exporting a mutable slice would let an
+// importer's stray append/write corrupt it for every Config in the process.
+const (
+	KeyListenAddr           = "listen_addr"
+	KeyDatabaseURL          = "database_url"
+	KeyDefaultBranch        = "default_branch"
+	KeyPipelineDir          = "pipeline.dir"
+	KeyWebhookSecret        = "webhook.secret"
+	KeyWebhookHistoryLimit  = "webhook.history_limit"
+	KeyDispatchProjectID    = "dispatch.project_id"
+	KeyDispatchGitLabURL    = "dispatch.gitlab_url"
+	KeyDispatchGitLabToken  = "dispatch.gitlab_token"
+	KeySourceCacheDirectory = "source_cache.directory"
+	KeySourceCacheMaxAge    = "source_cache.max_age"
+	KeySourceCacheMaxBytes  = "source_cache.max_bytes"
+	KeyRunnerDockerPIDs     = "runner.docker_pids"
+	KeyRunnerDockerMemory   = "runner.docker_memory"
+	KeyRunnerDockerCPUs     = "runner.docker_cpus"
+	KeyRunnerDockerUser     = "runner.docker_user"
+	KeyRunnerDockerNetwork  = "runner.docker_network"
+	KeyRunnerCancelGrace    = "runner.cancel_grace"
+)
+
+// multiFormSettingKeys lists every setting with more than one configuration
+// form, in SourceReport order. One list feeds DefaultConfig, SourceReport,
+// and the count assertions so adding a setting touches a single literal.
+var multiFormSettingKeys = []string{
+	KeyListenAddr, KeyDatabaseURL, KeyDefaultBranch, KeyPipelineDir,
+	KeyWebhookSecret, KeyWebhookHistoryLimit,
+	KeyDispatchProjectID, KeyDispatchGitLabURL, KeyDispatchGitLabToken,
+	KeySourceCacheDirectory, KeySourceCacheMaxAge, KeySourceCacheMaxBytes,
+	KeyRunnerDockerPIDs, KeyRunnerDockerMemory, KeyRunnerDockerCPUs,
+	KeyRunnerDockerUser, KeyRunnerDockerNetwork, KeyRunnerCancelGrace,
+}
+
+// SourceReport names which source won for each multi-form setting without
+// printing any value.
+func (c *Config) SourceReport() []string {
+	out := make([]string, 0, len(multiFormSettingKeys))
+	for _, k := range multiFormSettingKeys {
+		src := "default"
+		if c.sources != nil {
+			if s, ok := c.sources[k]; ok && s != "" {
+				src = s
+			}
+		}
+		out = append(out, k+" source="+src)
+	}
+	return out
+}
+
+func (c *Config) setSource(key, src string) {
+	if c.sources == nil {
+		c.sources = make(map[string]string, len(multiFormSettingKeys))
+	}
+	c.sources[key] = src
+}
+
+// FlagValues carries parsed CLI flag values for ApplyFlags. ApplyFlags
+// applies only non-zero entries, so a flag wins over the file and the
+// environment. Today only the `serve` subcommand populates it.
+type FlagValues struct {
+	ListenAddr    string
+	PipelineDir   string
+	Branch        string
+	WebhookSecret string
+	// DispatchProjectRaw holds the raw --dispatch value; ApplyFlags parses
+	// it via parseDispatchProject, so only a positive integer enables
+	// dispatch. The Raw suffix separates it from the reconciled int
+	// Config.Dispatch.ProjectID.
+	DispatchProjectRaw  string
+	GitLabURL           string
+	GitLabToken         string
+	DatabaseURL         string
+	SourceCacheDir      string
+	SourceCacheMaxAge   time.Duration
+	SourceCacheMaxBytes int64
 }
 
 // Duration is a YAML duration encoded with Go duration syntax, for example
@@ -105,8 +198,6 @@ func (c SourceCacheConfig) Validate() error {
 type RunnerConfig struct {
 	// Mode selects the execution backend: "local" (direct sh -c) or "gitlab-runner" (gitlab-runner exec).
 	Mode string `yaml:"mode"`
-	// Executor is the gitlab-runner executor to use (shell, docker, etc.). Only used with mode=gitlab-runner.
-	Executor string `yaml:"executor"`
 	// DockerPIDs, DockerMemory, and DockerCPUs bound a Docker task's
 	// process count, memory, and CPU share. DockerUser and DockerNetwork
 	// set its user and network. See task-execution-isolation.
@@ -118,14 +209,6 @@ type RunnerConfig struct {
 	// CancelGrace bounds how long a cancelled task gets to exit before
 	// being killed.
 	CancelGrace Duration `yaml:"cancel_grace"`
-}
-
-// DockerConfig holds Docker registry and deployment settings.
-type DockerConfig struct {
-	Registry string `yaml:"registry"`
-	Image    string `yaml:"image"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
 }
 
 // PipelineConfig controls pipeline parsing behavior.
@@ -145,6 +228,18 @@ type WebhookConfig struct {
 // limit is configured.
 const DefaultWebhookHistoryLimit = 1000
 
+// parseDispatchProject strictly parses a --dispatch / KESTRIX_DISPATCH_PROJECT
+// value: only a positive decimal integer enables dispatch. Prefixes like
+// "222evil", zero, negatives, and non-numeric input are rejected so a typo
+// can never silently enable outbound dispatch.
+func parseDispatchProject(raw string) (int, bool) {
+	id, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
 // DispatchConfig controls GitLab pipeline dispatch.
 type DispatchConfig struct {
 	Enabled     bool   `yaml:"enabled"`
@@ -155,7 +250,7 @@ type DispatchConfig struct {
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		ListenAddr: ":8080",
 		Branch:     "main",
 		Pipeline: PipelineConfig{
@@ -169,7 +264,6 @@ func DefaultConfig() *Config {
 		},
 		Runner: RunnerConfig{
 			Mode:          "local",
-			Executor:      "shell",
 			DockerPIDs:    256,
 			DockerMemory:  "2g",
 			DockerCPUs:    "2",
@@ -181,7 +275,12 @@ func DefaultConfig() *Config {
 			MaxAge:    Duration(30 * 24 * time.Hour),
 			MaxBytes:  10 << 30,
 		},
+		sources: make(map[string]string, len(multiFormSettingKeys)),
 	}
+	for _, k := range multiFormSettingKeys {
+		cfg.sources[k] = "default"
+	}
+	return cfg
 }
 
 // DefaultDir returns ~/.kestrix, creating it if needed.
@@ -206,7 +305,35 @@ func DefaultPath() string {
 	return filepath.Join(home, ".kestrix", "config.yaml")
 }
 
+// decodeStrict unmarshals YAML with unknown keys rejected. The returned
+// error names the key but never echoes a value from the file.
+func decodeStrict(data []byte, target any, path string) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(target); err != nil {
+		return fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return nil
+}
+
+// withRemovedKeyHint appends a migration pointer when startup fails on a key
+// Kestrix used to accept but removed. Any other unknown key fails with just
+// the key name and file path, never a value from the file.
+func withRemovedKeyHint(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "field docker not found"):
+		return fmt.Errorf("%w; the `docker:` block was removed: registry credentials reach tasks only via KESTRIX_RUNNER_ENV_PASSTHROUGH", err)
+	case strings.Contains(msg, "field executor not found"):
+		return fmt.Errorf("%w; `runner.executor` was removed and had no effect", err)
+	default:
+		return err
+	}
+}
+
 // Load reads config from the given YAML file. Missing file → defaults.
+// Unknown keys fail startup naming the key and file path, without echoing
+// any value from the file.
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -218,10 +345,31 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	if err := unmarshalYAML(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+	if err := decodeStrict(data, cfg, path); err != nil {
+		return nil, withRemovedKeyHint(err)
 	}
-	var presence struct {
+	// explicit decodes the same file a second time with pointer fields, so a
+	// present-but-empty/zero YAML key is distinguishable from an absent one.
+	// The markFile call sites below read explicit's fields and feed the
+	// result into Config.presence via markSet. explicit and Config.presence
+	// are named differently because they're different things - a decode-time
+	// snapshot versus the map it populates - not because they're unrelated.
+	var explicit struct {
+		ListenAddr  *string `yaml:"listen_addr"`
+		DatabaseURL *string `yaml:"database_url"`
+		Branch      *string `yaml:"default_branch"`
+		Pipeline    *struct {
+			Dir *string `yaml:"dir"`
+		} `yaml:"pipeline"`
+		Webhook *struct {
+			Secret       *string `yaml:"secret"`
+			HistoryLimit *int    `yaml:"history_limit"`
+		} `yaml:"webhook"`
+		Dispatch *struct {
+			ProjectID   *int    `yaml:"project_id"`
+			GitLabURL   *string `yaml:"gitlab_url"`
+			GitLabToken *string `yaml:"gitlab_token"`
+		} `yaml:"dispatch"`
 		SourceCache *struct {
 			Directory *string   `yaml:"directory"`
 			MaxAge    *Duration `yaml:"max_age"`
@@ -236,111 +384,161 @@ func Load(path string) (*Config, error) {
 			CancelGrace   *Duration `yaml:"cancel_grace"`
 		} `yaml:"runner"`
 	}
-	if err := unmarshalYAML(data, &presence); err != nil {
-		return nil, fmt.Errorf("parse config presence: %w", err)
+	// Presence tracks only multi-form keys; other known keys (enabled,
+	// mode, default_branch siblings) are ignored here, so this decode
+	// stays non-strict while the main decode above rejects unknown keys.
+	if err := unmarshalYAML(data, &explicit); err != nil {
+		return nil, fmt.Errorf("decode explicit config keys in %s: %w", path, err)
 	}
-	if presence.SourceCache != nil {
-		cfg.sourceCacheDirectorySet = presence.SourceCache.Directory != nil
-		cfg.sourceCacheMaxAgeSet = presence.SourceCache.MaxAge != nil
-		cfg.sourceCacheMaxBytesSet = presence.SourceCache.MaxBytes != nil
+	// markFile records a key as file-set and its winning source in one step;
+	// presence and sources always agree for file-set keys.
+	markFile := func(key string, set bool) {
+		if set {
+			cfg.markSet(key)
+			cfg.setSource(key, "file")
+		}
 	}
-	if presence.Runner != nil {
-		cfg.runnerDockerPIDsSet = presence.Runner.DockerPIDs != nil
-		cfg.runnerDockerMemorySet = presence.Runner.DockerMemory != nil
-		cfg.runnerDockerCPUsSet = presence.Runner.DockerCPUs != nil
-		cfg.runnerDockerUserSet = presence.Runner.DockerUser != nil
-		cfg.runnerDockerNetworkSet = presence.Runner.DockerNetwork != nil
-		cfg.runnerCancelGraceSet = presence.Runner.CancelGrace != nil
+	markFile(KeyListenAddr, explicit.ListenAddr != nil)
+	markFile(KeyDatabaseURL, explicit.DatabaseURL != nil)
+	markFile(KeyDefaultBranch, explicit.Branch != nil)
+	if explicit.Pipeline != nil {
+		markFile(KeyPipelineDir, explicit.Pipeline.Dir != nil)
 	}
-	if cfg.Webhook.HistoryLimit <= 0 {
-		cfg.Webhook.HistoryLimit = DefaultWebhookHistoryLimit
+	if explicit.Webhook != nil {
+		markFile(KeyWebhookSecret, explicit.Webhook.Secret != nil)
+		markFile(KeyWebhookHistoryLimit, explicit.Webhook.HistoryLimit != nil)
 	}
+	if explicit.Dispatch != nil {
+		markFile(KeyDispatchProjectID, explicit.Dispatch.ProjectID != nil)
+		markFile(KeyDispatchGitLabURL, explicit.Dispatch.GitLabURL != nil)
+		markFile(KeyDispatchGitLabToken, explicit.Dispatch.GitLabToken != nil)
+	}
+	if explicit.SourceCache != nil {
+		markFile(KeySourceCacheDirectory, explicit.SourceCache.Directory != nil)
+		markFile(KeySourceCacheMaxAge, explicit.SourceCache.MaxAge != nil)
+		markFile(KeySourceCacheMaxBytes, explicit.SourceCache.MaxBytes != nil)
+	}
+	if explicit.Runner != nil {
+		markFile(KeyRunnerDockerPIDs, explicit.Runner.DockerPIDs != nil)
+		markFile(KeyRunnerDockerMemory, explicit.Runner.DockerMemory != nil)
+		markFile(KeyRunnerDockerCPUs, explicit.Runner.DockerCPUs != nil)
+		markFile(KeyRunnerDockerUser, explicit.Runner.DockerUser != nil)
+		markFile(KeyRunnerDockerNetwork, explicit.Runner.DockerNetwork != nil)
+		markFile(KeyRunnerCancelGrace, explicit.Runner.CancelGrace != nil)
+	}
+	cfg.normalizeWebhookHistoryLimit()
 
 	return cfg, nil
 }
 
-// ApplyWebhookEnvironment applies the canonical webhook history limit from the
-// environment. The environment wins over the config file so operators can tune
-// retention per deployment without editing a mounted file.
-func (c *Config) ApplyWebhookEnvironment(env *Environment) error {
-	if env == nil {
-		return nil
-	}
-	if err := env.ValidationError(); err != nil {
-		return err
-	}
-	if env.WebhookHistoryLimit > 0 {
-		c.Webhook.HistoryLimit = env.WebhookHistoryLimit
-	}
+// normalizeWebhookHistoryLimit resets a non-positive history limit to the
+// default. Load and ApplyEnvironment both call it: Load must self-normalize
+// when called standalone, and ApplyEnvironment may still leave a non-positive
+// value if neither the file nor the environment set one.
+func (c *Config) normalizeWebhookHistoryLimit() {
 	if c.Webhook.HistoryLimit <= 0 {
 		c.Webhook.HistoryLimit = DefaultWebhookHistoryLimit
 	}
-	return nil
 }
 
-// ApplySourceCacheEnvironment applies canonical environment values only where
-// the config file did not explicitly provide the corresponding setting.
-func (c *Config) ApplySourceCacheEnvironment(env *Environment) error {
+// ApplyEnvironment fills only keys the config file did not set from the
+// canonical environment. The file wins over the environment; flags win over
+// both via ApplyFlags. An explicitly empty file value counts as set and is
+// never filled from the environment.
+func (c *Config) ApplyEnvironment(env *Environment) error {
 	if env == nil {
 		return nil
 	}
 	if err := env.ValidationError(); err != nil {
 		return err
 	}
-	if !c.sourceCacheDirectorySet && env.SourceCache.Directory != "" {
+	// Validate dispatch first: it is the only field here that can still fail
+	// after this point, so validating it before any other field is mutated
+	// keeps this function atomic - either everything applies or c is
+	// untouched.
+	if !c.isSet(KeyDispatchProjectID) && env.DispatchProject != "" {
+		projectID, ok := parseDispatchProject(env.DispatchProject)
+		if !ok {
+			return fmt.Errorf("KESTRIX_DISPATCH_PROJECT must be a positive integer")
+		}
+		c.Dispatch.ProjectID = projectID
+		c.Dispatch.Enabled = true
+		c.setSource(KeyDispatchProjectID, "env")
+	}
+	if !c.isSet(KeyListenAddr) && env.ListenAddr != "" {
+		c.ListenAddr = env.ListenAddr
+		c.setSource(KeyListenAddr, "env")
+	}
+	if !c.isSet(KeyDatabaseURL) && env.DatabaseURL != "" {
+		c.DatabaseURL = env.DatabaseURL
+		c.setSource(KeyDatabaseURL, "env")
+	}
+	if !c.isSet(KeyPipelineDir) && env.PipelineDir != "" {
+		c.Pipeline.Dir = env.PipelineDir
+		c.setSource(KeyPipelineDir, "env")
+	}
+	if !c.isSet(KeyWebhookSecret) && env.WebhookSecret != "" {
+		c.Webhook.Secret = env.WebhookSecret
+		c.setSource(KeyWebhookSecret, "env")
+	}
+	if !c.isSet(KeyWebhookHistoryLimit) && env.WebhookHistoryLimit > 0 {
+		c.Webhook.HistoryLimit = env.WebhookHistoryLimit
+		c.setSource(KeyWebhookHistoryLimit, "env")
+	}
+	if !c.isSet(KeyDispatchGitLabURL) && env.GitLabURL != "" {
+		c.Dispatch.GitLabURL = env.GitLabURL
+		c.setSource(KeyDispatchGitLabURL, "env")
+	}
+	if !c.isSet(KeyDispatchGitLabToken) && env.GitLabToken != "" {
+		c.Dispatch.GitLabToken = env.GitLabToken
+		c.setSource(KeyDispatchGitLabToken, "env")
+	}
+	if !c.isSet(KeySourceCacheDirectory) && env.SourceCache.Directory != "" {
 		c.SourceCache.Directory = env.SourceCache.Directory
+		c.setSource(KeySourceCacheDirectory, "env")
 	}
-	if !c.sourceCacheMaxAgeSet && env.SourceCache.MaxAge > 0 {
+	if !c.isSet(KeySourceCacheMaxAge) && env.SourceCache.MaxAge > 0 {
 		c.SourceCache.MaxAge = Duration(env.SourceCache.MaxAge)
+		c.setSource(KeySourceCacheMaxAge, "env")
 	}
-	if !c.sourceCacheMaxBytesSet && env.SourceCache.MaxBytes > 0 {
+	if !c.isSet(KeySourceCacheMaxBytes) && env.SourceCache.MaxBytes > 0 {
 		c.SourceCache.MaxBytes = env.SourceCache.MaxBytes
+		c.setSource(KeySourceCacheMaxBytes, "env")
 	}
-	return nil
-}
-
-// ApplyRunnerEnvironment applies canonical Docker-hardening and cancel-grace
-// environment values only where the config file did not explicitly provide
-// the corresponding setting, mirroring ApplySourceCacheEnvironment.
-func (c *Config) ApplyRunnerEnvironment(env *Environment) error {
-	if env == nil {
-		return nil
-	}
-	if err := env.ValidationError(); err != nil {
-		return err
-	}
-	if !c.runnerDockerPIDsSet && env.RunnerDockerPIDs > 0 {
+	if !c.isSet(KeyRunnerDockerPIDs) && env.RunnerDockerPIDs > 0 {
 		c.Runner.DockerPIDs = env.RunnerDockerPIDs
+		c.setSource(KeyRunnerDockerPIDs, "env")
 	}
-	if !c.runnerDockerMemorySet && env.RunnerDockerMemory != "" {
+	if !c.isSet(KeyRunnerDockerMemory) && env.RunnerDockerMemory != "" {
 		c.Runner.DockerMemory = env.RunnerDockerMemory
+		c.setSource(KeyRunnerDockerMemory, "env")
 	}
-	if !c.runnerDockerCPUsSet && env.RunnerDockerCPUs != "" {
+	if !c.isSet(KeyRunnerDockerCPUs) && env.RunnerDockerCPUs != "" {
 		c.Runner.DockerCPUs = env.RunnerDockerCPUs
+		c.setSource(KeyRunnerDockerCPUs, "env")
 	}
-	if !c.runnerDockerUserSet && env.RunnerDockerUser != "" {
+	if !c.isSet(KeyRunnerDockerUser) && env.RunnerDockerUser != "" {
 		c.Runner.DockerUser = env.RunnerDockerUser
+		c.setSource(KeyRunnerDockerUser, "env")
 	}
-	if !c.runnerDockerNetworkSet && env.RunnerDockerNetwork != "" {
+	if !c.isSet(KeyRunnerDockerNetwork) && env.RunnerDockerNetwork != "" {
 		c.Runner.DockerNetwork = env.RunnerDockerNetwork
+		c.setSource(KeyRunnerDockerNetwork, "env")
 	}
-	if !c.runnerCancelGraceSet {
+	// No env.RunnerCancelGrace != zero guard, unlike the other branches: 0 is
+	// a legitimate parsed value here (KESTRIX_RUNNER_CANCEL_GRACE=0s means an
+	// explicit no-grace override; environment.go only rejects parsed < 0), so
+	// zero can't serve as the "env var unset" sentinel the other branches use.
+	// This branch therefore always applies env.RunnerCancelGrace when the
+	// file didn't set it - which is either an explicit override or
+	// environment.go's own 10s default - and marks the source "env" even
+	// when the process environment never set the variable at all.
+	if !c.isSet(KeyRunnerCancelGrace) {
 		c.Runner.CancelGrace = Duration(env.RunnerCancelGrace)
+		c.setSource(KeyRunnerCancelGrace, "env")
 	}
+	c.normalizeWebhookHistoryLimit()
 	return nil
-}
-
-// ApplySourceCacheFlags applies non-zero explicit CLI values last.
-func (c *Config) ApplySourceCacheFlags(directory string, maxAge time.Duration, maxBytes int64) {
-	if directory != "" {
-		c.SourceCache.Directory = directory
-	}
-	if maxAge != 0 {
-		c.SourceCache.MaxAge = Duration(maxAge)
-	}
-	if maxBytes != 0 {
-		c.SourceCache.MaxBytes = maxBytes
-	}
 }
 
 // Save writes the config to the given path.
@@ -358,24 +556,62 @@ func Save(path string, cfg *Config) error {
 	return writeFile(path, data, 0o600)
 }
 
-// ApplyFlags overrides config values with non-empty CLI flags.
-func (c *Config) ApplyFlags(listenAddr, pipelineDir, branch, gitlabToken string, dispatchEnabled bool, projectID int) {
-	if listenAddr != "" {
-		c.ListenAddr = listenAddr
-	}
-	if pipelineDir != "" {
-		c.Pipeline.Dir = pipelineDir
-	}
-	if branch != "" {
-		c.Branch = branch
-	}
-	if gitlabToken != "" {
-		c.Dispatch.GitLabToken = gitlabToken
-	}
-	if dispatchEnabled {
-		c.Dispatch.Enabled = true
-	}
-	if projectID > 0 {
+// ApplyFlags overrides config values with non-zero CLI flags. Flags win
+// over both the file and the environment. An invalid flag value fails
+// startup with an error instead of being silently ignored.
+func (c *Config) ApplyFlags(f FlagValues) error {
+	// Validate dispatch first: it is the only field here that can still fail
+	// after this point, so validating it before any other field is mutated
+	// keeps this function atomic - either everything applies or c is
+	// untouched.
+	if f.DispatchProjectRaw != "" {
+		projectID, ok := parseDispatchProject(f.DispatchProjectRaw)
+		if !ok {
+			return fmt.Errorf("--dispatch must be a positive integer")
+		}
 		c.Dispatch.ProjectID = projectID
+		c.Dispatch.Enabled = true
+		c.setSource(KeyDispatchProjectID, "flag")
 	}
+	if f.ListenAddr != "" {
+		c.ListenAddr = f.ListenAddr
+		c.setSource(KeyListenAddr, "flag")
+	}
+	if f.PipelineDir != "" {
+		c.Pipeline.Dir = f.PipelineDir
+		c.setSource(KeyPipelineDir, "flag")
+	}
+	if f.Branch != "" {
+		c.Branch = f.Branch
+		c.setSource(KeyDefaultBranch, "flag")
+	}
+	if f.WebhookSecret != "" {
+		c.Webhook.Secret = f.WebhookSecret
+		c.setSource(KeyWebhookSecret, "flag")
+	}
+	if f.GitLabURL != "" {
+		c.Dispatch.GitLabURL = f.GitLabURL
+		c.setSource(KeyDispatchGitLabURL, "flag")
+	}
+	if f.GitLabToken != "" {
+		c.Dispatch.GitLabToken = f.GitLabToken
+		c.setSource(KeyDispatchGitLabToken, "flag")
+	}
+	if f.DatabaseURL != "" {
+		c.DatabaseURL = f.DatabaseURL
+		c.setSource(KeyDatabaseURL, "flag")
+	}
+	if f.SourceCacheDir != "" {
+		c.SourceCache.Directory = f.SourceCacheDir
+		c.setSource(KeySourceCacheDirectory, "flag")
+	}
+	if f.SourceCacheMaxAge != 0 {
+		c.SourceCache.MaxAge = Duration(f.SourceCacheMaxAge)
+		c.setSource(KeySourceCacheMaxAge, "flag")
+	}
+	if f.SourceCacheMaxBytes != 0 {
+		c.SourceCache.MaxBytes = f.SourceCacheMaxBytes
+		c.setSource(KeySourceCacheMaxBytes, "flag")
+	}
+	return nil
 }
