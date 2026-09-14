@@ -1,4 +1,5 @@
 import { Box, Typography } from '@mui/material';
+import AccountsSection from '../components/accounts/AccountsSection.jsx';
 import RepositoryCredentialsSection from '../components/credentials/RepositoryCredentialsSection.jsx';
 
 export default function Settings() {
@@ -9,6 +10,7 @@ export default function Settings() {
         Manage application-wide integrations and protected repository access.
       </Typography>
       <RepositoryCredentialsSection />
+      <AccountsSection />
     </Box>
   );
 }

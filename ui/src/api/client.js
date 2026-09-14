@@ -330,3 +330,46 @@ export async function revokeCredential(ref) {
   const res = await apiFetch(`${API_BASE}/api/credentials/${encodeURIComponent(ref)}/revoke`, { method: 'POST' });
   if (!res.ok) throw new Error(`Revoke credential failed: ${res.statusText}`);
 }
+
+// ─── Accounts (admin-only account administration) ───────────────
+
+export async function listAccounts() {
+  const res = await apiFetch(`${API_BASE}/api/users`);
+  if (!res.ok) throw new Error(`List accounts failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createAccount(input) {
+  const res = await apiFetch(`${API_BASE}/api/users`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Create account failed: ${res.statusText}`);
+  return data;
+}
+
+export async function setAccountRole(name, role) {
+  const res = await apiFetch(`${API_BASE}/api/users/${encodeURIComponent(name)}/role`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Update role failed: ${res.statusText}`);
+  return data;
+}
+
+export async function setAccountGrants(name, grants) {
+  const res = await apiFetch(`${API_BASE}/api/users/${encodeURIComponent(name)}/grants`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grants }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Update grants failed: ${res.statusText}`);
+  return data;
+}
+
+export async function deleteAccount(name) {
+  const res = await apiFetch(`${API_BASE}/api/users/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Delete account failed: ${res.statusText}`);
+  }
+}

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createCredential, createProject, getWebhookLogs, listCredentials, saveProjectPipeline,
+  createAccount, createCredential, createProject, deleteAccount, getWebhookLogs, listAccounts,
+  listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
   login, logout, me, setUnauthorizedHandler, healthCheck, listProjects,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
@@ -255,6 +256,117 @@ test('login posts credentials without an Authorization header and returns the to
   assert.deepEqual(JSON.parse(captured.options.body), { name: 'alice', password: 's3cret' });
   assert.equal('Authorization' in (captured.options.headers || {}), false);
   assert.equal(resp.token, 'fresh-token');
+});
+
+test('listAccounts requests the users endpoint', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, method: options.method || 'GET' };
+    return new Response(JSON.stringify({ items: [{ name: 'alice', role: 'admin' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const data = await listAccounts();
+
+  assert.equal(captured.url, '/api/users');
+  assert.equal(captured.method, 'GET');
+  assert.deepEqual(data.items, [{ name: 'alice', role: 'admin' }]);
+});
+
+test('createAccount posts the name, password, and role', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ name: 'bob', role: 'viewer' }), {
+      status: 201, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const created = await createAccount({ name: 'bob', password: 's3cret', role: 'viewer' });
+
+  assert.equal(captured.url, '/api/users');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), { name: 'bob', password: 's3cret', role: 'viewer' });
+  assert.equal(created.name, 'bob');
+});
+
+test('createAccount throws the server-provided error on a duplicate name', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'user already exists' }), {
+    status: 409, headers: { 'Content-Type': 'application/json' },
+  });
+
+  await assert.rejects(
+    createAccount({ name: 'bob', password: 's3cret', role: 'viewer' }),
+    /user already exists/,
+  );
+});
+
+test('setAccountRole puts the new role to the account role route', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ name: 'bob', role: 'operator' }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  await setAccountRole('bob', 'operator');
+
+  assert.equal(captured.url, '/api/users/bob/role');
+  assert.equal(captured.options.method, 'PUT');
+  assert.deepEqual(JSON.parse(captured.options.body), { role: 'operator' });
+});
+
+test('setAccountGrants puts the full desired grant set to the account grants route', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ name: 'bob', grants: [{ project_name: 'demo', role: 'operator' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  await setAccountGrants('bob', [{ project_name: 'demo', role: 'operator' }]);
+
+  assert.equal(captured.url, '/api/users/bob/grants');
+  assert.equal(captured.options.method, 'PUT');
+  assert.deepEqual(JSON.parse(captured.options.body), { grants: [{ project_name: 'demo', role: 'operator' }] });
+});
+
+test('deleteAccount deletes the account route', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(null, { status: 204 });
+  };
+
+  await deleteAccount('bob');
+
+  assert.equal(captured.url, '/api/users/bob');
+  assert.equal(captured.options.method, 'DELETE');
+});
+
+test('deleteAccount throws the server-provided error on failure', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'user not found' }), {
+    status: 404, headers: { 'Content-Type': 'application/json' },
+  });
+
+  await assert.rejects(deleteAccount('ghost'), /user not found/);
 });
 
 test('login throws the server-provided error message on failure', async (t) => {

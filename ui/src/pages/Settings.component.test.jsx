@@ -4,6 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, test, vi } from 'vitest';
 import Settings from './Settings.jsx';
 
+vi.mock('../context/AuthContext.jsx', () => ({
+  useAuth: () => ({ roleAtLeast: () => true }),
+}));
+
 let items;
 let listCalls;
 
@@ -30,6 +34,11 @@ beforeEach(() => {
     if (url === '/api/credentials/cred_gitlab/revoke' && options.method === 'POST') {
       items = items.map(item => item.ref === 'cred_gitlab' ? { ...item, revoked: true } : item);
       return new Response(null, { status: 204 });
+    }
+    if (url === '/api/users' && !options.method) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
     }
     throw new Error(`unexpected request: ${options.method || 'GET'} ${url}`);
   });

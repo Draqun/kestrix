@@ -126,7 +126,9 @@ account's global role and its grant - a grant can raise access on one
 project, never lower it. A global `operator` therefore keeps operator access
 everywhere regardless of any grant.
 
-Manage grants as an administrator:
+Manage grants as an administrator, either from the Settings page's Accounts
+section (create, promote, grant, and delete accounts without scripting HTTP
+calls) or directly against the API:
 
 ```bash
 curl -X PUT http://localhost:8080/api/users/alice/grants \
@@ -135,7 +137,11 @@ curl -X PUT http://localhost:8080/api/users/alice/grants \
 ```
 
 The request replaces the account's full grant set: a project omitted from the
-list loses its grant.
+list loses its grant. The Accounts section's grant control always sends the
+full replacement set the same way, one field at a time (role via `PUT
+.../role`, grants via `PUT .../grants`) rather than a combined update - the
+grant target project must already be registered (`POST /api/projects`) or the
+request is rejected.
 
 ## Revocation
 
