@@ -71,6 +71,12 @@ The source-acquisition port SHALL resolve Git credentials by reference at runtim
 - **THEN** acquisition SHALL fail before any Git process starts
 - **AND** the error SHALL name the type mismatch and SHALL NOT contain the value
 
+#### Scenario: Secret credential refused earlier, at project create or update
+
+- **WHEN** a client creates or updates a project whose `repo_credential_ref`, or whose pipeline declares a `ci_repo` block with a `credential_ref`, resolves to a credential of type `secret`
+- **THEN** Kestrix SHALL reject the request with a validation error before the project is persisted
+- **AND** SHALL name the offending `ci_repo`, when it is a secondary one, rather than only failing later when source acquisition runs
+
 ### Requirement: Support standard Git credential forms
 
 The credential model SHALL support HTTPS token, HTTPS username/password or app password, SSH private key, and optional SSH known-hosts data without requiring provider-specific API clients. The model SHALL additionally support a `secret` form holding one opaque value for run-time use; `provider` and `host` metadata are optional for it and SHALL remain descriptive only.

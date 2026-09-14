@@ -55,7 +55,10 @@ non-zero default). It SHALL attach to the network named by
 `KESTRIX_RUNNER_DOCKER_NETWORK` (default `bridge`) and, when
 `KESTRIX_RUNNER_DOCKER_USER` is set, SHALL run as that user. Kestrix SHALL NOT
 mount the Docker socket, SHALL NOT pass `--privileged`, and SHALL mount only the
-run workspace and the acquired source directories.
+run workspace and the acquired source directories. This hardening applies
+regardless of how the task was started: a full-DAG run, a single-task re-run,
+or an approved manual task in a `docker`-mode project all run through the
+same hardened container construction.
 
 #### Scenario: Default container hardening
 
@@ -68,6 +71,12 @@ run workspace and the acquired source directories.
 - **WHEN** `KESTRIX_RUNNER_DOCKER_NETWORK` is `none`
 - **THEN** a task container SHALL have no network access
 - **AND** a task that needs egress SHALL fail inside the container rather than reach the host network
+
+#### Scenario: Approved manual task is hardened like a DAG task
+
+- **WHEN** a manual task is approved in a project configured for `docker` mode
+- **THEN** the task SHALL run in a container with the same capability, privilege, PID, memory, CPU, network, and user hardening as a `docker`-mode DAG task
+- **AND** it SHALL NOT be executed with a bare host process, unlike a project configured for `local` or `gitlab-runner` mode
 
 #### Scenario: Limit exceeded
 

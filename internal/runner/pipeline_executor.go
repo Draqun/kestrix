@@ -81,6 +81,7 @@ func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, chan
 func (e *PipelineExecutor) RunTask(ctx context.Context, project domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	runnerOpts := Options{
 		WorkDir:               opts.WorkDir,
+		Mode:                  e.Mode,
 		IncludeManual:         true,
 		Variables:             opts.Variables,
 		Stdout:                opts.Stdout,
