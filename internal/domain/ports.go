@@ -299,9 +299,20 @@ type WebhookLogStore interface {
 // callers that need to force that without changing the role or password.
 type UserStore interface {
 	CreateUser(name string, role Role, passwordHash string) (User, error)
+	// CreateFirstUser creates name/role/passwordHash as an account only
+	// while no account exists at all, atomically with the emptiness check;
+	// see first-run-setup design.md D1. It returns ErrSetupDone once any
+	// account exists, and never creates, modifies, or deletes anything in
+	// that case.
+	CreateFirstUser(name string, role Role, passwordHash string) (User, error)
 	GetUser(name string) (User, error)
 	GetUserCredential(name string) (UserCredential, error)
 	ListUsers() ([]User, error)
+	// HasAnyUser reports whether at least one account exists, without
+	// fetching any row - see first-run-setup's "Setup status is
+	// discoverable without credentials" requirement, answered by an
+	// unauthenticated, unthrottled route on every UI mount.
+	HasAnyUser() (bool, error)
 	UpdateUserRole(name string, role Role) error
 	UpdateUserPassword(name string, passwordHash string) error
 	DeleteUser(name string) error

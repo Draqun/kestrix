@@ -187,12 +187,14 @@ func TestClientAddress_FallsBackToRawValueWhenNotHostPort(t *testing.T) {
 }
 
 // newThrottledServer returns a test server with a real accounts store and
-// an explicit login throttle on an injected clock, for the HTTP-level tests
-// below.
+// explicit login and setup throttles - independent instances, matching
+// production wiring in NewServerE - on a shared injected clock, for the
+// HTTP-level tests below.
 func newThrottledServer(t *testing.T, maxAttempts int, window time.Duration, clock *stoppedClock) *Server {
 	t.Helper()
 	srv := NewServer(Config{})
 	srv.loginThrottle = newLoginThrottle(maxAttempts, window, 0, clock.now)
+	srv.setupThrottle = newLoginThrottle(maxAttempts, window, 0, clock.now)
 	return srv
 }
 

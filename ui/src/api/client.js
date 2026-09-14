@@ -69,6 +69,35 @@ export async function logout() {
   }
 }
 
+/** setupStatus reports whether first-run setup is still required. */
+export async function setupStatus() {
+  const res = await apiFetch(`${API_BASE}/api/setup`);
+  if (!res.ok) {
+    const err = new Error('Could not check setup status');
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+/** completeSetup creates the first administrator account. Throws on any
+ * non-2xx, with the response status attached as `.status` so callers can
+ * distinguish 409 (an account was created elsewhere meanwhile). */
+export async function completeSetup(name, password) {
+  const res = await fetch(`${API_BASE}/api/setup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const error = new Error(err.error || 'Setup failed');
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
 export async function healthCheck() {
   const res = await apiFetch(`${API_BASE}/api/health`);
   return res.json();

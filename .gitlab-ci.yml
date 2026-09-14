@@ -8,20 +8,47 @@ default:
   before_script:
     - apk add --no-cache git gcc musl-dev
 
+# ─── Change-based job rules ─────────────────────────────────
+# Every job below only runs when a file it actually depends on changed.
+# A docs/openspec/wiki-only push matches neither list, so no job runs and
+# no pipeline is created at all - nothing left to skip.
+# .gitlab-ci.yml itself is always included so editing the pipeline is
+# validated by its own run.
+
+.go-job-rules:
+  rules:
+    - changes:
+        - "**/*.go"
+        - "go.mod"
+        - "go.sum"
+        - "Makefile"
+        - "scripts/**/*"
+        - ".gitlab-ci.yml"
+
+.fe-job-rules:
+  rules:
+    - changes:
+        - "ui/**/*"
+        - "scripts/**/*"
+        - ".gitlab-ci.yml"
+
 # ─── Analysis ───────────────────────────────────────────────
 
 fmt-check:
+  extends: .go-job-rules
   stage: analysis
   script:
     - test -z "$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
     - echo "✓ Formatting OK"
 
 vet:
+  extends: .go-job-rules
   stage: analysis
   script:
     - go vet ./...
 
 staticcheck:
+  extends: .go-job-rules
   stage: analysis
   # The Makefile owns the pinned staticcheck version so CI and local runs
   # cannot drift apart.
@@ -33,6 +60,7 @@ staticcheck:
 # ─── Test ───────────────────────────────────────────────────
 
 runner-unit-coverage:
+  extends: .go-job-rules
   stage: test
   image: golang:1.25-alpine
   before_script:
@@ -47,6 +75,7 @@ runner-unit-coverage:
     expire_in: 7 days
 
 test:
+  extends: .go-job-rules
   stage: test
   services:
     - name: postgres:16-alpine
@@ -72,6 +101,7 @@ test:
     expire_in: 7 days
 
 test_fe:
+  extends: .fe-job-rules
   stage: test
   image: node:26-alpine
   before_script:
@@ -84,6 +114,7 @@ test_fe:
   coverage: '/all files\s+\|\s+(\d+\.\d+)\s+\|/'
 
 runner-integration:
+  extends: .go-job-rules
   stage: test
   image: golang:1.25-alpine
   services:
@@ -98,6 +129,7 @@ runner-integration:
     - make runner-integration
 
 web-e2e:
+  extends: .go-job-rules
   stage: test
   image: golang:1.25-alpine
   before_script:
@@ -108,6 +140,7 @@ web-e2e:
 # ─── Build ──────────────────────────────────────────────────
 
 build:
+  extends: .go-job-rules
   stage: build
   script:
     - go build -ldflags="-s -w" -o kestrix ./cmd/kestrix

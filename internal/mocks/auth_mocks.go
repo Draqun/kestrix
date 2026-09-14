@@ -38,6 +38,23 @@ func (m *MockUserStore) CreateUser(name string, role domain.Role, passwordHash s
 	return u, nil
 }
 
+// CreateFirstUser mirrors PGStore.CreateFirstUser: it creates name only
+// while m.Users is empty, and returns store.ErrSetupDone otherwise.
+func (m *MockUserStore) CreateFirstUser(name string, role domain.Role, passwordHash string) (domain.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.CreateErr != nil {
+		return domain.User{}, m.CreateErr
+	}
+	if len(m.Users) > 0 {
+		return domain.User{}, store.ErrSetupDone
+	}
+	now := time.Now().UTC()
+	u := domain.User{Name: name, Role: role, TokenVersion: 1, CreatedAt: now, UpdatedAt: now}
+	m.Users[name] = domain.UserCredential{User: u, PasswordHash: passwordHash}
+	return u, nil
+}
+
 func (m *MockUserStore) GetUser(name string) (domain.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -72,6 +89,13 @@ func (m *MockUserStore) ListUsers() ([]domain.User, error) {
 		out = append(out, uc.User)
 	}
 	return out, nil
+}
+
+// HasAnyUser reports whether m.Users has at least one entry.
+func (m *MockUserStore) HasAnyUser() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.Users) > 0, nil
 }
 
 func (m *MockUserStore) UpdateUserRole(name string, role domain.Role) error {

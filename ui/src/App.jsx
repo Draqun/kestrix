@@ -3,6 +3,7 @@ import { ColorModeProvider } from './context/ColorModeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import Setup from './pages/Setup';
 import Dashboard from './pages/Dashboard';
 import { RunList, NewRun, RunProject, RunDetail } from './pages/Pipelines';
 import Projects from './pages/Projects';
@@ -55,9 +56,12 @@ function RunDetailRoutes() {
 
 function AppRoutes() {
   const navigate = useNavigate();
-  const { isAuthenticated, restoring } = useAuth();
+  const { isAuthenticated, restoring, setupRequired } = useAuth();
 
   if (restoring) return null;
+  if (setupRequired) {
+    return <Setup />;
+  }
   if (!isAuthenticated) {
     return <Login />;
   }

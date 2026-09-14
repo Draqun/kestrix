@@ -40,8 +40,8 @@ make build
 ### 2. Provision what the server requires
 
 `serve` refuses to start without PostgreSQL, a credential master key and a JWT
-signing key, and every `/api` route except `/api/health` and the login route
-requires an account. Provision all four once:
+signing key, and every `/api` route except `/api/health`, the login route, and
+first-run setup requires an account. Provision PostgreSQL and both keys once:
 
 ```bash
 # PostgreSQL: starts the local dependencies (PostgreSQL) on the
@@ -56,8 +56,16 @@ mkdir -p ~/.kestrix && (umask 077 && \
   head -c 32 /dev/urandom > ~/.kestrix/jwt.key)
 export KESTRIX_MASTER_KEY_PATH=~/.kestrix/master.key
 export KESTRIX_JWT_SIGNING_KEY_PATH=~/.kestrix/jwt.key
+```
 
-# First administrator; the password is read from the terminal, never a flag
+Kestrix serves no request until an administrator account exists. The UI opens
+directly on a "Create the first administrator" form when it detects a fresh
+instance - just start the server (step 3) and visit it in a browser. For a
+scripted deployment, create the account from the CLI instead, before or after
+`serve` starts; either path produces the same account and closes the other:
+
+```bash
+# The password is read from the terminal, never a flag.
 ./bin/kestrix user create --role admin admin
 ```
 

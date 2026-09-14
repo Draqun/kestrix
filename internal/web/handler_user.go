@@ -26,6 +26,30 @@ func (s *Server) requireUserStore(w http.ResponseWriter) domain.UserStore {
 	return s.userStore
 }
 
+// hashNewPassword hashes password with s.passwordHasher, writing a 500 and
+// reporting ok=false if hashing fails - the shared "hash a new account's
+// password" step used by handleCreateUser and handleCompleteSetup. Callers
+// must already have checked s.passwordHasher != nil (via requirePasswordHasher).
+func (s *Server) hashNewPassword(w http.ResponseWriter, password string) (hash string, ok bool) {
+	hash, err := s.passwordHasher.Hash(password)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hash password")
+		return "", false
+	}
+	return hash, true
+}
+
+// requirePasswordHasher reports whether s.passwordHasher is configured,
+// writing a 503 otherwise - the shared nil-dependency guard used by
+// handleCreateUser and handleCompleteSetup.
+func (s *Server) requirePasswordHasher(w http.ResponseWriter) bool {
+	if s.passwordHasher == nil {
+		writeError(w, http.StatusServiceUnavailable, "password hashing is not configured")
+		return false
+	}
+	return true
+}
+
 func (s *Server) userViewFor(u domain.User) userView {
 	view := userView{User: u}
 	if s.grantStore != nil {
@@ -82,8 +106,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if userStore == nil {
 		return
 	}
-	if s.passwordHasher == nil {
-		writeError(w, http.StatusServiceUnavailable, "password hashing is not configured")
+	if !s.requirePasswordHasher(w) {
 		return
 	}
 	var req createUserRequest
@@ -98,9 +121,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "role must be viewer, operator, or admin")
 		return
 	}
-	hash, err := s.passwordHasher.Hash(req.Password)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "hash password")
+	hash, ok := s.hashNewPassword(w, req.Password)
+	if !ok {
 		return
 	}
 	u, err := userStore.CreateUser(req.Name, req.Role, hash)

@@ -1,5 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { login as apiLogin, logout as apiLogout, me as apiMe, setUnauthorizedHandler } from '../api/client';
+import {
+  login as apiLogin, logout as apiLogout, me as apiMe, setUnauthorizedHandler,
+  setupStatus as apiSetupStatus, completeSetup as apiCompleteSetup,
+} from '../api/client';
 
 // ROLE_RANK mirrors the ordering internal/domain.Role enforces server-side
 // (viewer < operator < admin). It exists here only to hide actions a role
@@ -17,6 +20,10 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [claims, setClaims] = useState(NO_SESSION);
+  // setupRequired mirrors GET /api/setup, resolved on mount alongside /me -
+  // see first-run-setup design.md D5. It lets App.jsx route to Setup before
+  // any protected page, or before the ordinary login form.
+  const [setupRequired, setSetupRequired] = useState(false);
   // restoring covers the one GET /api/auth/me a mount fires to ask the
   // HttpOnly cookie whether a session already exists - there is nothing to
   // decode client-side any more. AppRoutes must not decide login-vs-app
@@ -32,14 +39,20 @@ export function AuthProvider({ children }) {
   }, [clearSession]);
 
   useEffect(() => {
-    apiMe()
-      .then((session) => setClaims({ name: session.name, role: session.role }))
-      // Only a 401 is evidence there is no session; any other failure (a
-      // transient store outage, a network error) is not, and must not be
-      // treated as an unauthenticated visitor - see RequireAuth's own
-      // 401-vs-503 distinction on the server.
-      .catch((err) => { if (err.status === 401) setClaims(NO_SESSION); })
-      .finally(() => setRestoring(false));
+    Promise.all([
+      apiMe()
+        .then((session) => setClaims({ name: session.name, role: session.role }))
+        // Only a 401 is evidence there is no session; any other failure (a
+        // transient store outage, a network error) is not, and must not be
+        // treated as an unauthenticated visitor - see RequireAuth's own
+        // 401-vs-503 distinction on the server.
+        .catch((err) => { if (err.status === 401) setClaims(NO_SESSION); }),
+      apiSetupStatus()
+        .then((status) => setSetupRequired(Boolean(status.required)))
+        // A setup-status failure must not block restoring: the ordinary
+        // login form is always a safe fallback.
+        .catch(() => {}),
+    ]).finally(() => setRestoring(false));
   }, []);
 
   const login = useCallback(async (name, password) => {
@@ -74,13 +87,30 @@ export function AuthProvider({ children }) {
     clearSession();
   }, [clearSession]);
 
+  // completeSetup creates the first administrator, then signs it in the
+  // same way login does. A 409 means another client already finished setup
+  // in the meantime; setupRequired is cleared so the UI falls back to the
+  // ordinary login form, and the error is rethrown for Setup.jsx to explain.
+  const completeSetup = useCallback(async (name, password) => {
+    try {
+      await apiCompleteSetup(name, password);
+    } catch (err) {
+      if (err.status === 409) setSetupRequired(false);
+      throw err;
+    }
+    setSetupRequired(false);
+    return login(name, password);
+  }, [login]);
+
   const value = {
     name: claims.name,
     role: claims.role,
     isAuthenticated: Boolean(claims.name),
     restoring,
+    setupRequired,
     login,
     logout,
+    completeSetup,
     roleAtLeast: (min) => roleAtLeast(claims.role, min),
   };
 
