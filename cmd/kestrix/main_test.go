@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"kestrix/internal/config"
 )
 
 var (
@@ -281,5 +283,46 @@ func TestDefaultLocalDatabaseURLIsIsolated(t *testing.T) {
 	const expected = "postgres://kestrix:kestrix@localhost:5433/kestrix_local?sslmode=disable"
 	if defaultLocalDatabaseURL != expected {
 		t.Fatalf("default local database URL = %q, want %q", defaultLocalDatabaseURL, expected)
+	}
+}
+
+func TestLogConfigSourcesMissingFile(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var out bytes.Buffer
+	logConfigSources(&out, cfg, "/no/such/config.yaml")
+	got := out.String()
+	if !strings.Contains(got, "config: /no/such/config.yaml") {
+		t.Errorf("output missing config path line: %q", got)
+	}
+	if !strings.Contains(got, "no config file found") {
+		t.Errorf("output missing missing-file branch: %q", got)
+	}
+	for _, key := range []string{"listen_addr", "dispatch.project_id", "runner.cancel_grace"} {
+		if !strings.Contains(got, "config: "+key+" source=default") {
+			t.Errorf("output missing source line for %s: %q", key, got)
+		}
+	}
+}
+
+// TestLogConfigSourcesOmitsSecrets proves the per-line Fprintf loop, not just
+// Config.SourceReport(), never writes a configured secret or token to the log.
+func TestLogConfigSourcesOmitsSecrets(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Webhook.Secret = "canary-webhook-secret-9z"
+	cfg.Dispatch.GitLabToken = "canary-gitlab-token-9z"
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	logConfigSources(&out, cfg, path)
+	got := out.String()
+	if strings.Contains(got, "canary-webhook-secret-9z") || strings.Contains(got, "canary-gitlab-token-9z") {
+		t.Fatalf("logConfigSources leaked a secret: %q", got)
+	}
+	if strings.Contains(got, "no config file found") {
+		t.Errorf("existing config file wrongly reported as missing: %q", got)
 	}
 }

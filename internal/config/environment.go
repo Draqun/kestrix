@@ -56,7 +56,6 @@ type Environment struct {
 	// design.md D4. Defaults to true - false is a plain-HTTP-development
 	// downgrade for a non-loopback deployment with no TLS in front.
 	CookieSecure bool
-	Docker       DockerEnvironment
 	SourceCache  SourceCacheEnvironment
 	// RunnerEnvPassthrough names host environment variables forwarded to
 	// task processes verbatim, in addition to the fixed base set, CI_*
@@ -100,15 +99,6 @@ type SourceCacheEnvironment struct {
 	Directory string
 	MaxAge    time.Duration
 	MaxBytes  int64
-}
-
-// DockerEnvironment contains Docker settings read from the process
-// environment. Its fields are immutable after startup.
-type DockerEnvironment struct {
-	Registry string
-	Image    string
-	Username string
-	Password string
 }
 
 var (
@@ -377,12 +367,6 @@ func LoadEnvironment(environ []string) *Environment {
 		TrustProxyHeader:      trustProxyHeader,
 		ContentSecurityPolicy: values[Prefix+"CONTENT_SECURITY_POLICY"],
 		CookieSecure:          cookieSecure,
-		Docker: DockerEnvironment{
-			Registry: values["DOCKER_REGISTRY"],
-			Image:    values["DOCKER_IMAGE"],
-			Username: values["DOCKER_USERNAME"],
-			Password: values["DOCKER_PASSWORD"],
-		},
 		SourceCache: SourceCacheEnvironment{
 			Directory: values[Prefix+"SOURCE_CACHE_DIR"],
 			MaxAge:    maxAge,

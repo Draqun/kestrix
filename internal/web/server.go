@@ -68,7 +68,6 @@ type Config struct {
 	// default before populating this in production wiring.
 	CookieSecure bool
 	Branch       string
-	Docker       DockerConfig
 	Signature    SignatureConfig
 	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
 	// store default.
@@ -99,16 +98,7 @@ type SourceCacheConfig struct {
 
 // RunnerConfig holds runner execution settings.
 type RunnerConfig struct {
-	Mode     string // "local" or "gitlab-runner"
-	Executor string // "shell", "docker", etc.
-}
-
-// DockerConfig holds Docker registry and deployment settings.
-type DockerConfig struct {
-	Registry string
-	Image    string
-	Username string
-	Password string
+	Mode string // "local" or "gitlab-runner"
 }
 
 // Server is the HTTP server.

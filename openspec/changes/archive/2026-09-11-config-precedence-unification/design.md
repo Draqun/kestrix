@@ -52,7 +52,7 @@ setting. No form Kestrix accepts is silently ignored.
 The shadow-struct presence detection in `Load` is widened to every yaml key
 that has an environment or flag form. `ApplyEnvironment(env)` replaces the
 three `Apply*Environment` functions with one loop of `if !set && envValue !=
-zero { c.X = envValue }` statements, and `ApplyFlags(f ServeFlags)` replaces
+zero { c.X = envValue }` statements, and `ApplyFlags(f FlagValues)` replaces
 both the dead `ApplyFlags` and the inline blocks in `cmdServe`, taking a
 struct of parsed flag values so the signature stops growing per setting.
 
