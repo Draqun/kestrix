@@ -289,6 +289,18 @@ definitions:
           type: object
         type: array
     type: object
+  web.setupRequest:
+    properties:
+      name:
+        type: string
+      password:
+        type: string
+    type: object
+  web.setupStatusResponse:
+    properties:
+      required:
+        type: boolean
+    type: object
   web.updateUserRoleRequest:
     properties:
       role:
@@ -771,6 +783,44 @@ paths:
       summary: List all pipeline runs across projects
       tags:
       - runs
+  /api/setup:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.setupStatusResponse'
+      summary: Report whether first-run setup is required
+      tags:
+      - setup
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: First administrator
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.setupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/web.userView'
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create the first administrator account
+      tags:
+      - setup
   /api/users:
     get:
       produces:

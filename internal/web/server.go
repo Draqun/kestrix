@@ -122,6 +122,14 @@ type Server struct {
 	authService     *service.AuthService
 	identityCache   domain.IdentityCache
 	loginThrottle   *loginThrottle
+	// setupThrottle guards POST /api/setup with its own address-keyed
+	// window, configured from the same limits as loginThrottle but never
+	// sharing its counters: setup answers non-201 forever once any account
+	// exists, and counting that permanent response against loginThrottle's
+	// shared per-address budget would let an unauthenticated caller trip
+	// 429 on POST /api/auth/login for any other client behind the same
+	// address. See first-run-setup design.md D4.
+	setupThrottle *loginThrottle
 }
 
 // identityCacheMaxEntries bounds InMemoryIdentityCache regardless of how
@@ -278,6 +286,7 @@ func NewServerE(cfg Config) (*Server, error) {
 	s.identityCache = auth.NewInMemoryIdentityCache(cfg.IdentityCacheTTL, identityCacheMaxEntries, time.Now)
 	if cfg.LoginMaxAttempts > 0 && cfg.LoginWindow > 0 {
 		s.loginThrottle = newLoginThrottle(cfg.LoginMaxAttempts, cfg.LoginWindow, loginThrottleMaxEntries, time.Now)
+		s.setupThrottle = newLoginThrottle(cfg.LoginMaxAttempts, cfg.LoginWindow, loginThrottleMaxEntries, time.Now)
 	}
 	cacheCfg := cfg.SourceCache
 	if cacheCfg.Directory == "" {
@@ -395,6 +404,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/health", s.handleHealth)
 			r.With(s.throttleLogin).Post("/auth/login", s.handleLogin)
 			r.Post("/auth/logout", s.handleLogout)
+			r.Get("/setup", s.handleSetupStatus)
+			r.With(s.throttleSetup).Post("/setup", s.handleCompleteSetup)
 		})
 
 		r.Group(func(r chi.Router) {

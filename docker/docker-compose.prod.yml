@@ -7,7 +7,10 @@
 #     KESTRIX_JWT_SIGNING_KEY_PATH=/srv/kestrix/jwt.key \
 #     docker compose -f docker-compose.prod.yml up -d
 #
-# Kestrix serves no request until an administrator account exists:
+# Kestrix serves no request until an administrator account exists. Open the
+# UI: a fresh instance shows a "Create the first administrator" form instead
+# of the login form. For a scripted deployment, create it from the CLI
+# instead - either path produces the same account and closes the other:
 #   docker compose -f docker-compose.prod.yml exec kestrix \
 #     kestrix user create --role admin <name>
 #

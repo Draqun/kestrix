@@ -128,6 +128,8 @@ func TestRouteRoles_HealthAndLoginArePublic(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{"GET", "/api/health"},
 		{"POST", "/api/auth/login"},
+		{"GET", "/api/setup"},
+		{"POST", "/api/setup"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
 		w := httptest.NewRecorder()

@@ -224,6 +224,12 @@ func TestNewServerEWiresLoginThrottleWhenConfigured(t *testing.T) {
 	if server.loginThrottle == nil {
 		t.Fatal("loginThrottle was not wired despite LoginMaxAttempts/LoginWindow being configured")
 	}
+	if server.setupThrottle == nil {
+		t.Fatal("setupThrottle was not wired despite LoginMaxAttempts/LoginWindow being configured")
+	}
+	if server.setupThrottle == server.loginThrottle {
+		t.Fatal("setupThrottle must be its own instance, not shared with loginThrottle - see REVIEW.md R1")
+	}
 }
 
 func TestNewServerELeavesLoginThrottleNilWhenUnconfigured(t *testing.T) {
@@ -245,6 +251,9 @@ func TestNewServerELeavesLoginThrottleNilWhenUnconfigured(t *testing.T) {
 	}
 	if server.loginThrottle != nil {
 		t.Fatal("loginThrottle was wired despite LoginMaxAttempts/LoginWindow being unset")
+	}
+	if server.setupThrottle != nil {
+		t.Fatal("setupThrottle was wired despite LoginMaxAttempts/LoginWindow being unset")
 	}
 }
 

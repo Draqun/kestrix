@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createAccount, createCredential, createProject, deleteAccount, getWebhookLogs, listAccounts,
-  listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
-  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects,
+  completeSetup, createAccount, createCredential, createProject, deleteAccount, getWebhookLogs,
+  listAccounts, listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
+  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
@@ -378,4 +378,51 @@ test('login throws the server-provided error message on failure', async (t) => {
   });
 
   await assert.rejects(() => login('alice', 'wrong'), /invalid name or password/);
+});
+
+test('setupStatus requests the setup endpoint', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, method: options.method || 'GET' };
+    return new Response(JSON.stringify({ required: true }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const data = await setupStatus();
+
+  assert.equal(captured.url, '/api/setup');
+  assert.equal(captured.method, 'GET');
+  assert.equal(data.required, true);
+});
+
+test('completeSetup posts the name and password to the setup endpoint', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ name: 'admin', role: 'admin' }), {
+      status: 201, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const created = await completeSetup('admin', 's3cret-pass');
+
+  assert.equal(captured.url, '/api/setup');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), { name: 'admin', password: 's3cret-pass' });
+  assert.equal(created.name, 'admin');
+});
+
+test('completeSetup throws the server-provided error on 409', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'setup already completed' }), {
+    status: 409, headers: { 'Content-Type': 'application/json' },
+  });
+
+  await assert.rejects(completeSetup('admin', 's3cret-pass'), /setup already completed/);
 });

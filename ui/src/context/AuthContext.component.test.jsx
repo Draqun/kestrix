@@ -4,19 +4,24 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, test, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext.jsx';
 
-const api = vi.hoisted(() => ({ login: vi.fn(), logout: vi.fn(), me: vi.fn() }));
+const api = vi.hoisted(() => ({
+  login: vi.fn(), logout: vi.fn(), me: vi.fn(), setupStatus: vi.fn(), completeSetup: vi.fn(),
+}));
 vi.mock('../api/client.js', () => ({
   login: (...args) => api.login(...args),
   logout: (...args) => api.logout(...args),
   me: (...args) => api.me(...args),
+  setupStatus: (...args) => api.setupStatus(...args),
+  completeSetup: (...args) => api.completeSetup(...args),
   setUnauthorizedHandler: (handler) => { globalThis.__unauthorizedHandler = handler; },
 }));
 
 function Probe() {
-  const { isAuthenticated, restoring, name, role, login, logout } = useAuth();
+  const { isAuthenticated, restoring, setupRequired, name, role, login, logout, completeSetup } = useAuth();
   return (
     <div>
       <span data-testid="restoring">{restoring ? 'yes' : 'no'}</span>
+      <span data-testid="setup-required">{setupRequired ? 'yes' : 'no'}</span>
       <span data-testid="state">{isAuthenticated ? 'in' : 'out'}</span>
       <span data-testid="name">{name || ''}</span>
       <span data-testid="role">{role || ''}</span>
@@ -24,7 +29,11 @@ function Probe() {
         document.getElementById('login-error').textContent = err.code || err.message;
       })}>login</button>
       <button onClick={logout}>logout</button>
+      <button onClick={() => completeSetup('admin', 's3cret').catch((err) => {
+        document.getElementById('setup-error').textContent = err.status || err.message;
+      })}>complete-setup</button>
       <div id="login-error" data-testid="login-error" />
+      <div id="setup-error" data-testid="setup-error" />
     </div>
   );
 }
@@ -45,6 +54,8 @@ beforeEach(() => {
   api.login.mockReset();
   api.logout.mockReset().mockResolvedValue(undefined);
   api.me.mockReset();
+  api.setupStatus.mockReset().mockResolvedValue({ required: false });
+  api.completeSetup.mockReset();
   delete globalThis.__unauthorizedHandler;
 });
 
@@ -156,4 +167,60 @@ test('a rejected login leaves the session unauthenticated', async () => {
   await user.click(screen.getByText('login'));
 
   assert.equal(screen.getByTestId('state').textContent, 'out');
+});
+
+test('resolves setupRequired: true from GET /api/setup on mount', async () => {
+  api.me.mockRejectedValue(httpError(401));
+  api.setupStatus.mockResolvedValue({ required: true });
+  render(<AuthProvider><Probe /></AuthProvider>);
+
+  await waitForRestoreToFinish();
+  assert.equal(screen.getByTestId('setup-required').textContent, 'yes');
+});
+
+test('resolves setupRequired: false from GET /api/setup on mount', async () => {
+  api.me.mockRejectedValue(httpError(401));
+  api.setupStatus.mockResolvedValue({ required: false });
+  render(<AuthProvider><Probe /></AuthProvider>);
+
+  await waitForRestoreToFinish();
+  assert.equal(screen.getByTestId('setup-required').textContent, 'no');
+});
+
+test('completeSetup creates the account, clears setupRequired, and signs in', async () => {
+  api.me.mockRejectedValueOnce(httpError(401)); // initial restore
+  api.setupStatus.mockResolvedValue({ required: true });
+  const user = userEvent.setup();
+  api.completeSetup.mockResolvedValue({ name: 'admin', role: 'admin' });
+  api.login.mockResolvedValue({ token: 'tok', expires_at: '2026-01-01T00:00:00Z' });
+  api.me.mockResolvedValue({ name: 'admin', role: 'admin', expires_at: '2026-01-01T00:00:00Z' });
+
+  render(<AuthProvider><Probe /></AuthProvider>);
+  await waitForRestoreToFinish();
+  assert.equal(screen.getByTestId('setup-required').textContent, 'yes');
+
+  await user.click(screen.getByText('complete-setup'));
+
+  assert.deepEqual(api.completeSetup.mock.calls[0], ['admin', 's3cret']);
+  assert.equal(screen.getByTestId('setup-required').textContent, 'no');
+  assert.equal(screen.getByTestId('state').textContent, 'in');
+  assert.equal(screen.getByTestId('name').textContent, 'admin');
+});
+
+test('completeSetup on 409 clears setupRequired and rethrows for the page to explain', async () => {
+  api.me.mockRejectedValue(httpError(401));
+  api.setupStatus.mockResolvedValue({ required: true });
+  const user = userEvent.setup();
+  const conflict = httpError(409);
+  api.completeSetup.mockRejectedValue(conflict);
+
+  render(<AuthProvider><Probe /></AuthProvider>);
+  await waitForRestoreToFinish();
+  assert.equal(screen.getByTestId('setup-required').textContent, 'yes');
+
+  await user.click(screen.getByText('complete-setup'));
+
+  assert.equal(screen.getByTestId('setup-required').textContent, 'no');
+  assert.equal(screen.getByTestId('setup-error').textContent, '409');
+  assert.equal(api.login.mock.calls.length, 0);
 });

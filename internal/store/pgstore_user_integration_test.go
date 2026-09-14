@@ -4,6 +4,8 @@ package store
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"kestrix/internal/domain"
@@ -49,6 +51,86 @@ func TestPG_CreateUser_DuplicateNameRejected(t *testing.T) {
 	}
 	if got.Role != domain.RoleViewer {
 		t.Fatalf("existing account role = %s, want unchanged viewer", got.Role)
+	}
+}
+
+func TestPG_CreateFirstUser_OnEmptyTable(t *testing.T) {
+	pg := testPG(t)
+	created, err := pg.CreateFirstUser("admin", domain.RoleAdmin, "hash")
+	if err != nil {
+		t.Fatalf("CreateFirstUser: %v", err)
+	}
+	if created.Name != "admin" || created.Role != domain.RoleAdmin {
+		t.Fatalf("created = %+v, want admin/admin", created)
+	}
+	got, err := pg.GetUser("admin")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if got != created {
+		t.Fatalf("GetUser = %+v, want %+v", got, created)
+	}
+}
+
+func TestPG_CreateFirstUser_ErrSetupDoneWhenAccountExists(t *testing.T) {
+	pg := testPG(t)
+	if _, err := pg.CreateUser("existing", domain.RoleViewer, "hash"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := pg.CreateFirstUser("admin", domain.RoleAdmin, "hash"); !errors.Is(err, ErrSetupDone) {
+		t.Fatalf("CreateFirstUser error = %v, want ErrSetupDone", err)
+	}
+	if _, err := pg.GetUser("admin"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("CreateFirstUser must not have created an account, GetUser error = %v", err)
+	}
+	list, err := pg.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListUsers = %+v, want the single pre-existing account unchanged", list)
+	}
+}
+
+// TestPG_CreateFirstUser_ConcurrentRace pins design.md D1: the emptiness
+// check and the insert run in one transaction serialized by LOCK TABLE, so
+// exactly one of many concurrent callers on an empty table succeeds and
+// every other observes ErrSetupDone.
+func TestPG_CreateFirstUser_ConcurrentRace(t *testing.T) {
+	pg := testPG(t)
+	const n = 10
+	var wg sync.WaitGroup
+	var successes int64
+	var setupDone int64
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := pg.CreateFirstUser("racer", domain.RoleAdmin, "hash")
+			switch {
+			case err == nil:
+				atomic.AddInt64(&successes, 1)
+			case errors.Is(err, ErrSetupDone):
+				atomic.AddInt64(&setupDone, 1)
+			default:
+				t.Errorf("CreateFirstUser: unexpected error %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if successes != 1 {
+		t.Fatalf("successes = %d, want exactly 1", successes)
+	}
+	if setupDone != n-1 {
+		t.Fatalf("ErrSetupDone count = %d, want %d", setupDone, n-1)
+	}
+	list, err := pg.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListUsers = %+v, want exactly one account after the race", list)
 	}
 }
 
@@ -103,6 +185,28 @@ func TestPG_ListUsers_OrderedByName(t *testing.T) {
 	}
 	if len(list) != 3 || list[0].Name != "amy" || list[1].Name != "mia" || list[2].Name != "zed" {
 		t.Fatalf("ListUsers order = %+v, want amy, mia, zed", list)
+	}
+}
+
+func TestPG_HasAnyUser(t *testing.T) {
+	pg := testPG(t)
+	has, err := pg.HasAnyUser()
+	if err != nil {
+		t.Fatalf("HasAnyUser: %v", err)
+	}
+	if has {
+		t.Fatal("HasAnyUser = true on an empty table, want false")
+	}
+
+	if _, err := pg.CreateUser("nadia", domain.RoleViewer, "hash"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	has, err = pg.HasAnyUser()
+	if err != nil {
+		t.Fatalf("HasAnyUser: %v", err)
+	}
+	if !has {
+		t.Fatal("HasAnyUser = false once an account exists, want true")
 	}
 }
 

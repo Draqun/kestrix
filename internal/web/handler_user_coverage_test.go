@@ -22,13 +22,15 @@ import (
 type errUserStore struct {
 	users map[string]domain.User
 
-	CreateErr     error
-	GetErr        error
-	GetErrAfter   int // GetErr only takes effect once GetUser has been called more than this many times
-	getCalls      int
-	ListErr       error
-	UpdateRoleErr error
-	DeleteErr     error
+	CreateErr      error
+	CreateFirstErr error
+	GetErr         error
+	GetErrAfter    int // GetErr only takes effect once GetUser has been called more than this many times
+	getCalls       int
+	ListErr        error
+	HasAnyErr      error
+	UpdateRoleErr  error
+	DeleteErr      error
 }
 
 func newErrUserStore() *errUserStore {
@@ -38,6 +40,18 @@ func newErrUserStore() *errUserStore {
 func (s *errUserStore) CreateUser(name string, role domain.Role, _ string) (domain.User, error) {
 	if s.CreateErr != nil {
 		return domain.User{}, s.CreateErr
+	}
+	u := domain.User{Name: name, Role: role}
+	s.users[name] = u
+	return u, nil
+}
+
+func (s *errUserStore) CreateFirstUser(name string, role domain.Role, _ string) (domain.User, error) {
+	if s.CreateFirstErr != nil {
+		return domain.User{}, s.CreateFirstErr
+	}
+	if len(s.users) > 0 {
+		return domain.User{}, store.ErrSetupDone
 	}
 	u := domain.User{Name: name, Role: role}
 	s.users[name] = u
@@ -58,6 +72,13 @@ func (s *errUserStore) GetUser(name string) (domain.User, error) {
 
 func (s *errUserStore) GetUserCredential(name string) (domain.UserCredential, error) {
 	return domain.UserCredential{}, errors.New("not implemented")
+}
+
+func (s *errUserStore) HasAnyUser() (bool, error) {
+	if s.HasAnyErr != nil {
+		return false, s.HasAnyErr
+	}
+	return len(s.users) > 0, nil
 }
 
 func (s *errUserStore) ListUsers() ([]domain.User, error) {

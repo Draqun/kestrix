@@ -1,11 +1,43 @@
 # Authentication and access control
 
 Every `/api` route requires a signed-in account, except `GET /api/health`,
-`POST /api/auth/login`, and `POST /api/auth/logout`. `POST /webhook` is
-unaffected: it authenticates GitLab deliveries with its own per-project and
-global secrets, not a user account.
+`POST /api/auth/login`, `POST /api/auth/logout`, and the first-run setup
+routes below. `POST /webhook` is unaffected: it authenticates GitLab
+deliveries with its own per-project and global secrets, not a user account.
 See [Webhook Receiver: Authentication](webhook-receiver.md#authentication)
 for how those secrets are chosen and why verification fails closed.
+
+## First-run setup
+
+A fresh instance has no accounts, so `GET /api/setup` and `POST /api/setup`
+are reachable without credentials until the first one exists:
+
+```bash
+# Discover whether setup is still required (never reveals account names or
+# counts, only whether any account exists).
+curl http://localhost:8080/api/setup
+# {"required": true}
+
+# Create the first account. Its role is always admin.
+curl -X POST http://localhost:8080/api/setup \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"admin","password":"..."}'
+```
+
+`POST /api/setup` succeeds exactly once: the first request past setup
+succeeds with `201` no matter which client made it, and every request after
+that answers `409` and never creates, modifies, or deletes anything. **A
+fresh instance reachable by anyone can have its first administrator claimed
+by whoever gets there first** - run setup immediately after starting the
+server, or pre-create the account with `kestrix user create --role admin`
+before exposing the instance, especially on a public network. `POST
+/api/setup` is throttled per client address with the same limits as login
+(`KESTRIX_LOGIN_MAX_ATTEMPTS` / `KESTRIX_LOGIN_WINDOW`), answering `429` with
+`Retry-After` once exceeded.
+
+The UI checks `GET /api/setup` before showing the login form and renders a
+"Create the first administrator" form in its place while setup is required,
+signing the new account in immediately on success.
 
 ## Signing in
 

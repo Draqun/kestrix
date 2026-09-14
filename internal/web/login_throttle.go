@@ -132,6 +132,24 @@ func (t *loginThrottle) RecordSuccess(account string) {
 	delete(t.accounts, account)
 }
 
+// AllowAddr and RecordFailureAddr are the address-only half of Allow and
+// RecordFailure, used by throttleSetup: first-run setup has no account name
+// to key by, only the client address; see first-run-setup design.md D4.
+func (t *loginThrottle) AllowAddr(addr string) (ok bool, retryAfter time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if blocked, wait := t.blocked(t.addrs, addr); blocked {
+		return false, wait
+	}
+	return true, 0
+}
+
+func (t *loginThrottle) RecordFailureAddr(addr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recordFailureLocked(t.addrs, addr)
+}
+
 // clientAddress resolves the caller's address for throttling. It trusts the
 // first hop of X-Forwarded-For only when trustProxyHeader is set; reading it
 // unconditionally would let any client forge its own throttle key. See
@@ -221,6 +239,43 @@ func (s *Server) throttleLogin(next http.Handler) http.Handler {
 			s.loginThrottle.RecordSuccess(probe.Name)
 		} else {
 			s.loginThrottle.RecordFailure(probe.Name, addr)
+		}
+	})
+}
+
+// throttleSetup wraps POST /api/setup with the same limits as
+// s.loginThrottle, keyed by client address only: setup has no account name
+// to key by, and the endpoint closes itself after one success anyway; see
+// first-run-setup design.md D4. It uses its own s.setupThrottle instance
+// rather than s.loginThrottle's: setup answers a non-201 response forever
+// once any account exists, and counting that permanent response against
+// login's shared per-address budget would let an unauthenticated caller
+// trip 429 on POST /api/auth/login for any other client behind the same
+// address. A nil s.setupThrottle disables throttling entirely, same as
+// throttleLogin.
+func (s *Server) throttleSetup(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.setupThrottle == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		addr := clientAddress(r, s.cfg.TrustProxyHeader)
+		if ok, retryAfter := s.setupThrottle.AllowAddr(addr); !ok {
+			seconds := int(retryAfter.Seconds())
+			if retryAfter > time.Duration(seconds)*time.Second {
+				seconds++ // round up so Retry-After never undershoots
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			s.logAuthFailure(r, "", "setup throttled")
+			writeError(w, http.StatusTooManyRequests, "too many setup attempts")
+			return
+		}
+
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		if rec.status != http.StatusCreated {
+			s.setupThrottle.RecordFailureAddr(addr)
 		}
 	})
 }

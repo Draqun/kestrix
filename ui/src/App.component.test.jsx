@@ -3,19 +3,33 @@ import { render, screen } from '@testing-library/react';
 import { test, vi } from 'vitest';
 import App from './App.jsx';
 
-const auth = vi.hoisted(() => ({ isAuthenticated: false }));
+const auth = vi.hoisted(() => ({ isAuthenticated: false, setupRequired: false }));
 vi.mock('./context/AuthContext.jsx', () => ({
   AuthProvider: ({ children }) => children,
   useAuth: () => ({
     isAuthenticated: auth.isAuthenticated,
+    setupRequired: auth.setupRequired,
     name: 'test-user',
     role: 'viewer',
     login: vi.fn(),
     logout: vi.fn(),
+    completeSetup: vi.fn(),
     roleAtLeast: () => true,
   }),
 }));
 vi.mock('./hooks/useKeyboardNav.js', () => ({ default: () => {} }));
+
+test('a fresh instance shows the setup form, not the login view', () => {
+  auth.isAuthenticated = false;
+  auth.setupRequired = true;
+  globalThis.fetch = vi.fn(() => { throw new Error('must not call the API while setup is required'); });
+
+  render(<App />);
+
+  assert.ok(screen.getByRole('heading', { name: 'Create the first administrator' }));
+  assert.equal(screen.queryByRole('heading', { name: 'Sign in to Kestrix' }), null);
+  auth.setupRequired = false;
+});
 
 test('an unauthenticated visitor sees the login view, not application data', () => {
   auth.isAuthenticated = false;
