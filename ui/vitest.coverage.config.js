@@ -11,7 +11,9 @@ export default mergeConfig(baseConfig, defineConfig({
       reportsDirectory: './coverage/frontend',
       include: [
         'src/components/Layout.jsx',
+        'src/components/accounts/*.jsx',
         'src/components/credentials/*.jsx',
+        'src/hooks/useAccounts.js',
         'src/hooks/useCredentials.js',
         'src/hooks/useKeyboardNav.js',
         'src/lib/credentialForm.js',

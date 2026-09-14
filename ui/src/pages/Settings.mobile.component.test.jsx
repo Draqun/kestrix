@@ -3,6 +3,10 @@ import { render, screen, within } from '@testing-library/react';
 import { beforeEach, test, vi } from 'vitest';
 import Settings from './Settings.jsx';
 
+vi.mock('../context/AuthContext.jsx', () => ({
+  useAuth: () => ({ roleAtLeast: () => true }),
+}));
+
 beforeEach(() => {
   window.innerWidth = 375;
   window.matchMedia = vi.fn().mockImplementation(query => ({
@@ -15,12 +19,19 @@ beforeEach(() => {
     removeListener() {},
     dispatchEvent() { return false; },
   }));
-  globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-    items: [{ ref: 'cred_mobile', name: 'Mobile Git', type: 'token', revoked: false }],
-  }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  }));
+  globalThis.fetch = vi.fn(async (url, options = {}) => {
+    if (url === '/api/users' && !options.method) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      items: [{ ref: 'cred_mobile', name: 'Mobile Git', type: 'token', revoked: false }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
 });
 
 test('Settings keeps credential metadata and lifecycle actions usable at 375px', async () => {
