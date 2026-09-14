@@ -101,6 +101,11 @@ type Options struct {
 	SourcesPrepared       bool
 	OnSourcesAcquired     func([]domain.AcquiredSource) error
 	WorkspaceCleanup      func()
+	// Mode selects RunOne's execution backend: "docker" runs the task
+	// through DockerExecutor (with the configured PID/memory/CPU/network
+	// hardening); any other value, including "", falls back to
+	// LocalExecutor's bare `bash -c`, matching prior behavior.
+	Mode string
 }
 
 func synchronizeOutput(opts *Options) {
@@ -442,13 +447,19 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		repos[repo.Name] = repo
 	}
 
-	defaultImage := project.DefaultImage
+	executor := newDockerExecutor(workDir, repos, project.DefaultImage)
+	return taskLoop(ctx, ordered, executor, opts)
+}
+
+// newDockerExecutor builds a DockerExecutor from the process-wide hardening
+// config, defaulting defaultImage to "alpine:latest" when the project sets
+// none. Shared by Run() and executorForMode so the two never drift.
+func newDockerExecutor(workDir string, repos map[string]model.Repo, defaultImage string) *DockerExecutor {
 	if defaultImage == "" {
 		defaultImage = "alpine:latest"
 	}
-
 	env := config.Current()
-	executor := &DockerExecutor{
+	return &DockerExecutor{
 		WorkDir:      workDir,
 		Repos:        repos,
 		DefaultImage: defaultImage,
@@ -459,7 +470,6 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		Network:      env.RunnerDockerNetwork,
 		Grace:        env.RunnerCancelGrace,
 	}
-	return taskLoop(ctx, ordered, executor, opts)
 }
 
 // RunLocal resolves and executes tasks directly on the host without Docker.
@@ -565,7 +575,20 @@ func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Nod
 	return taskLoop(ctx, ordered, executor, opts)
 }
 
-// RunOne executes a single named task (used for manual job approval).
+// executorForMode returns the Executor RunOne should use for a manual task
+// approval. Only "docker" changes behavior; every other Mode value keeps
+// the historical bare `bash -c` execution.
+func executorForMode(mode, workDir string, repos map[string]model.Repo, defaultImage string) Executor {
+	if mode != "docker" {
+		return &LocalExecutor{WorkDir: workDir, Repos: repos}
+	}
+	return newDockerExecutor(workDir, repos, defaultImage)
+}
+
+// RunOne executes a single named task (used for manual job approval). It
+// honors opts.Mode so a manual approval on a Docker-mode project gets the
+// same container hardening as the rest of the pipeline instead of always
+// shelling out on the host.
 func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
 	synchronizeOutput(&opts)
 	defer cleanupWorkspace(&opts)
@@ -599,43 +622,24 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 	for _, repo := range project.Repos {
 		repos[repo.Name] = repo
 	}
-	repo := repos[task.Execute.Repo]
-	taskDir, err := repoDirFor(workDir, repo, opts.RepoPaths)
-	if err != nil {
-		return TaskResult{}, fmt.Errorf("task %q: %w", task.Name, err)
-	}
-	relDir, _ := filepath.Rel(workDir, taskDir)
+	executor := executorForMode(opts.Mode, workDir, repos, project.DefaultImage)
 
-	fmt.Fprintf(opts.Stdout, "[RUN] %s (manual approve, dir=%s)\n", task.Name, relDir)
 	if opts.OnTaskStart != nil {
 		opts.OnTaskStart(task.Name)
 	}
 
-	ci := map[string]string{"CI_PROJECT_DIR": taskDir}
-	var vars map[string]string
-	if opts.Variables != nil {
-		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
-	}
-	envSettings := config.Current()
-	env := envSettings.TaskEnv(ci, vars)
-
-	var taskOut bytes.Buffer
-	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
-	cmd := commandContext(ctx, "bash", "-c", task.Execute.Script)
-	cmd.Dir = taskDir
-	cmd.Env = env
-	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
-	stopCancelTimer := setCancelViaProcessGroup(cmd, envSettings.RunnerCancelGrace)
-
 	start := time.Now()
-	runErr := cmd.Run()
-	stopCancelTimer()
+	output, runErr := executor.RunTask(ctx, *task, opts)
 	dur := time.Since(start)
+
+	var fatal taskFatal
+	if errors.As(runErr, &fatal) {
+		return TaskResult{}, fatal
+	}
 
 	tr := TaskResult{
 		Name:     task.Name,
-		Output:   taskOut.String(),
+		Output:   output,
 		Duration: dur,
 	}
 	if runErr != nil && ctx.Err() != nil {

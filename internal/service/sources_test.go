@@ -127,6 +127,98 @@ func TestProjectServiceRecordsDerivedSourcesOnCreateAndUpdate(t *testing.T) {
 	}
 }
 
+// ciRepoCredentialLookup is shared by TestProjectServiceCheckCIRepoCredentials'
+// subtests: "cred_secret" is a secret credential, "cred_unknown" is unknown
+// to the store, and every other ref is a plain Git token.
+func ciRepoCredentialLookup(ref string) (domain.CredentialMetadata, error) {
+	switch ref {
+	case "cred_secret":
+		return domain.CredentialMetadata{Ref: ref, Type: "secret"}, nil
+	case "cred_unknown":
+		return domain.CredentialMetadata{}, errors.New("not found")
+	default:
+		return domain.CredentialMetadata{Ref: ref, Type: "token"}, nil
+	}
+}
+
+// newTestCIRepoCredentialCase builds a ProjectService wired to
+// ciRepoCredentialLookup, a project config, and a SourceValidator whose
+// parsed pipeline declares one secondary ci_repo ("shared") with the given
+// credential_ref - the shared setup for
+// TestProjectServiceCheckCIRepoCredentials' subtests. Follows this
+// package's newTest<Thing>(t, ...) convention (see newTestAuthService in
+// auth_service_test.go) so a future failure inside it is attributed to the
+// caller via t.Helper().
+func newTestCIRepoCredentialCase(t *testing.T, ciRepoRef string) (*mocks.MockProjectStore, *ProjectService, *domain.ProjectConfig, SourceValidator) {
+	t.Helper()
+	store := &mocks.MockProjectStore{}
+	svc := NewProjectService(store)
+	svc.SetCredentialLookup(ciRepoCredentialLookup)
+
+	cfg := &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.test/demo.git", RepoRef: "main"}
+	parsed := model.Project{Repos: []model.Repo{
+		{Name: "shared", URL: "https://git.test/shared.git", Ref: "main", CredentialRef: ciRepoRef},
+	}}
+	validate := func(*domain.ProjectConfig) (model.Project, error) { return parsed, nil }
+	return store, svc, cfg, validate
+}
+
+// A secondary ci_repo's own credential_ref is checked against the same
+// `secret`-type rule as the primary repo_credential_ref, and at the same
+// create/update time - not only later, when source acquisition fetches it.
+// Closes the known gap noted in the project wiki. Mirrors the primary-repo
+// coverage in TestProjectService_CheckRepoCredential: a token ref is
+// accepted, a lookup error is left for source acquisition, and (unique to
+// the secondary path) the primary and ci_repo checks both fire
+// independently rather than one masking the other.
+func TestProjectServiceCheckCIRepoCredentials(t *testing.T) {
+	t.Run("rejects secret", func(t *testing.T) {
+		store, svc, cfg, validate := newTestCIRepoCredentialCase(t, "cred_secret")
+
+		err := svc.CreateValidated(cfg, validate)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("error = %v, want ErrValidation", err)
+		}
+		if !strings.Contains(err.Error(), "shared") || !strings.Contains(err.Error(), "cred_secret") {
+			t.Errorf("error should name the offending ci_repo and ref, got %v", err)
+		}
+		if len(store.UpsertCalls) != 0 {
+			t.Fatalf("expected Upsert not called, got %d calls", len(store.UpsertCalls))
+		}
+	})
+
+	t.Run("accepts non-secret ref", func(t *testing.T) {
+		_, svc, cfg, validate := newTestCIRepoCredentialCase(t, "cred_git")
+		if err := svc.CreateValidated(cfg, validate); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("lookup error is left for source acquisition", func(t *testing.T) {
+		_, svc, cfg, validate := newTestCIRepoCredentialCase(t, "cred_unknown")
+		if err := svc.CreateValidated(cfg, validate); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("primary and secondary checks are additive", func(t *testing.T) {
+		// The primary repo_credential_ref is fine on its own; only the
+		// ci_repo's ref is a secret. If checkCIRepoCredentials were
+		// skipped whenever checkRepoCredential passed, this would wrongly
+		// succeed.
+		_, svc, cfg, validate := newTestCIRepoCredentialCase(t, "cred_secret")
+		cfg.RepoCredentialRef = "cred_git"
+
+		err := svc.CreateValidated(cfg, validate)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("error = %v, want ErrValidation from the ci_repo check", err)
+		}
+		if !strings.Contains(err.Error(), "ci_repo") {
+			t.Errorf("error should come from the ci_repo check, got %v", err)
+		}
+	})
+}
+
 // The project row and its source set are written in one store operation, so a
 // failure leaves nothing behind: a client that reads back after the error sees
 // the state it had before, not a half-applied create or update.

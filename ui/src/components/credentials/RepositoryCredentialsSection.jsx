@@ -57,7 +57,7 @@ export default function RepositoryCredentialsSection() {
             <Box>
               <Typography component="h2" variant="h5">Repository credentials</Typography>
               <Typography variant="body2" color="text.secondary">
-                Provider-neutral credentials for private Git repositories. Secret values are never displayed.
+                Provider-neutral credentials for private Git repositories and runtime secrets. Secret values are never displayed.
               </Typography>
             </Box>
           </Box>

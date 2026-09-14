@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
@@ -313,17 +314,29 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-func assertFlagValue(t *testing.T, args []string, flag, want string) {
-	t.Helper()
+// flagValue returns the value following flag's first occurrence in args, and
+// whether it was found at all - unlike assertFlagValue, which checks a
+// known value, this extracts an unknown one (e.g. a generated container
+// name) for the caller to use.
+func flagValue(args []string, flag string) (string, bool) {
 	for i, a := range args {
-		if a == flag {
-			if i+1 >= len(args) || args[i+1] != want {
-				t.Errorf("%s value = %v, want %q", flag, args[i+1:], want)
-			}
-			return
+		if a == flag && i+1 < len(args) {
+			return args[i+1], true
 		}
 	}
-	t.Errorf("%s not found in %v", flag, args)
+	return "", false
+}
+
+func assertFlagValue(t *testing.T, args []string, flag, want string) {
+	t.Helper()
+	got, ok := flagValue(args, flag)
+	if !ok {
+		t.Errorf("%s not found in %v", flag, args)
+		return
+	}
+	if got != want {
+		t.Errorf("%s value = %q, want %q", flag, got, want)
+	}
 }
 
 // TestKillGroupDefaultImplementation exercises the production killGroup body
@@ -527,13 +540,8 @@ func TestDockerExecutorCancelStopsContainerByName(t *testing.T) {
 		t.Fatalf("normal exit issued %d docker commands, want 1 (run only): %v", len(invocations), invocations)
 	}
 	runArgs := invocations[0].args
-	containerName := ""
-	for i, a := range runArgs {
-		if a == "--name" && i+1 < len(runArgs) {
-			containerName = runArgs[i+1]
-		}
-	}
-	if containerName == "" {
+	containerName, ok := flagValue(runArgs, "--name")
+	if !ok {
 		t.Fatalf("could not find --name in run args: %v", runArgs)
 	}
 
@@ -735,6 +743,125 @@ func TestRunOneUnitBranches(t *testing.T) {
 		t.Fatalf("failed result=%+v err=%v", result, err)
 	}
 	commandContext = old
+}
+
+// TestRunOneLocalModeUsesBash is the negative counterpart to
+// TestRunOneDockerMode (REVIEW.md finding R3): TestRunOneUnitBranches
+// already exercises Mode=""/"local", but its installFakeCommands stub
+// discards the invoked binary name, so it cannot prove bash (not docker)
+// ran. A regression that made executorForMode always build a
+// DockerExecutor, regardless of mode, would slip through every existing
+// test until this one.
+//
+// "gitlab-runner" is included per REVIEW.md finding R4: closing GitLab work
+// item #1 only covers the Docker-mode bypass (confirmed against
+// openspec/changes/archive/2026-09-11-runner-docker-config-wiring/design.md:152-169),
+// so a project configured for gitlab-runner mode still runs manual
+// approvals via bash today - this pins that as an intentional fallback,
+// not an untested gap.
+func TestRunOneLocalModeUsesBash(t *testing.T) {
+	for _, mode := range []string{"", "local", "gitlab-runner"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			var binary string
+			old := commandContext
+			commandContext = func(ctx context.Context, name string, a ...string) *exec.Cmd {
+				binary = name
+				return exec.CommandContext(ctx, "true")
+			}
+			t.Cleanup(func() { commandContext = old })
+
+			project := runnerProject("run")
+			result, err := RunOne(context.Background(), project, "task", Options{
+				WorkDir: t.TempDir(), SourcesPrepared: true, Mode: mode,
+				Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+			})
+			if err != nil || result.Status != "passed" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if binary != "bash" {
+				t.Fatalf("expected RunOne to shell out to bash, got binary=%q", binary)
+			}
+		})
+	}
+}
+
+// TestRunOneDockerMode covers the known gap tracked as GitLab work item #1:
+// manual task approval used to always shell out locally regardless of the
+// configured runner mode. With Mode: "docker", RunOne must run the task
+// through DockerExecutor (and its hardening flags), not bash -c.
+func TestRunOneDockerMode(t *testing.T) {
+	type invocation struct {
+		binary string
+		args   []string
+		cmd    *exec.Cmd
+	}
+	var invocations []invocation
+	old := commandContext
+	commandContext = func(ctx context.Context, name string, a ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "true")
+		invocations = append(invocations, invocation{binary: name, args: append([]string(nil), a...), cmd: cmd})
+		return cmd
+	}
+	t.Cleanup(func() { commandContext = old })
+
+	// A distinct value per field, set only here, so a swapped Memory/CPUs
+	// (or any other executorForMode <-> config.Current() field mismatch)
+	// fails this test instead of only DockerExecutor's own direct tests,
+	// which never go through executorForMode. See REVIEW.md finding R2.
+	env := *config.Current()
+	env.RunnerDockerPIDs = 77
+	env.RunnerDockerMemory = "512m"
+	env.RunnerDockerCPUs = "0.75"
+	env.RunnerDockerUser = "5000:5000"
+	env.RunnerDockerNetwork = "none"
+	env.RunnerCancelGrace = 3 * time.Second
+	previous := config.ReplaceCurrent(&env)
+	t.Cleanup(func() { config.ReplaceCurrent(previous) })
+
+	project := runnerProject("run")
+	result, err := RunOne(context.Background(), project, "task", Options{
+		WorkDir: t.TempDir(), SourcesPrepared: true, Mode: "docker",
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+	})
+	if err != nil || result.Status != "passed" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if len(invocations) != 1 {
+		t.Fatalf("normal exit issued %d docker commands, want 1 (run only): %v", len(invocations), invocations)
+	}
+	run := invocations[0]
+	if run.binary != "docker" {
+		t.Fatalf("expected RunOne to shell out to docker, got binary=%q args=%v", run.binary, run.args)
+	}
+	if !containsArg(run.args, "--cap-drop") || !containsArg(run.args, "alpine:latest") {
+		t.Errorf("expected hardened docker run with default image, got args=%v", run.args)
+	}
+	assertFlagValue(t, run.args, "--pids-limit", "77")
+	assertFlagValue(t, run.args, "--memory", "512m")
+	assertFlagValue(t, run.args, "--cpus", "0.75")
+	assertFlagValue(t, run.args, "--user", "5000:5000")
+	assertFlagValue(t, run.args, "--network", "none")
+
+	containerName, ok := flagValue(run.args, "--name")
+	if !ok {
+		t.Fatalf("could not find --name in run args: %v", run.args)
+	}
+
+	// Grace isn't a `docker run` flag - it only surfaces through Cancel's
+	// `docker stop -t <grace>`, mirroring
+	// TestDockerExecutorCancelStopsContainerByName but reached through
+	// RunOne + Mode="docker" instead of constructing DockerExecutor
+	// directly, so executorForMode's Grace mapping is actually covered.
+	if err := run.cmd.Cancel(); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(invocations) != 2 {
+		t.Fatalf("Cancel issued %d docker commands, want 2 (run + stop): %v", len(invocations), invocations)
+	}
+	want := []string{"stop", "-t", "3", containerName}
+	if !reflect.DeepEqual(invocations[1].args, want) {
+		t.Fatalf("stop args = %v, want %v", invocations[1].args, want)
+	}
 }
 
 func TestRunOneReportsCanceledWhenContextCanceled(t *testing.T) {

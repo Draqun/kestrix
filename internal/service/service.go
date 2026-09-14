@@ -55,23 +55,44 @@ func (s *ProjectService) SetCredentialLookup(lookup func(ref string) (domain.Cre
 	s.credentialLookup = lookup
 }
 
-// checkRepoCredential rejects a repo_credential_ref that names a `secret`
-// credential - see runtime-secrets design.md D4 and repository-credentials
-// spec.md "Secret rejected for source acquisition". A lookup error (unknown
-// ref, store unavailable) is left for source acquisition to report later,
-// as before this check existed; only a confirmed `secret` type is rejected
-// here.
-func (s *ProjectService) checkRepoCredential(cfg *domain.ProjectConfig) error {
-	ref := strings.TrimSpace(cfg.RepoCredentialRef)
+// credentialRefIsSecret reports whether ref names a `secret`-typed
+// credential, and returns ref trimmed for callers to reuse in error
+// messages. A lookup error (unknown ref, store unavailable) is left for
+// source acquisition to report later, as before this check existed; only a
+// confirmed `secret` type is rejected by callers.
+func (s *ProjectService) credentialRefIsSecret(ref string) (trimmed string, isSecret bool) {
+	ref = strings.TrimSpace(ref)
 	if ref == "" || s.credentialLookup == nil {
-		return nil
+		return ref, false
 	}
 	meta, err := s.credentialLookup(ref)
 	if err != nil {
-		return nil
+		return ref, false
 	}
-	if meta.Type == credentials.TypeSecret {
+	return ref, meta.Type == credentials.TypeSecret
+}
+
+// checkRepoCredential rejects a repo_credential_ref that names a `secret`
+// credential - see runtime-secrets design.md D4 and repository-credentials
+// spec.md "Secret rejected for source acquisition".
+func (s *ProjectService) checkRepoCredential(cfg *domain.ProjectConfig) error {
+	if ref, isSecret := s.credentialRefIsSecret(cfg.RepoCredentialRef); isSecret {
 		return fmt.Errorf("%w: repo_credential_ref %q is a secret credential and cannot be used for Git access", ErrValidation, ref)
+	}
+	return nil
+}
+
+// checkCIRepoCredentials rejects a secondary ci_repo whose
+// credential_ref names a `secret` credential, the same rule
+// checkRepoCredential applies to the primary repo. Without it, a
+// secret-typed credential_ref on a secondary ci_repo was only caught later
+// at git fetch time instead of at project create/update - a known gap
+// tracked in the project wiki.
+func (s *ProjectService) checkCIRepoCredentials(proj model.Project) error {
+	for _, repo := range proj.Repos {
+		if ref, isSecret := s.credentialRefIsSecret(repo.CredentialRef); isSecret {
+			return fmt.Errorf("%w: ci_repo %q credential_ref %q is a secret credential and cannot be used for Git access", ErrValidation, repo.Name, ref)
+		}
 	}
 	return nil
 }
@@ -348,6 +369,9 @@ func (s *ProjectService) persistValidated(cfg *domain.ProjectConfig, validateSou
 		if proj, err = validateSource(cfg); err != nil {
 			return fmt.Errorf("%w: validate project source: %v", ErrValidation, err)
 		}
+	}
+	if err := s.checkCIRepoCredentials(proj); err != nil {
+		return err
 	}
 	cfg.Sources = DeriveSources(cfg, proj)
 	return s.store.UpsertWithSources(cfg, cfg.Sources)
