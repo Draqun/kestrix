@@ -1046,6 +1046,257 @@ func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 	}
 }
 
+// ── FailInterruptedRuns ──────────────────────────────────────────────
+
+func TestPG_FailInterruptedRuns_RunningTask(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-running", "/")
+	id := mustCreateRun(t, pg, "fir-running", nil)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "running"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("Status = %q, want failed", run.Status)
+	}
+	if run.Error != "interrupted by server restart" {
+		t.Errorf("Error = %q, want interrupted by server restart", run.Error)
+	}
+	if run.FinishedAt == nil {
+		t.Error("FinishedAt is nil, want set")
+	}
+	if !strings.Contains(run.Output, "interrupted by server restart") {
+		t.Errorf("Output = %q, want it to name the interruption", run.Output)
+	}
+	var deploy *domain.TaskResult
+	for i := range run.TaskResults {
+		if run.TaskResults[i].Name == "deploy" {
+			deploy = &run.TaskResults[i]
+		}
+	}
+	if deploy == nil || deploy.Status != "failed" || deploy.Error != "interrupted by server restart" {
+		t.Errorf("deploy task = %+v, want failed/interrupted by server restart", deploy)
+	}
+}
+
+func TestPG_FailInterruptedRuns_PassedAndPending(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-pending", "/")
+	snap := &model.Project{
+		Name: "fir-pending",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", DependsOn: []string{"build"}},
+		},
+	}
+	id := mustCreateRun(t, pg, "fir-pending", snap)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "build", Status: "passed"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "pending"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("Status = %q, want failed", run.Status)
+	}
+	for _, tr := range run.TaskResults {
+		switch tr.Name {
+		case "build":
+			if tr.Status != "passed" {
+				t.Errorf("build = %q, want passed (untouched)", tr.Status)
+			}
+		case "deploy":
+			if tr.Status != "skipped" || tr.Error != "interrupted by server restart" {
+				t.Errorf("deploy = %+v, want skipped/interrupted by server restart", tr)
+			}
+		}
+	}
+}
+
+// TestPG_FailInterruptedRuns_FailedTaskAlongsideRunning covers a run where
+// one task already terminated on its own (failed) before the process died
+// while another was still running. The run stays "running" in the DB
+// (AppendTaskResult never recomputes status), so it must still be detected
+// as interrupted, and the already-failed task's status/error must be left
+// exactly as they were - only the running task is rewritten.
+func TestPG_FailInterruptedRuns_FailedTaskAlongsideRunning(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-mixed", "/")
+	id := mustCreateRun(t, pg, "fir-mixed", nil)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "lint", Status: "failed", Error: "boom"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "running"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("Status = %q, want failed", run.Status)
+	}
+	for _, tr := range run.TaskResults {
+		switch tr.Name {
+		case "lint":
+			if tr.Status != "failed" || tr.Error != "boom" {
+				t.Errorf("lint = %+v, want left untouched (failed/boom)", tr)
+			}
+		case "deploy":
+			if tr.Status != "failed" || tr.Error != "interrupted by server restart" {
+				t.Errorf("deploy = %+v, want failed/interrupted by server restart", tr)
+			}
+		}
+	}
+}
+
+func TestPG_FailInterruptedRuns_ManualOnlyUntouched(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-manual", "/")
+	id := mustCreateRun(t, pg, "fir-manual", nil)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "build", Status: "passed"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "approve", Status: "manual"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("n = %d, want 0", n)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "running" {
+		t.Errorf("Status = %q, want running (manual-only run left alone)", run.Status)
+	}
+}
+
+// TestPG_FailInterruptedRuns_EmptyTaskResultsIsInterrupted covers a run that
+// never got a single task result appended - a crash between CreateRun and
+// RunService.createRun's first AppendTaskResult call, or a zero-task
+// project. Nothing here is "manual", so it must not fall into the
+// leave-it-running branch: it has to be reconciled like any other ghost.
+func TestPG_FailInterruptedRuns_EmptyTaskResultsIsInterrupted(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-empty", "/")
+	id := mustCreateRun(t, pg, "fir-empty", nil)
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("Status = %q, want failed (empty task_results must not be treated as manual-only)", run.Status)
+	}
+	if run.Error != "interrupted by server restart" {
+		t.Errorf("Error = %q, want interrupted by server restart", run.Error)
+	}
+}
+
+func TestPG_FailInterruptedRuns_NoRunningRuns(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-none", "/")
+	id := mustCreateRun(t, pg, "fir-none", nil)
+	if err := pg.FinishRun(id, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("n = %d, want 0", n)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "passed" {
+		t.Errorf("Status = %q, want passed (untouched)", run.Status)
+	}
+}
+
+func TestPG_FailInterruptedRuns_Idempotent(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-idempotent", "/")
+	id := mustCreateRun(t, pg, "fir-idempotent", nil)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "running"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	if n, err := pg.FailInterruptedRuns("interrupted by server restart"); err != nil || n != 1 {
+		t.Fatalf("first call: n=%d err=%v, want 1/nil", n, err)
+	}
+	before, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+
+	if n, err := pg.FailInterruptedRuns("interrupted by server restart"); err != nil || n != 0 {
+		t.Fatalf("second call: n=%d err=%v, want 0/nil", n, err)
+	}
+	after, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if after.Status != before.Status || after.Error != before.Error || after.Output != before.Output {
+		t.Errorf("second call changed an already-failed run: before=%+v after=%+v", before, after)
+	}
+}
+
 // ── NewPG error paths ──────────────────────────────────────────────
 
 func TestPG_NewPG_BadURL(t *testing.T) {

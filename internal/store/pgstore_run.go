@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"kestrix/internal/domain"
@@ -81,6 +82,24 @@ func (s *PGStore) FlushRunOutput(runID int, output string) error {
 	return err
 }
 
+// dedupLatestTaskResults reduces an append-only task_results history to one
+// entry per task name - the latest - preserving the order each name was
+// first seen in. Shared by CancelRun and FailInterruptedRuns, the two
+// writers that need "current status per task" rather than the raw history.
+func dedupLatestTaskResults(results []TaskResult) (order []string, latest map[string]TaskResult) {
+	latest = make(map[string]TaskResult)
+	order = make([]string, 0, len(results))
+	seen := make(map[string]bool)
+	for _, tr := range results {
+		if !seen[tr.Name] {
+			order = append(order, tr.Name)
+			seen[tr.Name] = true
+		}
+		latest[tr.Name] = tr
+	}
+	return order, latest
+}
+
 // CancelRun marks a running run as "canceled":
 // - running → canceled
 // - pending (no incomplete deps) → canceled
@@ -102,17 +121,7 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 	var results []TaskResult
 	json.Unmarshal([]byte(taskResultsJSON), &results)
 
-	// Deduplicate by name keeping last status (append model may have running+passed pairs).
-	latest := make(map[string]TaskResult)
-	order := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, tr := range results {
-		if !seen[tr.Name] {
-			order = append(order, tr.Name)
-			seen[tr.Name] = true
-		}
-		latest[tr.Name] = tr
-	}
+	order, latest := dedupLatestTaskResults(results)
 
 	incomplete := make(map[string]bool)
 	for name, tr := range latest {
@@ -169,6 +178,109 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 		string(b), canceledBy, id,
 	)
 	return err
+}
+
+// FailInterruptedRuns marks every run left "running" by a previous process
+// as failed, in one transaction, before any request can observe the old
+// state. A run is left alone only when it has at least one "manual" task
+// result and nothing else non-terminal: ApproveManualTask still works on it
+// after the restart. Every other case - a running or pending task, or no
+// task result at all (a crash before the first one was appended, or a
+// zero-task project) - is reconciled. Idempotent: a run already reconciled
+// has no "running" status left to select.
+func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id, task_results, output FROM runs WHERE status = 'running' FOR UPDATE`)
+	if err != nil {
+		return 0, fmt.Errorf("select running runs: %w", err)
+	}
+	type runRow struct {
+		id              int
+		taskResultsJSON string
+		output          string
+	}
+	var runRows []runRow
+	for rows.Next() {
+		var r runRow
+		if err := rows.Scan(&r.id, &r.taskResultsJSON, &r.output); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan running run: %w", err)
+		}
+		runRows = append(runRows, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate running runs: %w", err)
+	}
+	rows.Close()
+
+	count := 0
+	for _, r := range runRows {
+		var results []TaskResult
+		if err := json.Unmarshal([]byte(r.taskResultsJSON), &results); err != nil {
+			log.Printf("FailInterruptedRuns: run %d has malformed task_results, proceeding with a partial decode: %v", r.id, err)
+		}
+
+		order, latest := dedupLatestTaskResults(results)
+
+		// Leave the run running only when it has an actual manual gate
+		// waiting and nothing else non-terminal - that run is genuinely
+		// resumable via ApproveManualTask. Empty task_results (a crash
+		// between CreateRun and its first AppendTaskResult, or a
+		// zero-task project) has no manual entry to wait on, so it must
+		// not fall into this branch: it needs to be reconciled below.
+		hasManual := false
+		hasRunningOrPending := false
+		for _, tr := range latest {
+			switch tr.Status {
+			case "manual":
+				hasManual = true
+			case "running", "pending":
+				hasRunningOrPending = true
+			}
+		}
+		if hasManual && !hasRunningOrPending {
+			continue
+		}
+
+		final := make([]TaskResult, 0, len(order))
+		for _, name := range order {
+			tr := latest[name]
+			switch tr.Status {
+			case "running":
+				tr.Status = "failed"
+				tr.Error = reason
+			case "pending":
+				tr.Status = "skipped"
+				tr.Error = reason
+			}
+			final = append(final, tr)
+		}
+
+		out := r.output
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += reason
+
+		b, _ := json.Marshal(final)
+		if _, err := tx.Exec(
+			`UPDATE runs SET status = 'failed', task_results = $1, output = $2, error = $3, finished_at = now() WHERE id = $4`,
+			string(b), out, reason, r.id,
+		); err != nil {
+			return 0, fmt.Errorf("fail interrupted run %d: %w", r.id, err)
+		}
+		count++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return count, nil
 }
 
 // ApplyTaskResult appends a task result and recomputes overall run status.

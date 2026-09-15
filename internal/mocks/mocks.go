@@ -176,35 +176,38 @@ func (m *MockProjectStore) List() ([]string, error) {
 
 // MockRunStore records calls for RunService tests.
 type MockRunStore struct {
-	mu                  sync.Mutex
-	CreateRunCalls      []createRunCall
-	CreateRunID         int
-	CreateRunErr        error
-	FinishRunCalls      []finishRunCall
-	FinishRunErr        error
-	FinishRunCh         chan struct{} // closed once after the first FinishRun call
-	finishOnce          sync.Once     // protects FinishRunCh from double-close
-	AppendTaskCalls     []domain.TaskResult
-	AppendTaskErr       error
-	FlushRunCalls       []string
-	CancelRunCalls      []cancelRunCall
-	CancelRunErr        error
-	ApplyTaskCalls      []applyTaskCall
-	ApplyTaskCh         chan struct{} // closed once after the first ApplyTaskResult call
-	applyOnce           sync.Once     // protects ApplyTaskCh from double-close
-	ApplyTaskErr        error
-	GetRunResult        *domain.Run
-	GetRunErr           error
-	CountRunsResult     int
-	CountRunsErr        error
-	ListRunsResult      []domain.Run
-	ListRunsErr         error
-	ListAllRunsResult   []domain.Run
-	ListAllRunsErr      error
-	CountByStatusResult map[string]int
-	CountByStatusErr    error
-	UpdateSourcesCalls  [][]domain.AcquiredSource
-	UpdateSourcesErr    error
+	mu                    sync.Mutex
+	CreateRunCalls        []createRunCall
+	CreateRunID           int
+	CreateRunErr          error
+	FinishRunCalls        []finishRunCall
+	FinishRunErr          error
+	FinishRunCh           chan struct{} // closed once after the first FinishRun call
+	finishOnce            sync.Once     // protects FinishRunCh from double-close
+	AppendTaskCalls       []domain.TaskResult
+	AppendTaskErr         error
+	FlushRunCalls         []string
+	CancelRunCalls        []cancelRunCall
+	CancelRunErr          error
+	ApplyTaskCalls        []applyTaskCall
+	ApplyTaskCh           chan struct{} // closed once after the first ApplyTaskResult call
+	applyOnce             sync.Once     // protects ApplyTaskCh from double-close
+	ApplyTaskErr          error
+	GetRunResult          *domain.Run
+	GetRunErr             error
+	CountRunsResult       int
+	CountRunsErr          error
+	ListRunsResult        []domain.Run
+	ListRunsErr           error
+	ListAllRunsResult     []domain.Run
+	ListAllRunsErr        error
+	CountByStatusResult   map[string]int
+	CountByStatusErr      error
+	UpdateSourcesCalls    [][]domain.AcquiredSource
+	UpdateSourcesErr      error
+	FailInterruptedCalls  []string
+	FailInterruptedResult int
+	FailInterruptedErr    error
 }
 
 type createRunCall struct {
@@ -273,6 +276,12 @@ func (m *MockRunStore) CancelRun(id int, canceledBy string) error {
 	m.CancelRunCalls = append(m.CancelRunCalls, cancelRunCall{id, canceledBy})
 	m.mu.Unlock()
 	return m.CancelRunErr
+}
+func (m *MockRunStore) FailInterruptedRuns(reason string) (int, error) {
+	m.mu.Lock()
+	m.FailInterruptedCalls = append(m.FailInterruptedCalls, reason)
+	m.mu.Unlock()
+	return m.FailInterruptedResult, m.FailInterruptedErr
 }
 func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra string) error {
 	m.mu.Lock()

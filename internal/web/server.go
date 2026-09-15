@@ -510,6 +510,13 @@ func (s *Server) Router() http.Handler {
 	return s.router
 }
 
+// FailInterruptedRuns reconciles runs left running by a previous instance.
+// Callers (cmdServe) run this after NewServerE and before ListenAndServe, so
+// the HTTP listener never serves a request that can observe a ghost run.
+func (s *Server) FailInterruptedRuns(reason string) (int, error) {
+	return s.runStore.FailInterruptedRuns(reason)
+}
+
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
 	log.Printf("Kestrix server listening on %s", s.cfg.ListenAddr)
