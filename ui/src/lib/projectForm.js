@@ -1,11 +1,17 @@
 export function remoteProjectPayload(name, form) {
+  // The API keeps a stored webhook secret when the update omits the field, so
+  // the key is only emitted when the user actually typed one. Sending an empty
+  // string on every edit would be indistinguishable from "leave it alone" here,
+  // but relying on that is what makes an accidental clear one API change away.
+  const secret = (form.webhook_secret || '').trim();
   return {
     ...(name ? { name: name.trim() } : {}),
     repo_url: (form.repo_url || '').trim(),
     repo_ref: (form.repo_ref || '').trim(),
     repo_credential_ref: form.repo_credential_ref || '',
     pipeline_dir: (form.pipeline_dir || 'ci').trim(),
-    pipeline_file: form.pipeline_file || 'pipeline.tf',
+    pipeline_file: (form.pipeline_file || '').trim() || 'pipeline.tf',
+    ...(secret ? { webhook_secret: secret } : {}),
   };
 }
 

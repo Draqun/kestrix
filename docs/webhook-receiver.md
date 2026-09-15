@@ -57,6 +57,11 @@ The request body is read at most once and is bounded by
 `KESTRIX_WEBHOOK_MAX_BODY_BYTES`; a body over that bound is rejected with
 `413` and is not recorded either.
 
+A per-project secret can be set from the browser as well as from the API: the
+project detail page's **Webhook setup** panel shows the delivery URL and the
+Git host steps, and the create/edit dialogs set the secret. See
+[Frontend](fe.md) - Project webhook setup.
+
 **BREAKING**: a deployment with no `KESTRIX_WEBHOOK_SECRET` and no
 per-project secret rejects every delivery with `401`. See
 [Authentication](authentication.md) for how the global secret and timeouts

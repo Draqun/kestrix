@@ -5,6 +5,7 @@ The Kestrix UI is a single‑page application built with **React 19**, **MUI v9*
 ## Key Features
 
 - **Project management** — validate, create, edit, delete, and view remote projects
+- **Webhook setup** — per-project webhook secret and the delivery URL a Git host needs
 - **Credential management** — create, rotate, and revoke write-only repository secrets
 - **Pipeline viewer** — read-only HCL with syntax highlighting; Git is the source of truth
 - **Run history** — paginated list of pipeline runs with filtering by status and repository
@@ -23,6 +24,34 @@ dialogs. It lists public access and active credential metadata, supports
 inline creation without resetting project fields, and links to Settings for
 rotation and revocation. Credential type selection uses MUI `Select` and
 `MenuItem`, so it works with pointer and keyboard input.
+
+## Project webhook setup
+
+The project create and edit dialogs carry a **Webhook secret** field
+(`type="password"` with a reveal toggle) and a **Pipeline file** field, so a
+repository whose pipeline entry file is not `pipeline.tf` can be registered
+without the API.
+
+A stored secret is never returned by the API and never rendered. The edit
+dialog therefore starts the field empty, and the update payload omits
+`webhook_secret` entirely unless the user typed one - matching the API's rule
+that an absent secret leaves the stored one unchanged. Saving any other field
+cannot clear a secret.
+
+The project detail header shows a chip derived from `has_webhook_secret`
+("Secret set" or "No per-project secret - uses global secret"), and the
+**Webhook setup** panel below it shows the delivery URL, a copy button, and
+the GitLab steps (Settings -> Webhooks, URL, Secret token, Push events).
+
+The delivery URL is built from the browser's origin plus `/webhook`, because
+the server has no configured public URL; the panel states that the Git host
+must be able to reach that same host. The panel names both accepted header
+forms - `X-Gitlab-Token` for token mode and `X-Hub-Signature-256` for HMAC
+mode - and notes that the server's `KESTRIX_WEBHOOK_METHOD` decides which one
+is verified. It is server configuration, not project data, so the UI does not
+claim to know it.
+
+## Credential dialog
 
 The shared credential dialog shows required/optional state and concise helper
 text for every field. Focusable information controls add detailed pointer,
