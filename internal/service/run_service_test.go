@@ -403,6 +403,37 @@ func TestRunService_RunTask_ErrorWithoutStatus(t *testing.T) {
 	}
 }
 
+// REVIEW.md R1: task runners build TaskResult.Output as their own complete
+// buffer, independent of the run's aggregate output stream that
+// prepareRunExecution's boundedWriter bounds - so RunTask must separately
+// truncate tr.Output before it reaches ApplyTaskResult, or a single verbose
+// task stores unbounded output regardless of runner.max_output_bytes.
+func TestRunService_RunTask_TruncatesOversizedTaskOutput(t *testing.T) {
+	mockRun := &mocks.MockRunStore{}
+	bigOutput := strings.Repeat("x", 100)
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "t", Status: "passed", Output: bigOutput}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc.MaxOutputBytes = 10
+
+	tr, err := svc.RunTask(context.Background(), 1, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	marker := "--- output truncated at 10 bytes (runner.max_output_bytes) ---\n"
+	if !strings.HasSuffix(tr.Output, marker) {
+		t.Fatalf("tr.Output = %q, want it to end with the truncation marker", tr.Output)
+	}
+	if len(tr.Output) > 10+len(marker) {
+		t.Fatalf("tr.Output len = %d, want at most bound+marker", len(tr.Output))
+	}
+	last := mockRun.ApplyTaskCalls[len(mockRun.ApplyTaskCalls)-1]
+	if !strings.HasSuffix(last.TaskResult.Output, marker) {
+		t.Fatalf("persisted ApplyTaskResult output was not truncated: %+v", last)
+	}
+}
+
 func TestRunService_RunTask_StampsApproverOnTerminalEntry(t *testing.T) {
 	mockRun := &mocks.MockRunStore{ApplyTaskCh: make(chan struct{})}
 	mockRunner := &mocks.MockPipelineRunner{
@@ -1318,6 +1349,8 @@ func (s *seqRunStore) ListRuns(string, int, int) ([]domain.Run, error) { return 
 func (s *seqRunStore) ListAllRuns(int) ([]domain.Run, error)           { return nil, nil }
 func (s *seqRunStore) CountRunsByStatus() (map[string]int, error)      { return nil, nil }
 func (s *seqRunStore) FailInterruptedRuns(string) (int, error)         { return 0, nil }
+func (s *seqRunStore) SetRunQueued(int) error                          { return nil }
+func (s *seqRunStore) StartQueuedRun(int) (bool, error)                { return true, nil }
 
 // twoSlotBlockRunner blocks each Run call on its own release channel so a
 // test can complete one run while the other stays active. started is
@@ -1462,5 +1495,460 @@ func TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun(t *testing.T) {
 	}
 	if got := svc.ActiveRunIDsForProject("proj"); len(got) != 0 {
 		t.Fatalf("after the task returned, ActiveRunIDsForProject(proj) = %v, want empty", got)
+	}
+}
+
+// seqIDMockRunStore hands out increasing run IDs so concurrent Starts occupy
+// distinct entries in RunService.active/done, while still recording every
+// call (including SetRunQueued/StartQueuedRun) via the embedded MockRunStore.
+type seqIDMockRunStore struct {
+	*mocks.MockRunStore
+	mu   sync.Mutex
+	next int
+}
+
+func (s *seqIDMockRunStore) CreateRun(p string, c []string, im bool, snap *model.Project, startedBy string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	return s.next, nil
+}
+
+// concurrencyBlockRunner blocks every Run call until release is closed, and
+// signals each call's start on started (buffered so a test can count
+// concurrent starts without a race).
+type concurrencyBlockRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *concurrencyBlockRunner) Run(ctx context.Context, _ domain.Project, _ map[string]bool, _ domain.RunnerOptions) ([]domain.TaskResult, error) {
+	r.started <- struct{}{}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+	}
+	return []domain.TaskResult{{Name: "t", Status: "passed"}}, nil
+}
+
+func (r *concurrencyBlockRunner) RunTask(context.Context, domain.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
+	return domain.TaskResult{}, nil
+}
+
+// TestRunService_Start_ConcurrencyLimit_QueuesBeyondCapacity covers the spec
+// scenario "Burst above the limit": at limit 2, three starts yield two
+// running and one queued, and the queue write happens synchronously (before
+// Start returns) so a caller polling immediately never races the
+// background goroutine's own scheduling.
+func TestRunService_Start_ConcurrencyLimit_QueuesBeyondCapacity(t *testing.T) {
+	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: true}}
+	runner := &concurrencyBlockRunner{started: make(chan struct{}, 3), release: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	svc.SetMaxConcurrentRuns(2)
+
+	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
+	runIDs := make([]int, 3)
+	for i := 0; i < 3; i++ {
+		id, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{})
+		if err != nil {
+			t.Fatalf("Start #%d: %v", i, err)
+		}
+		runIDs[i] = id
+	}
+
+	// Synchronous by construction: no race to wait out.
+	if len(store.SetRunQueuedCalls) != 1 || store.SetRunQueuedCalls[0] != runIDs[2] {
+		t.Fatalf("SetRunQueuedCalls = %v, want exactly [%d] (third run queued)", store.SetRunQueuedCalls, runIDs[2])
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-runner.started:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timeout waiting for run #%d to start executing", i)
+		}
+	}
+	select {
+	case <-runner.started:
+		t.Fatal("a third run executed despite the concurrency limit")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(runner.release)
+	select {
+	case <-runner.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the queued run to start after a slot freed")
+	}
+	if len(store.StartQueuedRunCalls) != 1 || store.StartQueuedRunCalls[0] != runIDs[2] {
+		t.Fatalf("StartQueuedRunCalls = %v, want exactly [%d]", store.StartQueuedRunCalls, runIDs[2])
+	}
+}
+
+// TestRunService_Cancel_QueuedRun_PromotesNextWaiter covers the spec
+// scenario "Cancel while queued": canceling a queued run never executes it,
+// and the slot it was waiting for goes to the next queued run instead.
+func TestRunService_Cancel_QueuedRun_PromotesNextWaiter(t *testing.T) {
+	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: true}}
+	runner := &concurrencyBlockRunner{started: make(chan struct{}, 3), release: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	svc.SetMaxConcurrentRuns(1)
+	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
+
+	_, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start a: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run a to start")
+	}
+
+	bID, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start b: %v", err)
+	}
+	cID, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start c: %v", err)
+	}
+	if len(store.SetRunQueuedCalls) != 2 {
+		t.Fatalf("SetRunQueuedCalls = %v, want b and c both queued", store.SetRunQueuedCalls)
+	}
+
+	if err := svc.Cancel(context.Background(), bID, "user:alice"); err != nil {
+		t.Fatalf("Cancel queued run b: %v", err)
+	}
+	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0].ID != bID {
+		t.Fatalf("CancelRunCalls = %+v, want exactly run b (%d)", store.CancelRunCalls, bID)
+	}
+
+	// b must never reach the pipeline runner while a still holds the only slot.
+	select {
+	case <-runner.started:
+		t.Fatal("canceled queued run b executed despite never holding a slot")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(runner.release) // frees a's slot
+	select {
+	case <-runner.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the next waiter to start after the slot freed")
+	}
+
+	if len(store.StartQueuedRunCalls) != 1 || store.StartQueuedRunCalls[0] != cID {
+		t.Fatalf("StartQueuedRunCalls = %v, want exactly c (%d) promoted, not the canceled b", store.StartQueuedRunCalls, cID)
+	}
+}
+
+// TestRunService_RunTask_WaitsForConcurrencySlot covers the proposal's
+// "single-task re-runs ... take a slot like any run": at limit 1, RunTask
+// blocks until the occupying run releases its slot.
+func TestRunService_RunTask_WaitsForConcurrencySlot(t *testing.T) {
+	store := &mocks.MockRunStore{StartQueuedRunResult: true}
+	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
+	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc.SetMaxConcurrentRuns(1)
+
+	_, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-pipelineRunner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the pipeline run to occupy the only slot")
+	}
+
+	runTaskDone := make(chan struct{})
+	go func() {
+		defer close(runTaskDone)
+		svc.RunTask(context.Background(), 99, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
+	}()
+
+	select {
+	case <-taskRunner.startedCh:
+		t.Fatal("RunTask executed the task despite the concurrency limit")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(pipelineRunner.releaseCh) // frees the only slot
+	select {
+	case <-taskRunner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to start once the slot freed")
+	}
+	close(taskRunner.releaseCh)
+
+	select {
+	case <-runTaskDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return")
+	}
+}
+
+func TestRunService_SetMaxConcurrentRuns_ZeroRestoresUnlimited(t *testing.T) {
+	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc.SetMaxConcurrentRuns(1)
+	if !svc.tryAcquireSlot() {
+		t.Fatal("expected the single slot to be free")
+	}
+	svc.SetMaxConcurrentRuns(0)
+	if !svc.tryAcquireSlot() {
+		t.Fatal("SetMaxConcurrentRuns(0) should restore unlimited concurrency")
+	}
+	if !svc.tryAcquireSlot() {
+		t.Fatal("a second acquire should also succeed under unlimited concurrency")
+	}
+}
+
+func TestRunService_MaxConcurrentRuns_ReportsConfiguredCapacity(t *testing.T) {
+	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	if got := svc.MaxConcurrentRuns(); got != 0 {
+		t.Errorf("MaxConcurrentRuns() = %d, want 0 (unlimited) before any SetMaxConcurrentRuns call", got)
+	}
+	svc.SetMaxConcurrentRuns(5)
+	if got := svc.MaxConcurrentRuns(); got != 5 {
+		t.Errorf("MaxConcurrentRuns() = %d, want 5", got)
+	}
+	svc.SetMaxConcurrentRuns(0)
+	if got := svc.MaxConcurrentRuns(); got != 0 {
+		t.Errorf("MaxConcurrentRuns() = %d, want 0 after restoring unlimited", got)
+	}
+}
+
+func TestRunService_WaitForSlot_UnlimitedAlwaysSucceedsImmediately(t *testing.T) {
+	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	if !svc.waitForSlot(context.Background()) {
+		t.Fatal("waitForSlot on an unlimited service should always succeed")
+	}
+}
+
+// REVIEW.md R2: when a slot frees at the same instant ctx is canceled, Go's
+// select can pick either ready case. Run many trials with a pre-canceled ctx
+// and a single available token so both branches fire across the run; every
+// trial must both report failure and leave the token available afterward -
+// proving the token-received branch releases it back rather than letting the
+// caller proceed on a dead context.
+func TestRunService_WaitForSlot_NeverSucceedsWithAlreadyDoneContext(t *testing.T) {
+	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 200; i++ {
+		svc.SetMaxConcurrentRuns(1) // fresh single-token channel each trial
+		if svc.waitForSlot(ctx) {
+			t.Fatal("waitForSlot must never succeed once ctx is already done, even when a token happens to be available")
+		}
+		if !svc.tryAcquireSlot() {
+			t.Fatal("token was lost: waitForSlot must release it back when it wins the race against an already-done ctx")
+		}
+	}
+}
+
+func TestRunService_ReleaseSlot_UnexpectedOverflowIsNoop(t *testing.T) {
+	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc.SetMaxConcurrentRuns(1)
+	// The single token is already in the channel (never acquired); releasing
+	// again must not block or panic.
+	svc.releaseSlot()
+	if !svc.tryAcquireSlot() {
+		t.Fatal("expected the one legitimate token to still be acquirable")
+	}
+}
+
+func TestRunService_RunTask_CanceledWhileQueued(t *testing.T) {
+	store := &mocks.MockRunStore{StartQueuedRunResult: true}
+	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
+	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc.SetMaxConcurrentRuns(1)
+
+	if _, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-pipelineRunner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the pipeline run to occupy the only slot")
+	}
+
+	const runID = 55
+	runTaskErrCh := make(chan error, 1)
+	go func() {
+		_, err := svc.RunTask(context.Background(), runID, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
+		runTaskErrCh <- err
+	}()
+
+	// Wait until RunTask is registered (so Cancel can find it), then cancel it
+	// while it is still queued.
+	waitActivePresent(t, svc, runID)
+	if err := svc.Cancel(context.Background(), runID, "user:alice"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	select {
+	case err := <-runTaskErrCh:
+		if err == nil {
+			t.Fatal("expected RunTask to report the run was canceled while queued")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return after Cancel")
+	}
+	select {
+	case <-taskRunner.startedCh:
+		t.Fatal("RunTask must not have executed the task after being canceled while queued")
+	default:
+	}
+}
+
+func TestRunService_ApproveManualTask_CanceledWhileQueued(t *testing.T) {
+	const runID = 77
+	store, proj := manualApprovalFixture(runID)
+	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
+	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc.SetMaxConcurrentRuns(1)
+
+	if _, err := svc.Start(context.Background(), "other", &model.Project{Name: "other", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-pipelineRunner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the pipeline run to occupy the only slot")
+	}
+
+	approveErrCh := make(chan error, 1)
+	go func() {
+		_, err := svc.ApproveManualTask(context.Background(), runID, "proj", proj, "manual", domain.RunnerOptions{SourcesPrepared: true})
+		approveErrCh <- err
+	}()
+
+	waitActivePresent(t, svc, runID)
+	if err := svc.Cancel(context.Background(), runID, "user:alice"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	select {
+	case err := <-approveErrCh:
+		if err == nil {
+			t.Fatal("expected ApproveManualTask to report the run was canceled while queued")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for ApproveManualTask to return after Cancel")
+	}
+	select {
+	case <-taskRunner.startedCh:
+		t.Fatal("ApproveManualTask must not have executed the task after being canceled while queued")
+	default:
+	}
+}
+
+func TestRunService_RunTask_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
+	store := &mocks.MockRunStore{StartQueuedRunResult: false}
+	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
+	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc.SetMaxConcurrentRuns(1)
+
+	if _, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-pipelineRunner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the pipeline run to occupy the only slot")
+	}
+
+	runTaskErrCh := make(chan error, 1)
+	go func() {
+		_, err := svc.RunTask(context.Background(), 56, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
+		runTaskErrCh <- err
+	}()
+
+	// Wait until RunTask has actually reached the queued-and-waiting state
+	// before freeing the slot, or it could race tryAcquireSlot and grab the
+	// token directly without ever queueing.
+	deadline := time.After(3 * time.Second)
+	for store.SetRunQueuedCallCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for RunTask to queue")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	close(pipelineRunner.releaseCh) // frees the only slot; RunTask acquires the token but loses StartQueuedRun
+
+	select {
+	case err := <-runTaskErrCh:
+		if err == nil {
+			t.Fatal("expected an error when StartQueuedRun reports the run was already canceled")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for RunTask to return")
+	}
+	select {
+	case <-taskRunner.startedCh:
+		t.Fatal("RunTask must not execute after losing the queued race")
+	default:
+	}
+	// The slot must have been given back for the next waiter.
+	if !svc.tryAcquireSlot() {
+		t.Fatal("expected the slot to be released back to the pool")
+	}
+}
+
+func TestRunService_Start_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
+	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: false}}
+	runner := &concurrencyBlockRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	svc.SetMaxConcurrentRuns(1)
+	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
+
+	if _, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start a: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for run a to start")
+	}
+
+	if _, err := svc.Start(context.Background(), "p", proj, nil, domain.RunnerOptions{}); err != nil {
+		t.Fatalf("Start b: %v", err)
+	}
+
+	close(runner.release) // frees a's slot; b acquires the token but loses StartQueuedRun
+
+	select {
+	case <-runner.started:
+		t.Fatal("b must not execute after losing the queued race")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if !svc.tryAcquireSlot() {
+		t.Fatal("expected the slot to be released back to the pool after the lost race")
+	}
+}
+
+// waitActivePresent blocks until runID is registered in svc.active, or fails
+// the test after a timeout.
+func waitActivePresent(t *testing.T, svc *RunService, runID int) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		svc.mu.Lock()
+		_, ok := svc.active[runID]
+		svc.mu.Unlock()
+		if ok {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for run %d to register in active", runID)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }

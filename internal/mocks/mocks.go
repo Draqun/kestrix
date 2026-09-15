@@ -208,6 +208,11 @@ type MockRunStore struct {
 	FailInterruptedCalls  []string
 	FailInterruptedResult int
 	FailInterruptedErr    error
+	SetRunQueuedCalls     []int
+	SetRunQueuedErr       error
+	StartQueuedRunCalls   []int
+	StartQueuedRunResult  bool
+	StartQueuedRunErr     error
 }
 
 type createRunCall struct {
@@ -294,6 +299,28 @@ func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra
 }
 func (m *MockRunStore) GetRun(id int) (*domain.Run, error) {
 	return m.GetRunResult, m.GetRunErr
+}
+func (m *MockRunStore) SetRunQueued(id int) error {
+	m.mu.Lock()
+	m.SetRunQueuedCalls = append(m.SetRunQueuedCalls, id)
+	m.mu.Unlock()
+	return m.SetRunQueuedErr
+}
+
+// SetRunQueuedCallCount returns the number of recorded SetRunQueued calls.
+// Synchronized (unlike reading SetRunQueuedCalls directly), so a test can
+// poll it to wait for a concurrent RunService goroutine to reach the queued
+// state before racing it with a slot release.
+func (m *MockRunStore) SetRunQueuedCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.SetRunQueuedCalls)
+}
+func (m *MockRunStore) StartQueuedRun(id int) (bool, error) {
+	m.mu.Lock()
+	m.StartQueuedRunCalls = append(m.StartQueuedRunCalls, id)
+	m.mu.Unlock()
+	return m.StartQueuedRunResult, m.StartQueuedRunErr
 }
 
 // WaitFinish blocks until FinishRun has been called at least once.

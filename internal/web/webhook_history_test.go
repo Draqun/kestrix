@@ -330,6 +330,40 @@ func TestNewServerEWiresWebhookHistory(t *testing.T) {
 	}
 }
 
+// runHistoryAwareStore is a run store that also accepts a retention limit,
+// mirroring what PGStore provides at runtime for run-concurrency-and-retention.
+type runHistoryAwareStore struct {
+	*mocks.MockRunStore
+	limit int
+}
+
+func (s *runHistoryAwareStore) SetRunHistoryLimit(limit int) { s.limit = limit }
+
+// NewServerE must recognise a run store that also accepts a run history
+// retention limit and hand it the configured value.
+func TestNewServerEWiresRunHistoryLimit(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &runHistoryAwareStore{MockRunStore: &mocks.MockRunStore{}}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	_, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+		RunHistoryLimit:   500,
+	})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+	if runStore.limit != 500 {
+		t.Errorf("run history limit = %d, want 500", runStore.limit)
+	}
+}
+
 // A caller that supplies no webhook service still gets a usable server; the
 // service is constructed without a sink, so recording is a no-op.
 func TestNewServerWithDepsDefaultsWebhookService(t *testing.T) {

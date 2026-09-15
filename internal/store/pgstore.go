@@ -17,6 +17,7 @@ type PGStore struct {
 	db                  *sql.DB
 	masterKeys          credentials.MasterKeyProvider
 	webhookHistoryLimit int
+	runHistoryLimit     int
 }
 
 // NewPG creates a PGStore, connects to the database, and ensures the schema exists.
@@ -41,7 +42,7 @@ func NewPG(databaseURL string) (*PGStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit}, nil
+	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit, runHistoryLimit: DefaultRunHistoryLimit}, nil
 }
 
 // SetWebhookHistoryLimit bounds how many webhook events are retained. A
@@ -51,6 +52,16 @@ func (s *PGStore) SetWebhookHistoryLimit(limit int) {
 		limit = DefaultWebhookHistoryLimit
 	}
 	s.webhookHistoryLimit = limit
+}
+
+// SetRunHistoryLimit bounds how many terminal runs are retained; see
+// run-concurrency-and-retention design.md D3. A non-positive limit restores
+// the default.
+func (s *PGStore) SetRunHistoryLimit(limit int) {
+	if limit <= 0 {
+		limit = DefaultRunHistoryLimit
+	}
+	s.runHistoryLimit = limit
 }
 
 func migrate(db *sql.DB) error {
@@ -167,6 +178,11 @@ func migrate(db *sql.DB) error {
 		{"add run started_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT ''`},
 		{"add run canceled_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS canceled_by TEXT NOT NULL DEFAULT ''`},
 		{"add webhook event source", `ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS source_name TEXT NOT NULL DEFAULT ''`},
+		// Supports pruneRuns' `WHERE status IN (...) ORDER BY started_at DESC, id
+		// DESC LIMIT $1`, run inside every FinishRun/CancelRun transaction;
+		// idx_runs_status alone (status only) leaves that ORDER BY an unindexed
+		// sort over every terminal row - see REVIEW.md R4.
+		{"add runs status/started_at index", `CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at DESC, id DESC)`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {

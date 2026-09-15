@@ -1,4 +1,4 @@
-export const RUN_STATUSES = ['passed', 'failed', 'running', 'canceled', 'manual', 'skipped', 'pending'];
+export const RUN_STATUSES = ['passed', 'failed', 'running', 'queued', 'canceled', 'manual', 'skipped', 'pending'];
 
 export function filterRuns(runs, { statusFilter = [], changeFilter = '' }) {
   return runs.filter((run) => {

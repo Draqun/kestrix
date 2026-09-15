@@ -178,6 +178,7 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			Method: method,
 		},
 		WebhookHistoryLimit: cfg.Webhook.HistoryLimit,
+		RunHistoryLimit:     cfg.Runner.RunHistoryLimit,
 		Dispatch: web.DispatchConfig{
 			Enabled:     cfg.Dispatch.Enabled,
 			ProjectID:   fmt.Sprintf("%d", cfg.Dispatch.ProjectID),
@@ -185,7 +186,9 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			GitLabToken: cfg.Dispatch.GitLabToken,
 		},
 		Runner: web.RunnerConfig{
-			Mode: cfg.Runner.Mode,
+			Mode:              cfg.Runner.Mode,
+			MaxConcurrentRuns: cfg.Runner.MaxConcurrentRuns,
+			MaxOutputBytes:    cfg.Runner.MaxOutputBytes,
 		},
 	}
 }

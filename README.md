@@ -194,6 +194,9 @@ runner:
   docker_user: ""
   docker_network: "bridge"
   cancel_grace: "10s"
+  max_concurrent_runs: 2
+  run_history_limit: 1000
+  max_output_bytes: 10485760
 ```
 
 **Precedence:** explicit CLI flag over config-file value over `KESTRIX_*`
@@ -220,6 +223,9 @@ Optional:
 | `KESTRIX_WEBHOOK_SECRET` | `--secret` | Global webhook secret, used when the matched project has none of its own |
 | `KESTRIX_WEBHOOK_METHOD` | `--method` | `gitlab` (X-Gitlab-Token comparison, default) or `hmac` (HMAC-SHA256 body signature) |
 | `KESTRIX_WEBHOOK_HISTORY_LIMIT` | — | Retained webhook events (default `1000`) |
+| `KESTRIX_RUNNER_MAX_CONCURRENT_RUNS` | — | Runs executed at once; runs beyond this are `queued` (default `2`, must be a positive integer) |
+| `KESTRIX_RUN_HISTORY_LIMIT` | — | Retained terminal runs (default `1000`, must be a positive integer) |
+| `KESTRIX_RUNNER_MAX_OUTPUT_BYTES` | — | Stored run output bound in bytes; output beyond it is truncated with a marker line (default `10485760`, must be a positive integer) |
 | `KESTRIX_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
 | `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID (must be a positive integer; startup fails otherwise) |
 | `KESTRIX_SOURCE_CACHE_DIR` | `--source-cache-dir` | Private bare-mirror cache directory |

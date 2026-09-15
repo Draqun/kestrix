@@ -49,6 +49,28 @@ PostgreSQL volume. The profiles are intentionally isolated. Data from the old
 shared database is not copied or deleted automatically; export/import it
 explicitly if it must be recovered.
 
+## Run concurrency, retention, and output bounds
+
+Kestrix bounds how much work one instance executes at once and how much run
+history and output it keeps:
+
+- `KESTRIX_RUNNER_MAX_CONCURRENT_RUNS` (default `2`) caps runs executing at
+  once. A run triggered while every slot is busy is recorded `queued` and
+  starts automatically, in acceptance order, as slots free. Cancelling a
+  `queued` run marks it `canceled` without executing anything.
+- `KESTRIX_RUN_HISTORY_LIMIT` (default `1000`) caps retained runs. Once a run
+  finishes, the oldest terminal (`passed`/`failed`/`canceled`) runs beyond the
+  limit are deleted; a `running`, `queued`, or manual-approval-pending run is
+  never deleted by retention.
+- `KESTRIX_RUNNER_MAX_OUTPUT_BYTES` (default `10485760`, 10 MiB) caps stored
+  run output. Output beyond the bound is dropped and the stored output ends
+  with a marker line naming the bound; the run's status is unaffected.
+
+All three must be positive integers; an invalid value fails startup naming
+the setting. Upgrading an existing deployment applies retention starting from
+its first run to finish after the upgrade, which may prune a backlog of old
+runs down to the configured limit immediately.
+
 ## Building the UI and documentation
 ```bash
 make ui-build   # builds UI and copies Markdown docs to ui/dist/docs

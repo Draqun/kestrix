@@ -75,6 +75,13 @@ type Environment struct {
 	// container) gets to exit before being killed; see design.md D4.
 	// Defaults to 10s.
 	RunnerCancelGrace time.Duration
+	// RunnerMaxConcurrentRuns, RunHistoryLimit, and RunnerMaxOutputBytes
+	// bound in-flight runs, retained run history, and stored run output; see
+	// run-concurrency-and-retention design.md. Defaults to 2, 1000, and
+	// 10485760.
+	RunnerMaxConcurrentRuns int
+	RunHistoryLimit         int
+	RunnerMaxOutputBytes    int
 	// HTTPReadTimeout, HTTPWriteTimeout, and HTTPIdleTimeout bound the HTTP
 	// listener's connection lifetime; see webhook-ingress-hardening design.md
 	// D5. Defaults to 30s, 120s, and 120s.
@@ -105,6 +112,23 @@ var (
 	environmentOnce sync.Once
 	environmentLive *Environment
 )
+
+// parsePositiveIntEnv reads KESTRIX_<key> from values and parses it as a
+// positive integer, returning def when the variable is unset. The returned
+// error names the canonical variable, ready to become validationErr - see
+// REVIEW.md R16, which asked for this instead of a fourth/fifth/sixth
+// hand-copied Atoi-and-reject-non-positive block.
+func parsePositiveIntEnv(values map[string]string, key string, def int) (int, error) {
+	raw := values[Prefix+key]
+	if raw == "" {
+		return def, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return def, fmt.Errorf("%s%s must be a positive integer", Prefix, key)
+	}
+	return parsed, nil
+}
 
 // LoadEnvironment creates a deterministic, immutable snapshot from environ.
 // It is pure and is intended for unit tests as well as process initialization.
@@ -288,6 +312,21 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	runnerMaxConcurrentRuns, err := parsePositiveIntEnv(values, "RUNNER_MAX_CONCURRENT_RUNS", 2)
+	if err != nil && validationErr == nil {
+		validationErr = err
+	}
+
+	runHistoryLimit, err := parsePositiveIntEnv(values, "RUN_HISTORY_LIMIT", 1000)
+	if err != nil && validationErr == nil {
+		validationErr = err
+	}
+
+	runnerMaxOutputBytes, err := parsePositiveIntEnv(values, "RUNNER_MAX_OUTPUT_BYTES", 10485760)
+	if err != nil && validationErr == nil {
+		validationErr = err
+	}
+
 	httpReadTimeout := 30 * time.Second
 	if raw := values[Prefix+"HTTP_READ_TIMEOUT"]; raw != "" {
 		parsed, err := time.ParseDuration(raw)
@@ -372,21 +411,24 @@ func LoadEnvironment(environ []string) *Environment {
 			MaxAge:    maxAge,
 			MaxBytes:  maxBytes,
 		},
-		RunnerEnvPassthrough: runnerEnvPassthrough,
-		RunnerDockerPIDs:     runnerDockerPIDs,
-		RunnerDockerMemory:   runnerDockerMemory,
-		RunnerDockerCPUs:     runnerDockerCPUs,
-		RunnerDockerUser:     values[Prefix+"RUNNER_DOCKER_USER"],
-		RunnerDockerNetwork:  runnerDockerNetwork,
-		RunnerCancelGrace:    runnerCancelGrace,
-		HTTPReadTimeout:      httpReadTimeout,
-		HTTPWriteTimeout:     httpWriteTimeout,
-		HTTPIdleTimeout:      httpIdleTimeout,
-		HTTPMaxBodyBytes:     httpMaxBodyBytes,
-		WebhookMaxBodyBytes:  webhookMaxBodyBytes,
-		values:               values,
-		originalEnvs:         normalized,
-		validationErr:        validationErr,
+		RunnerEnvPassthrough:    runnerEnvPassthrough,
+		RunnerDockerPIDs:        runnerDockerPIDs,
+		RunnerDockerMemory:      runnerDockerMemory,
+		RunnerDockerCPUs:        runnerDockerCPUs,
+		RunnerDockerUser:        values[Prefix+"RUNNER_DOCKER_USER"],
+		RunnerDockerNetwork:     runnerDockerNetwork,
+		RunnerCancelGrace:       runnerCancelGrace,
+		RunnerMaxConcurrentRuns: runnerMaxConcurrentRuns,
+		RunHistoryLimit:         runHistoryLimit,
+		RunnerMaxOutputBytes:    runnerMaxOutputBytes,
+		HTTPReadTimeout:         httpReadTimeout,
+		HTTPWriteTimeout:        httpWriteTimeout,
+		HTTPIdleTimeout:         httpIdleTimeout,
+		HTTPMaxBodyBytes:        httpMaxBodyBytes,
+		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
+		values:                  values,
+		originalEnvs:            normalized,
+		validationErr:           validationErr,
 	}
 }
 

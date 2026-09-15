@@ -44,6 +44,11 @@ function statusIcon(status) {
     case 'passed': return <PassedIcon fontSize="small" color="success" />;
     case 'failed': return <FailedIcon fontSize="small" color="error" />;
     case 'running': return <RunIcon fontSize="small" color="warning" />;
+    // 'queued' (waiting for a concurrency slot) intentionally reuses
+    // PendingIcon from 'pending' (waiting on task dependencies) - the two
+    // statuses are conceptually different, but share an hourglass glyph,
+    // distinguished only by color (info vs disabled).
+    case 'queued': return <PendingIcon fontSize="small" color="info" />;
     case 'pending': return <PendingIcon fontSize="small" color="disabled" />;
     case 'skipped': return <SkippedIcon fontSize="small" color="disabled" />;
     case 'canceled': return <CanceledIcon fontSize="small" color="disabled" />;
@@ -53,7 +58,7 @@ function statusIcon(status) {
 
 function statusChip(status) {
   const colors = {
-    passed: 'success', failed: 'error', running: 'warning',
+    passed: 'success', failed: 'error', running: 'warning', queued: 'info',
     pending: 'default', skipped: 'default', canceled: 'default',
   };
   return (
@@ -155,6 +160,15 @@ export default function Dashboard() {
             value={stats.running ?? 0}
             icon={<RunIcon color="warning" />}
             color="warning.main"
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} sm={3} md={3}>
+          <StatCard
+            title="Queued"
+            value={stats.queued ?? 0}
+            icon={<PendingIcon color="info" />}
+            color="info.main"
             loading={loading}
           />
         </Grid>

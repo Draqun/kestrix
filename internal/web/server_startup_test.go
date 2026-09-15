@@ -202,6 +202,35 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 }
 
+// REVIEW.md R7: NewServerE must forward the configured concurrency limit and
+// output bound into the RunService it builds; deleting that wiring would
+// silently restore unbounded concurrency/output with nothing else failing.
+func TestNewServerEWiresRunConcurrencyAndOutputBound(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+		Runner:            RunnerConfig{MaxConcurrentRuns: 3, MaxOutputBytes: 4096},
+	})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+	if got := server.runService.MaxConcurrentRuns(); got != 3 {
+		t.Errorf("RunService.MaxConcurrentRuns() = %d, want 3", got)
+	}
+	if server.runService.MaxOutputBytes != 4096 {
+		t.Errorf("RunService.MaxOutputBytes = %d, want 4096", server.runService.MaxOutputBytes)
+	}
+}
+
 // TestServer_FailInterruptedRuns_MatchesProductionSequence exercises the
 // exact sequence cmdServe runs in production: NewServerE, then
 // FailInterruptedRuns on the result, before ListenAndServe. Every other test

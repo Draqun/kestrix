@@ -95,16 +95,22 @@ func (r *redactingWriter) Write(p []byte) (int, error) {
 }
 
 // Flush redacts and forwards any bytes still held back for a possible
-// cross-write match. Call it once no further data is coming - see D5's
-// "call Flush() in finishRun before persisting".
+// cross-write match, then flushes the underlying writer if it has its own
+// Flush (for example boundedWriter's truncation marker) - call it once no
+// further data is coming; see D5's "call Flush() in finishRun before
+// persisting" and run-concurrency-and-retention design.md D4.
 func (r *redactingWriter) Flush() error {
-	if len(r.pending) == 0 {
-		return nil
+	if len(r.pending) != 0 {
+		out := r.redact(r.pending)
+		r.pending = nil
+		if _, err := r.w.Write(out); err != nil {
+			return err
+		}
 	}
-	out := r.redact(r.pending)
-	r.pending = nil
-	_, err := r.w.Write(out)
-	return err
+	if f, ok := r.w.(interface{ Flush() error }); ok {
+		return f.Flush()
+	}
+	return nil
 }
 
 func (r *redactingWriter) redact(buf []byte) []byte {

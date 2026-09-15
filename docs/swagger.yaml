@@ -207,7 +207,8 @@ definitions:
       canceled_by:
         description: |-
           CanceledBy is the actor that canceled the run. Empty unless the run
-          was canceled while running - see run-attribution D3.
+          was canceled while running or queued - see run-attribution D3 and
+          run-concurrency-and-retention design.md D2.
         type: string
       changed:
         items:

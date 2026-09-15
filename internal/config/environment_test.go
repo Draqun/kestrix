@@ -391,6 +391,69 @@ func TestLoadEnvironmentRunnerDockerPIDsRejectsNonPositive(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentRunConcurrencyAndRetentionDefaults(t *testing.T) {
+	env := LoadEnvironment(nil)
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.RunnerMaxConcurrentRuns != 2 {
+		t.Errorf("RunnerMaxConcurrentRuns = %d, want 2", env.RunnerMaxConcurrentRuns)
+	}
+	if env.RunHistoryLimit != 1000 {
+		t.Errorf("RunHistoryLimit = %d, want 1000", env.RunHistoryLimit)
+	}
+	if env.RunnerMaxOutputBytes != 10485760 {
+		t.Errorf("RunnerMaxOutputBytes = %d, want 10485760", env.RunnerMaxOutputBytes)
+	}
+}
+
+func TestLoadEnvironmentRunConcurrencyAndRetentionExplicitValues(t *testing.T) {
+	env := LoadEnvironment([]string{
+		"KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=4",
+		"KESTRIX_RUN_HISTORY_LIMIT=500",
+		"KESTRIX_RUNNER_MAX_OUTPUT_BYTES=2048",
+	})
+	if err := env.ValidationError(); err != nil {
+		t.Fatal(err)
+	}
+	if env.RunnerMaxConcurrentRuns != 4 {
+		t.Errorf("RunnerMaxConcurrentRuns = %d, want 4", env.RunnerMaxConcurrentRuns)
+	}
+	if env.RunHistoryLimit != 500 {
+		t.Errorf("RunHistoryLimit = %d, want 500", env.RunHistoryLimit)
+	}
+	if env.RunnerMaxOutputBytes != 2048 {
+		t.Errorf("RunnerMaxOutputBytes = %d, want 2048", env.RunnerMaxOutputBytes)
+	}
+}
+
+func TestLoadEnvironmentRunnerMaxConcurrentRunsRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentRunHistoryLimitRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUN_HISTORY_LIMIT=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUN_HISTORY_LIMIT=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
+func TestLoadEnvironmentRunnerMaxOutputBytesRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_MAX_OUTPUT_BYTES=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUNNER_MAX_OUTPUT_BYTES=%q: ValidationError() = nil, want error", raw)
+		}
+	}
+}
+
 func TestLoadEnvironmentRunnerCancelGraceRejectsNegative(t *testing.T) {
 	for _, raw := range []string{"-1s", "not-a-duration"} {
 		env := LoadEnvironment([]string{"KESTRIX_RUNNER_CANCEL_GRACE=" + raw})

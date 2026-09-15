@@ -465,6 +465,16 @@ type RunService struct {
 	// cancelled. Zero selects defaultCancelGrace; see design.md D5.
 	CancelGrace time.Duration
 
+	// MaxOutputBytes bounds stored run output; see run-concurrency-and-retention
+	// design.md D4. Zero (the default) means unbounded.
+	MaxOutputBytes int
+
+	// slots is a counting semaphore bounding concurrent runs; see
+	// run-concurrency-and-retention design.md D1. Nil (the default, set by
+	// NewRunService) means unlimited concurrency - SetMaxConcurrentRuns
+	// installs a bounded channel pre-filled with one token per slot.
+	slots chan struct{}
+
 	mu     sync.Mutex
 	active map[int]activeRun
 	done   map[int]chan struct{}
@@ -519,6 +529,15 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	s.done[runID] = doneCh
 	s.mu.Unlock()
 
+	// Decide and record queued-vs-running synchronously, before returning
+	// runID, so a caller that immediately queries the run never races the
+	// background goroutine's own scheduling; see design.md D1/D2. The
+	// blocking half (waitAndStart) runs in the goroutine below since it may
+	// wait indefinitely - see REVIEW.md R10, which shares both halves with
+	// acquireSlot (used by RunTask/ApproveManualTask, which have no
+	// synchronous/async split to make).
+	acquired := s.markQueuedIfBusy(runID)
+
 	go func() {
 		defer close(doneCh)
 		defer cancel()
@@ -528,6 +547,10 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 			delete(s.done, runID)
 			s.mu.Unlock()
 		}()
+		if !acquired && !s.waitAndStart(runCtx, runID) {
+			return
+		}
+		defer s.releaseSlot()
 		s.executeRun(runCtx, runID, proj, changed, opts, output, redactor)
 	}()
 	return runID, nil
@@ -609,7 +632,8 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 // caller can Flush it before the run's final output is persisted.
 func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) *redactingWriter {
 	previousSourcesAcquired := opts.OnSourcesAcquired
-	redactor := newRedactingWriter(output, opts.ResolvedSecretValues)
+	bounded := newBoundedWriter(output, s.MaxOutputBytes)
+	redactor := newRedactingWriter(bounded, opts.ResolvedSecretValues)
 	opts.Stdout = redactor
 	opts.Stderr = redactor
 	opts.OnTaskStart = func(name string) {
@@ -618,7 +642,7 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 		}
 	}
 	opts.OnTaskComplete = func(tr domain.TaskResult) {
-		tr.Output = redactValues(tr.Output, opts.ResolvedSecretValues)
+		tr.Output = truncateOutput(redactValues(tr.Output, opts.ResolvedSecretValues), s.MaxOutputBytes)
 		if s.runStore != nil {
 			_ = s.runStore.AppendTaskResult(runID, tr)
 			_ = s.runStore.FlushRunOutput(runID, output.String())
@@ -670,19 +694,20 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 	// AppendTaskResult wrote incrementally via OnTaskComplete during the
 	// run, so this slice must be redacted independently rather than relying
 	// on that earlier pass.
-	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues)
+	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues, s.MaxOutputBytes)
 	s.finishRun(runID, output.String(), taskResults, err, opts.SourceSessions)
 }
 
 // redactTaskResults returns a copy of results with each Output field
-// redacted (see design.md D5); results itself is left unmodified.
-func redactTaskResults(results []domain.TaskResult, values []string) []domain.TaskResult {
+// redacted (see design.md D5) and bounded to maxOutputBytes (see REVIEW.md
+// R1); results itself is left unmodified.
+func redactTaskResults(results []domain.TaskResult, values []string, maxOutputBytes int) []domain.TaskResult {
 	if len(results) == 0 {
 		return results
 	}
 	out := make([]domain.TaskResult, len(results))
 	for i, tr := range results {
-		tr.Output = redactValues(tr.Output, values)
+		tr.Output = truncateOutput(redactValues(tr.Output, values), maxOutputBytes)
 		out[i] = tr
 	}
 	return out
@@ -790,6 +815,10 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	}
 	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	defer untrack()
+	if !s.acquireSlot(runCtx, runID) {
+		return domain.TaskResult{}, fmt.Errorf("run %d canceled while queued", runID)
+	}
+	defer s.releaseSlot()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 
@@ -841,8 +870,9 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 		tr.ApprovedAt = approvedAt
 	}
 	// Redact before persisting, whether this task ran directly or through
-	// ApproveManualTask - see design.md D5.
-	tr.Output = redactValues(tr.Output, opts.ResolvedSecretValues)
+	// ApproveManualTask - see design.md D5. Bound after redaction, same
+	// ordering the streaming path uses - see REVIEW.md R1.
+	tr.Output = truncateOutput(redactValues(tr.Output, opts.ResolvedSecretValues), s.MaxOutputBytes)
 	if s.runStore != nil {
 		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
 	}
@@ -942,6 +972,10 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	}
 	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	defer untrack()
+	if !s.acquireSlot(runCtx, runID) {
+		return domain.TaskResult{}, fmt.Errorf("run %d canceled while queued", runID)
+	}
+	defer s.releaseSlot()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
 }
 

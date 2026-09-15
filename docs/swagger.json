@@ -1251,7 +1251,7 @@
             "type": "object",
             "properties": {
                 "canceled_by": {
-                    "description": "CanceledBy is the actor that canceled the run. Empty unless the run\nwas canceled while running - see run-attribution D3.",
+                    "description": "CanceledBy is the actor that canceled the run. Empty unless the run\nwas canceled while running or queued - see run-attribution D3 and\nrun-concurrency-and-retention design.md D2.",
                     "type": "string"
                 },
                 "changed": {
