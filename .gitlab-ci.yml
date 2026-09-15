@@ -106,12 +106,21 @@ test_fe:
   image: node:26-alpine
   before_script:
     - cd ui && npm ci --silent
+  # `npm test` (node --test, then `npm run test:coverage`) is the same command
+  # `make ui-test` runs locally, so CI enforces exactly what's enforced on a
+  # dev machine. test:coverage's thresholds (ui/vitest.coverage.config.js) are
+  # a floor raised by hand whenever coverage clears it with room to spare, and
+  # vitest exits non-zero on a drop below it - so this job now fails on a
+  # coverage regression instead of only printing an unrelated number. The
+  # previous two-line script (node --test --experimental-test-coverage, then
+  # test:components without thresholds) never ran test:coverage at all, so a
+  # drop below the committed floor passed silently; its coverage regex also
+  # tracked node's own report over just src/api and src/lib, which swung with
+  # files like client.js/normalizers.js that were never in scope of the
+  # thresholds and unrelated to whatever change triggered the pipeline.
   script:
-    - node --test --experimental-test-coverage "src/**/*.test.js"
-    - npm run test:components
-  # Matches the "all files" row of the node --test coverage table, which is the
-  # only coverage summary this job prints.
-  coverage: '/all files\s+\|\s+(\d+\.\d+)\s+\|/'
+    - npm test
+  coverage: '/Statements\s*:\s*(\d+\.\d+%)/'
 
 runner-integration:
   extends: .go-job-rules
