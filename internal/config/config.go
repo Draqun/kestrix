@@ -65,24 +65,27 @@ func (c *Config) markSet(key string) {
 // needs the full ordered list, and exporting a mutable slice would let an
 // importer's stray append/write corrupt it for every Config in the process.
 const (
-	KeyListenAddr           = "listen_addr"
-	KeyDatabaseURL          = "database_url"
-	KeyDefaultBranch        = "default_branch"
-	KeyPipelineDir          = "pipeline.dir"
-	KeyWebhookSecret        = "webhook.secret"
-	KeyWebhookHistoryLimit  = "webhook.history_limit"
-	KeyDispatchProjectID    = "dispatch.project_id"
-	KeyDispatchGitLabURL    = "dispatch.gitlab_url"
-	KeyDispatchGitLabToken  = "dispatch.gitlab_token"
-	KeySourceCacheDirectory = "source_cache.directory"
-	KeySourceCacheMaxAge    = "source_cache.max_age"
-	KeySourceCacheMaxBytes  = "source_cache.max_bytes"
-	KeyRunnerDockerPIDs     = "runner.docker_pids"
-	KeyRunnerDockerMemory   = "runner.docker_memory"
-	KeyRunnerDockerCPUs     = "runner.docker_cpus"
-	KeyRunnerDockerUser     = "runner.docker_user"
-	KeyRunnerDockerNetwork  = "runner.docker_network"
-	KeyRunnerCancelGrace    = "runner.cancel_grace"
+	KeyListenAddr              = "listen_addr"
+	KeyDatabaseURL             = "database_url"
+	KeyDefaultBranch           = "default_branch"
+	KeyPipelineDir             = "pipeline.dir"
+	KeyWebhookSecret           = "webhook.secret"
+	KeyWebhookHistoryLimit     = "webhook.history_limit"
+	KeyDispatchProjectID       = "dispatch.project_id"
+	KeyDispatchGitLabURL       = "dispatch.gitlab_url"
+	KeyDispatchGitLabToken     = "dispatch.gitlab_token"
+	KeySourceCacheDirectory    = "source_cache.directory"
+	KeySourceCacheMaxAge       = "source_cache.max_age"
+	KeySourceCacheMaxBytes     = "source_cache.max_bytes"
+	KeyRunnerDockerPIDs        = "runner.docker_pids"
+	KeyRunnerDockerMemory      = "runner.docker_memory"
+	KeyRunnerDockerCPUs        = "runner.docker_cpus"
+	KeyRunnerDockerUser        = "runner.docker_user"
+	KeyRunnerDockerNetwork     = "runner.docker_network"
+	KeyRunnerCancelGrace       = "runner.cancel_grace"
+	KeyRunnerMaxConcurrentRuns = "runner.max_concurrent_runs"
+	KeyRunHistoryLimit         = "runner.run_history_limit"
+	KeyRunnerMaxOutputBytes    = "runner.max_output_bytes"
 )
 
 // multiFormSettingKeys lists every setting with more than one configuration
@@ -95,6 +98,7 @@ var multiFormSettingKeys = []string{
 	KeySourceCacheDirectory, KeySourceCacheMaxAge, KeySourceCacheMaxBytes,
 	KeyRunnerDockerPIDs, KeyRunnerDockerMemory, KeyRunnerDockerCPUs,
 	KeyRunnerDockerUser, KeyRunnerDockerNetwork, KeyRunnerCancelGrace,
+	KeyRunnerMaxConcurrentRuns, KeyRunHistoryLimit, KeyRunnerMaxOutputBytes,
 }
 
 // SourceReport names which source won for each multi-form setting without
@@ -209,6 +213,13 @@ type RunnerConfig struct {
 	// CancelGrace bounds how long a cancelled task gets to exit before
 	// being killed.
 	CancelGrace Duration `yaml:"cancel_grace"`
+	// MaxConcurrentRuns bounds how many runs execute at once; a run accepted
+	// beyond it is queued. RunHistoryLimit bounds how many terminal runs are
+	// retained. MaxOutputBytes bounds stored run output. See
+	// run-concurrency-and-retention design.md.
+	MaxConcurrentRuns int `yaml:"max_concurrent_runs"`
+	RunHistoryLimit   int `yaml:"run_history_limit"`
+	MaxOutputBytes    int `yaml:"max_output_bytes"`
 }
 
 // PipelineConfig controls pipeline parsing behavior.
@@ -227,6 +238,13 @@ type WebhookConfig struct {
 // DefaultWebhookHistoryLimit is the number of webhook events retained when no
 // limit is configured.
 const DefaultWebhookHistoryLimit = 1000
+
+// Defaults for the run-concurrency-and-retention settings; see design.md D5.
+const (
+	DefaultMaxConcurrentRuns = 2
+	DefaultRunHistoryLimit   = 1000
+	DefaultMaxOutputBytes    = 10485760
+)
 
 // parseDispatchProject strictly parses a --dispatch / KESTRIX_DISPATCH_PROJECT
 // value: only a positive decimal integer enables dispatch. Prefixes like
@@ -263,12 +281,15 @@ func DefaultConfig() *Config {
 			GitLabURL: "https://gitlab.com",
 		},
 		Runner: RunnerConfig{
-			Mode:          "local",
-			DockerPIDs:    256,
-			DockerMemory:  "2g",
-			DockerCPUs:    "2",
-			DockerNetwork: "bridge",
-			CancelGrace:   Duration(10 * time.Second),
+			Mode:              "local",
+			DockerPIDs:        256,
+			DockerMemory:      "2g",
+			DockerCPUs:        "2",
+			DockerNetwork:     "bridge",
+			CancelGrace:       Duration(10 * time.Second),
+			MaxConcurrentRuns: DefaultMaxConcurrentRuns,
+			RunHistoryLimit:   DefaultRunHistoryLimit,
+			MaxOutputBytes:    DefaultMaxOutputBytes,
 		},
 		SourceCache: SourceCacheConfig{
 			Directory: filepath.Join(filepath.Dir(DefaultPath()), "cache", "git"),
@@ -376,12 +397,15 @@ func Load(path string) (*Config, error) {
 			MaxBytes  *int64    `yaml:"max_bytes"`
 		} `yaml:"source_cache"`
 		Runner *struct {
-			DockerPIDs    *int      `yaml:"docker_pids"`
-			DockerMemory  *string   `yaml:"docker_memory"`
-			DockerCPUs    *string   `yaml:"docker_cpus"`
-			DockerUser    *string   `yaml:"docker_user"`
-			DockerNetwork *string   `yaml:"docker_network"`
-			CancelGrace   *Duration `yaml:"cancel_grace"`
+			DockerPIDs        *int      `yaml:"docker_pids"`
+			DockerMemory      *string   `yaml:"docker_memory"`
+			DockerCPUs        *string   `yaml:"docker_cpus"`
+			DockerUser        *string   `yaml:"docker_user"`
+			DockerNetwork     *string   `yaml:"docker_network"`
+			CancelGrace       *Duration `yaml:"cancel_grace"`
+			MaxConcurrentRuns *int      `yaml:"max_concurrent_runs"`
+			RunHistoryLimit   *int      `yaml:"run_history_limit"`
+			MaxOutputBytes    *int      `yaml:"max_output_bytes"`
 		} `yaml:"runner"`
 	}
 	// Presence tracks only multi-form keys; other known keys (enabled,
@@ -425,6 +449,9 @@ func Load(path string) (*Config, error) {
 		markFile(KeyRunnerDockerUser, explicit.Runner.DockerUser != nil)
 		markFile(KeyRunnerDockerNetwork, explicit.Runner.DockerNetwork != nil)
 		markFile(KeyRunnerCancelGrace, explicit.Runner.CancelGrace != nil)
+		markFile(KeyRunnerMaxConcurrentRuns, explicit.Runner.MaxConcurrentRuns != nil)
+		markFile(KeyRunHistoryLimit, explicit.Runner.RunHistoryLimit != nil)
+		markFile(KeyRunnerMaxOutputBytes, explicit.Runner.MaxOutputBytes != nil)
 	}
 	cfg.normalizeWebhookHistoryLimit()
 
@@ -537,7 +564,37 @@ func (c *Config) ApplyEnvironment(env *Environment) error {
 		c.Runner.CancelGrace = Duration(env.RunnerCancelGrace)
 		c.setSource(KeyRunnerCancelGrace, "env")
 	}
+	if !c.isSet(KeyRunnerMaxConcurrentRuns) && env.RunnerMaxConcurrentRuns > 0 {
+		c.Runner.MaxConcurrentRuns = env.RunnerMaxConcurrentRuns
+		c.setSource(KeyRunnerMaxConcurrentRuns, "env")
+	}
+	if !c.isSet(KeyRunHistoryLimit) && env.RunHistoryLimit > 0 {
+		c.Runner.RunHistoryLimit = env.RunHistoryLimit
+		c.setSource(KeyRunHistoryLimit, "env")
+	}
+	if !c.isSet(KeyRunnerMaxOutputBytes) && env.RunnerMaxOutputBytes > 0 {
+		c.Runner.MaxOutputBytes = env.RunnerMaxOutputBytes
+		c.setSource(KeyRunnerMaxOutputBytes, "env")
+	}
 	c.normalizeWebhookHistoryLimit()
+	return c.validateRunnerBounds()
+}
+
+// validateRunnerBounds fails startup naming the first invalid
+// run-concurrency-and-retention setting, without revealing the other two -
+// see runtime-configuration spec.md "Invalid value". Unlike
+// normalizeWebhookHistoryLimit, these settings fail rather than silently
+// reset to their default.
+func (c *Config) validateRunnerBounds() error {
+	if c.Runner.MaxConcurrentRuns <= 0 {
+		return fmt.Errorf("runner.max_concurrent_runs must be a positive integer")
+	}
+	if c.Runner.RunHistoryLimit <= 0 {
+		return fmt.Errorf("runner.run_history_limit must be a positive integer")
+	}
+	if c.Runner.MaxOutputBytes <= 0 {
+		return fmt.Errorf("runner.max_output_bytes must be a positive integer")
+	}
 	return nil
 }
 

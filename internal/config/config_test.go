@@ -498,6 +498,52 @@ func TestApplyEnvironmentRunnerBranches(t *testing.T) {
 	}
 }
 
+func TestValidateRunnerBoundsRejectsEachNonPositiveSetting(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"max_concurrent_runs", func(c *Config) { c.Runner.MaxConcurrentRuns = 0 }, "runner.max_concurrent_runs"},
+		{"run_history_limit", func(c *Config) { c.Runner.RunHistoryLimit = -1 }, "runner.run_history_limit"},
+		{"max_output_bytes", func(c *Config) { c.Runner.MaxOutputBytes = 0 }, "runner.max_output_bytes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tc.mutate(cfg)
+			err := cfg.validateRunnerBounds()
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to name %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// A non-positive value set in the config file is not caught by
+// LoadEnvironment's own validation (which only ever sees env-var strings),
+// so ApplyEnvironment must still reject it via validateRunnerBounds once the
+// file's value has been reconciled - see runtime-configuration spec.md
+// "Invalid value".
+func TestApplyEnvironmentRejectsNonPositiveRunHistoryLimitFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("runner:\n  run_history_limit: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.ApplyEnvironment(LoadEnvironment(nil)); err == nil {
+		t.Fatal("expected an error for a zero run history limit set in the file")
+	} else if !strings.Contains(err.Error(), "runner.run_history_limit") {
+		t.Errorf("error = %q, want it to name runner.run_history_limit", err.Error())
+	}
+}
+
 func TestApplyFlags(t *testing.T) {
 	cfg := DefaultConfig()
 	if err := cfg.ApplyFlags(FlagValues{

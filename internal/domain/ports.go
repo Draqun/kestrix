@@ -177,10 +177,21 @@ type RunStore interface {
 	FlushRunOutput(runID int, output string) error
 	CancelRun(id int, canceledBy string) error
 	ApplyTaskResult(id int, tr TaskResult, outputExtra string) error
-	// FailInterruptedRuns marks every run left "running" by a previous
-	// process as failed, so a restart cannot leave ghosts in run lists,
-	// counters, or guards. A run whose only non-terminal task result is
-	// "manual" is left alone. Returns the number of runs failed.
+	// SetRunQueued marks a non-terminal run "queued" while it waits for a
+	// concurrency slot; see run-concurrency-and-retention design.md D1/D2. A
+	// run already terminal (passed/failed/canceled) is left untouched.
+	SetRunQueued(id int) error
+	// StartQueuedRun transitions a "queued" run to "running" once a slot is
+	// acquired. ok is false when the row was not "queued" (already canceled
+	// concurrently, or never queued), telling the caller not to execute it.
+	StartQueuedRun(id int) (ok bool, err error)
+	// FailInterruptedRuns marks every run left "running" or "queued" by a
+	// previous process as failed, so a restart cannot leave ghosts in run
+	// lists, counters, or guards - a "queued" run's place in the in-memory
+	// scheduler does not survive a restart either, see
+	// run-concurrency-and-retention design.md Migration Plan. A run whose
+	// only non-terminal task result is "manual" is left alone. Returns the
+	// number of runs failed.
 	FailInterruptedRuns(reason string) (int, error)
 	GetRun(id int) (*Run, error)
 	CountRuns(projectName string) (int, error)
@@ -410,6 +421,7 @@ type Run struct {
 	// a run recorded before run-attribution existed.
 	StartedBy string `json:"started_by"`
 	// CanceledBy is the actor that canceled the run. Empty unless the run
-	// was canceled while running - see run-attribution D3.
+	// was canceled while running or queued - see run-attribution D3 and
+	// run-concurrency-and-retention design.md D2.
 	CanceledBy string `json:"canceled_by,omitempty"`
 }

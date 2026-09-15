@@ -39,6 +39,7 @@ function formatStatus(status) {
   if (status === 'passed') return { color: 'success', label: 'PASSED' };
   if (status === 'failed') return { color: 'error', label: 'FAILED' };
   if (status === 'canceled') return { color: 'warning', label: 'CANCELED' };
+  if (status === 'queued') return { color: 'info', label: 'QUEUED' };
   if (status === 'manual') return { color: 'info', label: 'MANUAL' };
   if (status === 'skipped') return { color: 'default', label: 'SKIPPED' };
   if (status === 'pending') return { color: 'default', label: 'PENDING' };
@@ -111,7 +112,7 @@ export function RunDetail({ projectName, runId, onBack }) {
   useEffect(() => {
     if (!detail) return;
     const jobs = detail.task_results || [];
-    const busy = detail.status === 'running' || jobs.some(j => j.status === 'running');
+    const busy = detail.status === 'running' || detail.status === 'queued' || jobs.some(j => j.status === 'running');
     if (!busy) return;
     const id = setInterval(() => { load(); }, 1500);
     return () => clearInterval(id);
@@ -196,7 +197,7 @@ export function RunDetail({ projectName, runId, onBack }) {
           <Chip label={`Changed: ${r.changed.join(', ')}`} size="small" variant="outlined" />
         )}
         <Box sx={{ flexGrow: 1 }} />
-        {canOperate && r?.status === 'running' && (
+        {canOperate && (r?.status === 'running' || r?.status === 'queued') && (
           <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
             {canceling ? 'Canceling…' : 'Cancel'}
           </Button>

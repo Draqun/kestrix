@@ -7,6 +7,7 @@ const runs = [
   { id: 2, status: 'failed', changed: [] },
   { id: 3, status: 'running', changed: ['auth', 'frontend'] },
   { id: 4, status: 'canceled', changed: ['frontend'] },
+  { id: 5, status: 'queued', changed: [] },
 ];
 
 describe('filterRuns', () => {
@@ -25,6 +26,12 @@ describe('filterRuns', () => {
     const result = filterRuns(runs, { statusFilter: ['passed', 'running'], changeFilter: '' });
     assert.strictEqual(result.length, 2);
     assert.deepStrictEqual(result.map((r) => r.id), [1, 3]);
+  });
+
+  it('filters by the queued status', () => {
+    const result = filterRuns(runs, { statusFilter: ['queued'], changeFilter: '' });
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, 5);
   });
 
   it('filters by changed repository', () => {
@@ -60,7 +67,7 @@ describe('getUniqueRepos', () => {
 describe('RUN_STATUSES', () => {
   it('contains the expected statuses', () => {
     assert.deepStrictEqual(RUN_STATUSES, [
-      'passed', 'failed', 'running', 'canceled', 'manual', 'skipped', 'pending',
+      'passed', 'failed', 'running', 'queued', 'canceled', 'manual', 'skipped', 'pending',
     ]);
   });
 });

@@ -72,9 +72,13 @@ type Config struct {
 	// WebhookHistoryLimit bounds retained webhook history. Zero selects the
 	// store default.
 	WebhookHistoryLimit int
-	Dispatch            DispatchConfig
-	Runner              RunnerConfig
-	SourceCache         SourceCacheConfig
+	// RunHistoryLimit bounds retained terminal run history; see
+	// run-concurrency-and-retention design.md D3. Zero selects the store
+	// default.
+	RunHistoryLimit int
+	Dispatch        DispatchConfig
+	Runner          RunnerConfig
+	SourceCache     SourceCacheConfig
 	// HTTPReadTimeout, HTTPWriteTimeout, and HTTPIdleTimeout configure the
 	// http.Server built by ListenAndServe; see design.md D5. Zero in any
 	// field means the operator-facing default (config.Environment resolves
@@ -99,6 +103,12 @@ type SourceCacheConfig struct {
 // RunnerConfig holds runner execution settings.
 type RunnerConfig struct {
 	Mode string // "local" or "gitlab-runner"
+	// MaxConcurrentRuns bounds how many runs execute at once; a run accepted
+	// beyond it is queued. MaxOutputBytes bounds stored run output. See
+	// run-concurrency-and-retention design.md D1/D4. Zero in either selects
+	// the RunService default (unlimited concurrency, unbounded output).
+	MaxConcurrentRuns int
+	MaxOutputBytes    int
 }
 
 // Server is the HTTP server.
@@ -262,6 +272,8 @@ func NewServerE(cfg Config) (*Server, error) {
 	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI}
 	taskRunner := pipelineRunner
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
+	runService.SetMaxConcurrentRuns(cfg.Runner.MaxConcurrentRuns)
+	runService.MaxOutputBytes = cfg.Runner.MaxOutputBytes
 	webhookSink, _ := projectStore.(domain.WebhookLogSink)
 	webhookService := service.NewWebhookService(webhookSink)
 	s := NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
@@ -379,6 +391,9 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	}
 	if setter, ok := projectStore.(interface{ SetWebhookHistoryLimit(int) }); ok {
 		setter.SetWebhookHistoryLimit(cfg.WebhookHistoryLimit)
+	}
+	if setter, ok := runStore.(interface{ SetRunHistoryLimit(int) }); ok {
+		setter.SetRunHistoryLimit(cfg.RunHistoryLimit)
 	}
 	log.Printf("connected to PostgreSQL")
 	return projectStore, runStore, nil

@@ -1297,6 +1297,260 @@ func TestPG_FailInterruptedRuns_Idempotent(t *testing.T) {
 	}
 }
 
+func TestPG_FailInterruptedRuns_QueuedRun(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "fir-queued", "/")
+	id := mustCreateRun(t, pg, "fir-queued", nil)
+	if err := pg.SetRunQueued(id); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+
+	n, err := pg.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Errorf("Status = %q, want failed (a queued run at restart is reconciled like an interrupted running run)", run.Status)
+	}
+}
+
+// ── run-concurrency-and-retention ────────────────────────────────────
+
+func TestPG_SetRunQueued_ThenGetRun(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "queue-set", "/")
+	id := mustCreateRun(t, pg, "queue-set", nil)
+
+	if err := pg.SetRunQueued(id); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "queued" {
+		t.Errorf("Status = %q, want queued", run.Status)
+	}
+}
+
+func TestPG_SetRunQueued_LeavesTerminalRunUntouched(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "queue-terminal", "/")
+	id := mustCreateRun(t, pg, "queue-terminal", nil)
+	if err := pg.FinishRun(id, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	if err := pg.SetRunQueued(id); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "passed" {
+		t.Errorf("Status = %q, want passed (terminal runs are never re-queued)", run.Status)
+	}
+}
+
+func TestPG_StartQueuedRun_TransitionsToRunning(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "queue-start", "/")
+	id := mustCreateRun(t, pg, "queue-start", nil)
+	if err := pg.SetRunQueued(id); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+
+	ok, err := pg.StartQueuedRun(id)
+	if err != nil {
+		t.Fatalf("StartQueuedRun: %v", err)
+	}
+	if !ok {
+		t.Fatal("StartQueuedRun ok = false, want true")
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "running" {
+		t.Errorf("Status = %q, want running", run.Status)
+	}
+}
+
+func TestPG_StartQueuedRun_FalseWhenNotQueued(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "queue-not-queued", "/")
+	id := mustCreateRun(t, pg, "queue-not-queued", nil)
+
+	// The row is "running" by default, never queued.
+	ok, err := pg.StartQueuedRun(id)
+	if err != nil {
+		t.Fatalf("StartQueuedRun: %v", err)
+	}
+	if ok {
+		t.Fatal("StartQueuedRun ok = true, want false (row was never queued)")
+	}
+}
+
+func TestPG_CancelRun_Queued(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "queue-cancel", "/")
+	snap := &model.Project{
+		Name:  "queue-cancel",
+		Tasks: []model.Task{{Name: "build"}, {Name: "deploy", DependsOn: []string{"build"}}},
+	}
+	id := mustCreateRun(t, pg, "queue-cancel", snap)
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "build", Status: "pending"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "pending"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.SetRunQueued(id); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+
+	if err := pg.CancelRun(id, "user:bob"); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+	if run.CanceledBy != "user:bob" {
+		t.Errorf("CanceledBy = %q, want user:bob", run.CanceledBy)
+	}
+}
+
+// REVIEW.md R3: a canceled run is terminal and must count against
+// run_history_limit the same as a passed/failed run, or the table grows
+// unbounded from canceled rows even with retention configured.
+func TestPG_CancelRun_PrunesHistory(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "cancel-prune", "/")
+	pg.SetRunHistoryLimit(1)
+
+	older := mustCreateRun(t, pg, "cancel-prune", nil)
+	if err := pg.FinishRun(older, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	newer := mustCreateRun(t, pg, "cancel-prune", nil)
+
+	if err := pg.CancelRun(newer, "user:bob"); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+
+	if run, _ := pg.GetRun(older); run != nil {
+		t.Error("the older terminal run should have been pruned when the newer run was canceled")
+	}
+	if run, err := pg.GetRun(newer); err != nil || run == nil {
+		t.Fatalf("the newly canceled run should still exist: err=%v run=%v", err, run)
+	}
+}
+
+func TestPG_PruneRuns_LimitExceededDeletesOldestTerminalOnly(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "prune", "/")
+	pg.SetRunHistoryLimit(2)
+
+	var terminalIDs []int
+	for i := 0; i < 3; i++ {
+		id := mustCreateRun(t, pg, "prune", nil)
+		if err := pg.FinishRun(id, "passed", "", "", nil); err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+		terminalIDs = append(terminalIDs, id)
+		time.Sleep(5 * time.Millisecond) // started_at must strictly order for oldest-first pruning
+	}
+
+	rows, err := pg.CountRuns("prune")
+	if err != nil {
+		t.Fatalf("CountRuns: %v", err)
+	}
+	if rows != 2 {
+		t.Fatalf("stored runs = %d, want 2 (limit)", rows)
+	}
+	if run, _ := pg.GetRun(terminalIDs[0]); run != nil {
+		t.Error("oldest terminal run should have been pruned")
+	}
+	if run, _ := pg.GetRun(terminalIDs[2]); run == nil {
+		t.Error("newest terminal run should still exist")
+	}
+}
+
+func TestPG_PruneRuns_ProtectsNonTerminalRuns(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "prune-protect", "/")
+	pg.SetRunHistoryLimit(1)
+
+	queuedID := mustCreateRun(t, pg, "prune-protect", nil)
+	if err := pg.SetRunQueued(queuedID); err != nil {
+		t.Fatalf("SetRunQueued: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	runningID := mustCreateRun(t, pg, "prune-protect", nil) // status "running" by default
+	time.Sleep(5 * time.Millisecond)
+	terminalID := mustCreateRun(t, pg, "prune-protect", nil)
+	if err := pg.FinishRun(terminalID, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	for _, id := range []int{queuedID, runningID, terminalID} {
+		if run, err := pg.GetRun(id); err != nil || run == nil {
+			t.Fatalf("run %d should survive pruning (queued/running are never pruned): err=%v run=%v", id, err, run)
+		}
+	}
+}
+
+func TestPG_PruneRuns_UnderLimitDeletesNothing(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "prune-under", "/")
+	pg.SetRunHistoryLimit(1000)
+	id := mustCreateRun(t, pg, "prune-under", nil)
+	if err := pg.FinishRun(id, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	if run, err := pg.GetRun(id); err != nil || run == nil {
+		t.Fatalf("run should survive: err=%v run=%v", err, run)
+	}
+}
+
+// REVIEW.md R6: SetRunHistoryLimit(<=0) must restore the default (1000), not
+// leave a limit that prunes everything terminal. Prove the fallback actually
+// applies by finishing a handful of runs - if the fallback did not kick in,
+// a limit of 0 would prune every terminal run down to 0 survivors.
+func TestPG_PruneRuns_NonPositiveLimitFallsBackToDefault(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "prune-fallback", "/")
+	pg.SetRunHistoryLimit(0)
+
+	var ids []int
+	for i := 0; i < 3; i++ {
+		id := mustCreateRun(t, pg, "prune-fallback", nil)
+		if err := pg.FinishRun(id, "passed", "", "", nil); err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	for _, id := range ids {
+		if run, err := pg.GetRun(id); err != nil || run == nil {
+			t.Fatalf("run %d should survive under the default fallback limit: err=%v run=%v", id, err, run)
+		}
+	}
+}
+
 // ── NewPG error paths ──────────────────────────────────────────────
 
 func TestPG_NewPG_BadURL(t *testing.T) {

@@ -2,6 +2,8 @@ package service
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +75,48 @@ func TestRedactingWriter_EmptyConfiguredValues(t *testing.T) {
 	}
 	if got := buf.String(); got != "plain output" {
 		t.Fatalf("output = %q, want plain output unchanged", got)
+	}
+}
+
+// TestRedactingWriter_FlushesUnderlyingBoundedWriter lives here (not in
+// bounded_writer_test.go) because it exercises redactingWriter.Flush's own
+// contract - forwarding to an underlying Flush - using boundedWriter only as
+// a collaborator; see REVIEW.md R15.
+func TestRedactingWriter_FlushesUnderlyingBoundedWriter(t *testing.T) {
+	var buf bytes.Buffer
+	bounded := newBoundedWriter(&buf, 10)
+	redactor := newRedactingWriter(bounded, []string{"super-secret-value"})
+	// The secret straddles the truncation cut; redaction (inside
+	// redactingWriter) must run before the bound (inside boundedWriter) so no
+	// partial secret ever reaches the underlying buffer - see
+	// run-concurrency-and-retention design.md D4.
+	if _, err := redactor.Write([]byte("token=super-secret-value tail")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := redactor.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "super-secret-value") {
+		t.Fatalf("output = %q, secret leaked past truncation", got)
+	}
+	if !strings.HasSuffix(got, "--- output truncated at 10 bytes (runner.max_output_bytes) ---\n") {
+		t.Fatalf("output = %q, want the truncation marker (boundedWriter.Flush not reached)", got)
+	}
+}
+
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestRedactingWriter_Flush_PropagatesUnderlyingWriteError(t *testing.T) {
+	wantErr := errors.New("disk full")
+	w := newRedactingWriter(errWriter{err: wantErr}, []string{"super-secret-value"})
+	if _, err := w.Write([]byte("token=super-secret-value")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Flush(); !errors.Is(err, wantErr) {
+		t.Fatalf("Flush() error = %v, want %v", err, wantErr)
 	}
 }
 

@@ -75,12 +75,20 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return immediately so the frontend doesn't timeout.
+	// Return immediately so the frontend doesn't timeout. Report the actual
+	// status: Start records it as "queued" synchronously, before returning,
+	// whenever every concurrency slot is busy - a hardcoded "running" here
+	// would misreport a queued run - see run-concurrency-and-retention
+	// design.md D1/D2.
+	status := "running"
+	if run, err := s.runStore.GetRun(runID); err == nil && run != nil {
+		status = run.Status
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"project": proj.Name,
 		"run_id":  runID,
-		"status":  "running",
+		"status":  status,
 		"changed": req.Changed,
 	})
 

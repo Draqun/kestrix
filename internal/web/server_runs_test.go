@@ -1147,6 +1147,64 @@ func TestHandleRunProject_Happy(t *testing.T) {
 	}
 }
 
+// TestHandleRunProject_ReportsQueuedStatus proves the response reports the
+// run's actual stored status rather than hardcoding "running" - a bug found
+// during the run-concurrency-and-retention manual verification: triggering
+// a run while every concurrency slot is busy records it "queued", but the
+// handler's response claimed "running" regardless.
+func TestHandleRunProject_ReportsQueuedStatus(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo ok"
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRun := &mocks.MockRunStore{
+		CreateRunID: 43,
+		FinishRunCh: make(chan struct{}),
+		GetRunResult: &domain.Run{
+			ID:     43,
+			Status: "queued",
+		},
+	}
+	mockProj := &mocks.MockProjectStore{
+		GetResult: &domain.ProjectConfig{
+			Name:         "demo",
+			RepoURL:      "file://" + tmp,
+			RepoRef:      "main",
+			PipelineDir:  ".",
+			PipelineFile: "pipeline.tf",
+		},
+	}
+	srv := setupRunServer(t, mockProj, mockRun)
+	srv.sourceSessions = &testSourceSessions{root: tmp}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/projects/demo/run", strings.NewReader(`{"changed":["main"]}`))
+	req = req.WithContext(contextWithClaims(req.Context(), domain.Claims{UserName: "frank", Role: domain.RoleOperator}))
+	r := runCtx(req, "name", "demo")
+	srv.handleRunProject(w, r)
+
+	<-mockRun.FinishRunCh // wait for the background goroutine before asserting
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "queued" {
+		t.Errorf("status = %v, want queued", resp["status"])
+	}
+}
+
 func TestFailRunOnSecretError_NoRunStore(t *testing.T) {
 	srv := &Server{}
 	// Must not panic when no run store is configured.

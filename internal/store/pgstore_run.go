@@ -31,11 +31,18 @@ func (s *PGStore) CreateRun(projectName string, changed []string, includeManual 
 	return id, err
 }
 
-// FinishRun updates a run with its result. A run already recorded as
-// canceled keeps that status: a late non-canceled write (for example a
+// DefaultRunHistoryLimit is the number of terminal runs retained when no
+// limit is configured. It mirrors config.DefaultConfig's runner.run_history_limit;
+// the store keeps its own copy so it stays usable without the config package.
+const DefaultRunHistoryLimit = 1000
+
+// FinishRun updates a run with its result and, once the write lands a
+// terminal status, prunes history to the configured retention limit in the
+// same transaction - see PruneRuns and design.md D3. A run already recorded
+// as canceled keeps that status: a late non-canceled write (for example a
 // single-task handler racing Cancel, or a panic recovery landing after
-// CancelRun) must not overwrite the operator's cancel. Canceled writes
-// stay allowed so recording a cancellation itself is idempotent.
+// CancelRun) must not overwrite the operator's cancel. Canceled writes stay
+// allowed so recording a cancellation itself is idempotent.
 func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error {
 	taskResultsJSON := "[]"
 	if len(taskResults) > 0 {
@@ -43,19 +50,99 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 		taskResultsJSON = string(b)
 	}
 	finished := status == "passed" || status == "failed" || status == "canceled"
-	var err error
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin finish run: %w", err)
+	}
+	defer tx.Rollback()
+
 	if finished {
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = now() WHERE id = $5 AND (status <> 'canceled' OR $1 = 'canceled')`,
 			status, output, errMsg, taskResultsJSON, id,
 		)
 	} else {
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`UPDATE runs SET status = $1, output = $2, error = $3, task_results = $4, finished_at = NULL WHERE id = $5 AND (status <> 'canceled' OR $1 = 'canceled')`,
 			status, output, errMsg, taskResultsJSON, id,
 		)
 	}
+	if err != nil {
+		return err
+	}
+
+	if finished {
+		if err := s.pruneRuns(tx); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// PruneRuns deletes the oldest terminal (passed/failed/canceled) runs beyond
+// the configured retention limit, never touching a running, queued, or
+// manual-pending run - see design.md D3. It runs in its own transaction; call
+// it directly only outside of FinishRun's own transactional call.
+func (s *PGStore) PruneRuns() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin prune runs: %w", err)
+	}
+	defer tx.Rollback()
+	if err := s.pruneRuns(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// pruneRuns is PruneRuns' body, shared with FinishRun so both run the
+// deletion inside whichever transaction the caller already holds.
+func (s *PGStore) pruneRuns(tx *sql.Tx) error {
+	limit := s.runHistoryLimit
+	if limit <= 0 {
+		limit = DefaultRunHistoryLimit
+	}
+	_, err := tx.Exec(
+		`DELETE FROM runs
+		 WHERE status IN ('passed', 'failed', 'canceled')
+		 AND id NOT IN (
+		   SELECT id FROM runs WHERE status IN ('passed', 'failed', 'canceled')
+		   ORDER BY started_at DESC, id DESC LIMIT $1
+		 )`,
+		limit,
+	)
+	if err != nil {
+		return fmt.Errorf("prune run history: %w", err)
+	}
+	return nil
+}
+
+// SetRunQueued marks a non-terminal run "queued" while it waits for a
+// concurrency slot; see design.md D1/D2. A run already terminal is left
+// untouched.
+func (s *PGStore) SetRunQueued(id int) error {
+	_, err := s.db.Exec(
+		`UPDATE runs SET status = 'queued' WHERE id = $1 AND status NOT IN ('passed', 'failed', 'canceled')`,
+		id,
+	)
 	return err
+}
+
+// StartQueuedRun transitions a "queued" run to "running". ok is false when
+// the row was not "queued" (for example, already canceled), telling the
+// caller not to execute it.
+func (s *PGStore) StartQueuedRun(id int) (bool, error) {
+	res, err := s.db.Exec(`UPDATE runs SET status = 'running' WHERE id = $1 AND status = 'queued'`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // AppendTaskResult atomically adds a single task result to the run's task_results array.
@@ -100,21 +187,27 @@ func dedupLatestTaskResults(results []TaskResult) (order []string, latest map[st
 	return order, latest
 }
 
-// CancelRun marks a running run as "canceled":
-// - running → canceled
+// CancelRun marks a running or queued run as "canceled":
+// - running or queued → canceled
 // - pending (no incomplete deps) → canceled
 // - pending (depends on incomplete/failed) → skipped
 // - passed left unchanged
 func (s *PGStore) CancelRun(id int, canceledBy string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin cancel run: %w", err)
+	}
+	defer tx.Rollback()
+
 	var taskResultsJSON string
 	var status string
-	err := s.db.QueryRow(
+	err = tx.QueryRow(
 		`SELECT status, task_results FROM runs WHERE id = $1`, id,
 	).Scan(&status, &taskResultsJSON)
 	if err != nil {
 		return err
 	}
-	if status != "running" {
+	if status != "running" && status != "queued" {
 		return nil
 	}
 
@@ -132,7 +225,7 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 
 	depMap := make(map[string][]string)
 	var snapJSON sql.NullString
-	_ = s.db.QueryRow(`SELECT pipeline_def FROM runs WHERE id = $1`, id).Scan(&snapJSON)
+	_ = tx.QueryRow(`SELECT pipeline_def FROM runs WHERE id = $1`, id).Scan(&snapJSON)
 	if snapJSON.Valid {
 		var snap model.Project
 		if json.Unmarshal([]byte(snapJSON.String), &snap) == nil {
@@ -173,21 +266,34 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 	}
 
 	b, _ := json.Marshal(final)
-	_, err = s.db.Exec(
+	if _, err := tx.Exec(
 		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now(), canceled_by = $2 WHERE id = $3`,
 		string(b), canceledBy, id,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	// A canceled run is terminal, so it must count against run_history_limit
+	// the same as a passed/failed run finishing via FinishRun - see
+	// REVIEW.md R3.
+	if err := s.pruneRuns(tx); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
-// FailInterruptedRuns marks every run left "running" by a previous process
-// as failed, in one transaction, before any request can observe the old
-// state. A run is left alone only when it has at least one "manual" task
-// result and nothing else non-terminal: ApproveManualTask still works on it
-// after the restart. Every other case - a running or pending task, or no
-// task result at all (a crash before the first one was appended, or a
-// zero-task project) - is reconciled. Idempotent: a run already reconciled
-// has no "running" status left to select.
+// FailInterruptedRuns marks every run left "running" or "queued" by a
+// previous process as failed, in one transaction, before any request can
+// observe the old state. A "queued" run never persisted its place in an
+// in-memory queue across a restart, so it is reconciled exactly like an
+// interrupted "running" run - see design.md Migration Plan. A run is left
+// alone only when it has at least one "manual" task result and nothing else
+// non-terminal: ApproveManualTask still works on it after the restart. Every
+// other case - a running or pending task, or no task result at all (a crash
+// before the first one was appended, or a zero-task project) - is
+// reconciled. Idempotent: a run already reconciled has no "running" or
+// "queued" status left to select.
 func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -195,7 +301,7 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT id, task_results, output FROM runs WHERE status = 'running' FOR UPDATE`)
+	rows, err := tx.Query(`SELECT id, task_results, output FROM runs WHERE status IN ('running', 'queued') FOR UPDATE`)
 	if err != nil {
 		return 0, fmt.Errorf("select running runs: %w", err)
 	}

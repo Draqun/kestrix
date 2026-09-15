@@ -26,6 +26,12 @@ type precedenceSetting struct {
 	wantEnv  string
 	wantFlag string
 	get      func(web.Config) string
+	// runnerEnvSnapshot marks a "runner.*" setting that reaches consumers
+	// only through the derived config.Environment snapshot (WithRunnerConfig),
+	// not through web.Config - true for the Docker/cancel-grace hardening
+	// settings, false (the default) for settings web.Config carries directly,
+	// like the run-concurrency-and-retention trio.
+	runnerEnvSnapshot bool
 }
 
 func precedenceSettings() []precedenceSetting {
@@ -119,42 +125,69 @@ func precedenceSettings() []precedenceSetting {
 			envKV:    "KESTRIX_RUNNER_DOCKER_PIDS=101",
 			flag:     nil,
 			wantFile: "100", wantEnv: "101", wantFlag: "100",
-			get: func(c web.Config) string { return "" }, // runner hardening stays in env snapshot, not web.Config
+			get:               func(c web.Config) string { return "" }, // runner hardening stays in env snapshot, not web.Config
+			runnerEnvSnapshot: true,
 		},
 		{
 			name: config.KeyRunnerDockerMemory, fileYAML: "runner:\n  docker_memory: 4g\n",
 			envKV:    "KESTRIX_RUNNER_DOCKER_MEMORY=1g",
 			flag:     nil,
 			wantFile: "4g", wantEnv: "1g", wantFlag: "4g",
-			get: func(c web.Config) string { return "" },
+			get:               func(c web.Config) string { return "" },
+			runnerEnvSnapshot: true,
 		},
 		{
 			name: config.KeyRunnerDockerCPUs, fileYAML: "runner:\n  docker_cpus: '4'\n",
 			envKV:    "KESTRIX_RUNNER_DOCKER_CPUS=8",
 			flag:     nil,
 			wantFile: "4", wantEnv: "8", wantFlag: "4",
-			get: func(c web.Config) string { return "" },
+			get:               func(c web.Config) string { return "" },
+			runnerEnvSnapshot: true,
 		},
 		{
 			name: config.KeyRunnerDockerUser, fileYAML: "runner:\n  docker_user: '1000:1000'\n",
 			envKV:    "KESTRIX_RUNNER_DOCKER_USER=2000:2000",
 			flag:     nil,
 			wantFile: "1000:1000", wantEnv: "2000:2000", wantFlag: "1000:1000",
-			get: func(c web.Config) string { return "" },
+			get:               func(c web.Config) string { return "" },
+			runnerEnvSnapshot: true,
 		},
 		{
 			name: config.KeyRunnerDockerNetwork, fileYAML: "runner:\n  docker_network: none\n",
 			envKV:    "KESTRIX_RUNNER_DOCKER_NETWORK=host",
 			flag:     nil,
 			wantFile: "none", wantEnv: "host", wantFlag: "none",
-			get: func(c web.Config) string { return "" },
+			get:               func(c web.Config) string { return "" },
+			runnerEnvSnapshot: true,
 		},
 		{
 			name: config.KeyRunnerCancelGrace, fileYAML: "runner:\n  cancel_grace: 45s\n",
 			envKV:    "KESTRIX_RUNNER_CANCEL_GRACE=20s",
 			flag:     nil,
 			wantFile: (45 * time.Second).String(), wantEnv: (20 * time.Second).String(), wantFlag: (45 * time.Second).String(),
-			get: func(c web.Config) string { return "" },
+			get:               func(c web.Config) string { return "" },
+			runnerEnvSnapshot: true,
+		},
+		{
+			name: config.KeyRunnerMaxConcurrentRuns, fileYAML: "runner:\n  max_concurrent_runs: 4\n",
+			envKV:    "KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=5",
+			flag:     nil,
+			wantFile: "4", wantEnv: "5", wantFlag: "4",
+			get: func(c web.Config) string { return fmt.Sprintf("%d", c.Runner.MaxConcurrentRuns) },
+		},
+		{
+			name: config.KeyRunHistoryLimit, fileYAML: "runner:\n  run_history_limit: 500\n",
+			envKV:    "KESTRIX_RUN_HISTORY_LIMIT=600",
+			flag:     nil,
+			wantFile: "500", wantEnv: "600", wantFlag: "500",
+			get: func(c web.Config) string { return fmt.Sprintf("%d", c.RunHistoryLimit) },
+		},
+		{
+			name: config.KeyRunnerMaxOutputBytes, fileYAML: "runner:\n  max_output_bytes: 2048\n",
+			envKV:    "KESTRIX_RUNNER_MAX_OUTPUT_BYTES=4096",
+			flag:     nil,
+			wantFile: "2048", wantEnv: "4096", wantFlag: "2048",
+			get: func(c web.Config) string { return fmt.Sprintf("%d", c.Runner.MaxOutputBytes) },
 		},
 	}
 }
@@ -193,7 +226,7 @@ func runPipeline(t *testing.T, fileYAML string, environ []string, flags config.F
 func TestPrecedenceTable(t *testing.T) {
 	for _, s := range precedenceSettings() {
 		t.Run(s.name, func(t *testing.T) {
-			isRunner := strings.HasPrefix(s.name, "runner")
+			isRunner := s.runnerEnvSnapshot
 			flagArgs := config.FlagValues{}
 			if s.flag != nil {
 				s.flag(&flagArgs)
@@ -324,6 +357,8 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"RunnerDockerCPUs": config.KeyRunnerDockerCPUs, "RunnerDockerUser": config.KeyRunnerDockerUser,
 		"RunnerDockerNetwork": config.KeyRunnerDockerNetwork, "RunnerCancelGrace": config.KeyRunnerCancelGrace,
 		"Directory": config.KeySourceCacheDirectory, "MaxAge": config.KeySourceCacheMaxAge, "MaxBytes": config.KeySourceCacheMaxBytes,
+		"RunnerMaxConcurrentRuns": config.KeyRunnerMaxConcurrentRuns, "RunHistoryLimit": config.KeyRunHistoryLimit,
+		"RunnerMaxOutputBytes": config.KeyRunnerMaxOutputBytes,
 	}
 
 	var missing []string
