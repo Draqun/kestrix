@@ -54,3 +54,36 @@ test('a credential created during onboarding becomes the selected reference', ()
   assert.equal(createdCredentialSelection('', { ref: 'cred_new', name: 'New' }), 'cred_new');
   assert.equal(createdCredentialSelection('cred_old', {}), 'cred_old');
 });
+
+test('a typed webhook secret reaches the create payload', () => {
+  const payload = remoteProjectPayload('demo', {
+    repo_url: 'https://git.example.test/demo.git', repo_ref: 'main',
+    pipeline_dir: 'ci', webhook_secret: '  s3cr3t  ',
+  });
+  assert.equal(payload.webhook_secret, 's3cr3t');
+});
+
+test('an untouched webhook secret field is omitted so the stored secret survives an edit', () => {
+  for (const webhook_secret of [undefined, '', '   ']) {
+    const payload = remoteProjectPayload(undefined, {
+      repo_url: 'https://git.example.test/demo.git', repo_ref: 'v2',
+      pipeline_dir: 'ci', webhook_secret,
+    });
+    assert.ok(!('webhook_secret' in payload), `blank secret ${JSON.stringify(webhook_secret)} must not be sent`);
+  }
+});
+
+test('a replacement webhook secret reaches the update payload', () => {
+  const payload = remoteProjectPayload(undefined, {
+    repo_url: 'https://git.example.test/demo.git', repo_ref: 'main',
+    pipeline_dir: 'ci', webhook_secret: 'rotated',
+  });
+  assert.equal(payload.webhook_secret, 'rotated');
+});
+
+test('an edited pipeline file replaces the default', () => {
+  const form = { repo_url: 'https://git.example.test/demo.git', repo_ref: 'main', pipeline_dir: 'ci' };
+  assert.equal(remoteProjectPayload(undefined, { ...form, pipeline_file: ' ci.hcl ' }).pipeline_file, 'ci.hcl');
+  assert.equal(remoteProjectPayload(undefined, { ...form, pipeline_file: '  ' }).pipeline_file, 'pipeline.tf');
+  assert.equal(remoteProjectPayload(undefined, form).pipeline_file, 'pipeline.tf');
+});

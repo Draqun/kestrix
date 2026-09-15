@@ -5,7 +5,7 @@ import {
   LinearProgress, TextField, Button, Stack,
   Dialog, DialogTitle, DialogContent, DialogActions,
   List, ListItem, ListItemText, ListItemIcon, ListItemSecondaryAction,
-  Divider, Chip, Card, CardContent,
+  Divider, Chip, Card, CardContent, InputAdornment,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -15,17 +15,56 @@ import {
   AccountTree as PipelineIcon,
   ArrowBack as BackIcon,
   Edit as EditIcon,
+  Visibility as ShowIcon,
+  VisibilityOff as HideIcon,
 } from '@mui/icons-material';
 import { listProjects, createProject, deleteProject, getProject, updateProject, getProjectDefinition } from '../api/client';
 import CredentialSelectField from '../components/credentials/CredentialSelectField.jsx';
 import { useAuth } from '../context/AuthContext';
 import Pagination from '../components/Pagination';
+import WebhookSetupPanel from '../components/projects/WebhookSetupPanel.jsx';
 import useCredentials from '../hooks/useCredentials.js';
 import {
   remoteProjectPayload,
   repositorySourceLabel,
   validateRemoteProject,
 } from '../lib/projectForm.js';
+
+// Shared by both dialogs. A stored secret is never read back from the API,
+// so this field always starts empty. An empty value means different things
+// per dialog: on create it means "no per-project secret, use the global
+// one"; on edit it means "keep the stored secret unchanged".
+function WebhookSecretField({ value, onChange, helperText }) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <TextField
+      label="Webhook secret (optional)"
+      type={reveal ? 'text' : 'password'}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      size="small"
+      fullWidth
+      autoComplete="new-password"
+      helperText={helperText}
+      slotProps={{
+        input: {
+          endAdornment: (
+            <InputAdornment position="end">
+              <IconButton
+                size="small"
+                aria-label={reveal ? 'Hide webhook secret' : 'Show webhook secret'}
+                onClick={() => setReveal(prev => !prev)}
+                edge="end"
+              >
+                {reveal ? <HideIcon fontSize="small" /> : <ShowIcon fontSize="small" />}
+              </IconButton>
+            </InputAdornment>
+          ),
+        },
+      }}
+    />
+  );
+}
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   const { roleAtLeast } = useAuth();
@@ -49,7 +88,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ repo_url: '', repo_ref: '', repo_credential_ref: '', pipeline_dir: 'ci' });
+  const [editForm, setEditForm] = useState({ repo_url: '', repo_ref: '', repo_credential_ref: '', pipeline_dir: 'ci', pipeline_file: 'pipeline.tf', webhook_secret: '' });
   const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState('');
@@ -57,6 +96,8 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 	const [repoRef, setRepoRef] = useState('main');
 	const [credentialRef, setCredentialRef] = useState('');
   const [pipelineDir, setPipelineDir] = useState('ci');
+  const [pipelineFile, setPipelineFile] = useState('pipeline.tf');
+  const [webhookSecret, setWebhookSecret] = useState('');
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState(null);
 	const { items: credentials, refresh: fetchCredentials } = useCredentials();
@@ -111,16 +152,34 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
       .finally(() => setDetailLoading(false));
   }, [selectedName]);
 
+  // A leftover webhookSecret from a cancelled or dismissed dialog would
+  // otherwise still be sitting in state the next time "Add project" opens,
+  // and remoteProjectPayload would silently send project A's secret for
+  // project B. Resetting is therefore not just tidiness on success - it has
+  // to run on every way the dialog closes without saving.
+  const resetCreateForm = () => {
+    setName(''); setRepoURL(''); setRepoRef('main'); setCredentialRef(''); setPipelineDir('ci');
+    setPipelineFile('pipeline.tf'); setWebhookSecret(''); setFormError(null);
+  };
+
+  const closeCreateDialog = () => {
+    resetCreateForm();
+    setShowCreate(false);
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     setCreating(true);
     setFormError(null);
 	try {
-		const form = { repo_url: repoURL, repo_ref: repoRef, repo_credential_ref: credentialRef, pipeline_dir: pipelineDir };
+		const form = {
+			repo_url: repoURL, repo_ref: repoRef, repo_credential_ref: credentialRef,
+			pipeline_dir: pipelineDir, pipeline_file: pipelineFile, webhook_secret: webhookSecret,
+		};
 		const validationError = validateRemoteProject(name, form);
 		if (validationError) throw new Error(validationError);
 		await createProject(remoteProjectPayload(name, form));
-		setName(''); setRepoURL(''); setRepoRef('main'); setCredentialRef(''); setPipelineDir('ci');
+		resetCreateForm();
       setShowCreate(false);
       await fetchProjects();
     } catch (err) {
@@ -146,6 +205,10 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
       repo_ref: config?.repo_ref || '',
       repo_credential_ref: config?.repo_credential_ref || '',
       pipeline_dir: config?.pipeline_dir || 'ci',
+      pipeline_file: config?.pipeline_file || 'pipeline.tf',
+      // Deliberately blank: the API never returns the stored secret, and an
+      // empty value is what tells remoteProjectPayload to leave it alone.
+      webhook_secret: '',
     });
     setShowEdit(true);
   };
@@ -178,6 +241,14 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           </Button>
           <Typography variant="h4" sx={{ ml: 2 }}>{selectedName}</Typography>
           <Chip label={config?.pipeline_dir || 'ci'} size="small" variant="outlined" sx={{ ml: 1 }} />
+          <Chip
+            data-testid="webhook-secret-chip"
+            label={config?.has_webhook_secret ? 'Secret set' : 'No per-project secret — uses global secret'}
+            size="small"
+            variant="outlined"
+            color={config?.has_webhook_secret ? 'success' : 'warning'}
+            sx={{ ml: 1 }}
+          />
           <Box sx={{ flexGrow: 1 }} />
           {canAdminister && (
             <Tooltip title="Edit project">
@@ -214,7 +285,9 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 			</Typography>
 
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>Pipeline directory</Typography>
-            <Typography variant="body1" sx={{ mb: 2 }}>{config?.pipeline_dir || 'ci'}</Typography>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              {config?.pipeline_dir || 'ci'} / {config?.pipeline_file || 'pipeline.tf'}
+            </Typography>
 
             {/* Sources are derived from repo_url and the pipeline's remote ci_repo blocks; a push to any of them reaches this project. */}
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>Sources ({config?.sources?.length ?? 0})</Typography>
@@ -284,6 +357,8 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           </CardContent>
         </Card>
 
+        <WebhookSetupPanel hasProjectSecret={Boolean(config?.has_webhook_secret)} />
+
         {/* Edit project dialog */}
         <Dialog open={showEdit} onClose={() => setShowEdit(false)} maxWidth="sm" fullWidth>
           <DialogTitle>Edit project</DialogTitle>
@@ -320,6 +395,20 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
                 size="small"
                 fullWidth
                 helperText="Relative to the repository; all *.tf files in this directory form one pipeline"
+              />
+              <TextField
+                label="Pipeline file"
+                value={editForm.pipeline_file}
+                onChange={(e) => setEditForm(prev => ({ ...prev, pipeline_file: e.target.value }))}
+                size="small"
+                fullWidth
+                placeholder="pipeline.tf"
+                helperText="Entry file inside the pipeline directory"
+              />
+              <WebhookSecretField
+                value={editForm.webhook_secret}
+                onChange={(value) => setEditForm(prev => ({ ...prev, webhook_secret: value }))}
+                helperText="Leave empty to keep the stored secret. Generate one with openssl rand -hex 32."
               />
             </Stack>
           </DialogContent>
@@ -400,7 +489,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           />
         )}
 
-      <Dialog open={showCreate} onClose={() => setShowCreate(false)} maxWidth="sm" fullWidth>
+      <Dialog open={showCreate} onClose={closeCreateDialog} maxWidth="sm" fullWidth>
         <DialogTitle>New project</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -445,11 +534,25 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
               helperText="Relative to the repository; all *.tf files in this directory form one pipeline"
               fullWidth
             />
+            <TextField
+              label="Pipeline file"
+              value={pipelineFile}
+              onChange={(e) => setPipelineFile(e.target.value)}
+              size="small"
+              placeholder="pipeline.tf"
+              helperText="Entry file inside the pipeline directory"
+              fullWidth
+            />
+            <WebhookSecretField
+              value={webhookSecret}
+              onChange={setWebhookSecret}
+              helperText="Verifies webhook deliveries for this project. Empty means the global secret is used. Generate one with openssl rand -hex 32."
+            />
             {formError && <Alert severity="error">{formError}</Alert>}
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowCreate(false)}>Cancel</Button>
+          <Button onClick={closeCreateDialog}>Cancel</Button>
 		  <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !repoURL || !repoRef || !pipelineDir}>
             {creating ? 'Creating…' : 'Create project'}
           </Button>
