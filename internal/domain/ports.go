@@ -177,6 +177,11 @@ type RunStore interface {
 	FlushRunOutput(runID int, output string) error
 	CancelRun(id int, canceledBy string) error
 	ApplyTaskResult(id int, tr TaskResult, outputExtra string) error
+	// FailInterruptedRuns marks every run left "running" by a previous
+	// process as failed, so a restart cannot leave ghosts in run lists,
+	// counters, or guards. A run whose only non-terminal task result is
+	// "manual" is left alone. Returns the number of runs failed.
+	FailInterruptedRuns(reason string) (int, error)
 	GetRun(id int) (*Run, error)
 	CountRuns(projectName string) (int, error)
 	ListRuns(projectName string, limit, offset int) ([]Run, error)

@@ -3,7 +3,10 @@
 See proposal.md - Why. Run status is derived from the latest task result per task name in `ApplyTaskResult` (`internal/store/pgstore_run.go:185-215`): any `manual`/`pending`/`running` task keeps the run `running`. Task results are an append-only JSONB list, deduplicated by name keeping the last entry. There is exactly one `serve` process per database today.
 
 ```
-cmdServe: Migrate ──▶ FailInterruptedRuns("interrupted by server restart") ──▶ NewRunService ──▶ ListenAndServe
+cmdServe: web.InitServerDeps (JWT key, then DB connect + schema migration)
+             ──▶ FailInterruptedRuns("interrupted by server restart")
+             ──▶ web.NewServerEWithDeps (wires RunService etc.)
+             ──▶ ListenAndServe
                           │ BEGIN
                           │ SELECT id, task_results, output FROM runs WHERE status='running' FOR UPDATE
                           │ for each: latest-per-task; if any running/pending → rewrite those, append output line,
@@ -11,6 +14,14 @@ cmdServe: Migrate ──▶ FailInterruptedRuns("interrupted by server restart")
                           │           else (only manual) → skip
                           │ COMMIT ; return count
 ```
+
+Note (implementation): schema migration and `RunStore` construction were already
+fully encapsulated inside `web.NewServerE` (via unexported `initStores`/`NewPG`) -
+there was no standalone `Migrate` step or store handle in `cmd/kestrix`. `NewServerE`
+was split into `web.InitServerDeps` (JWT-key validation + store construction, same
+order/behavior as before) and `web.NewServerEWithDeps` (the rest), so `cmdServe` can
+hold the `RunStore` before the server exists without a second database connection.
+`NewServerE` itself is unchanged for its other callers.
 
 ## Goals / Non-Goals
 

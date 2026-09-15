@@ -27,7 +27,8 @@ Run execution lives in goroutines inside the `serve` process (`RunService.Start`
 
 ## Impact
 
-- `internal/domain/ports.go` `RunStore` gains `FailInterruptedRuns(reason string) (int, error)`; `internal/store/pgstore_run.go` implements it in one transaction reusing the task-result status derivation in `ApplyTaskResult`.
-- `cmd/kestrix/main.go` `cmdServe` calls it after `Migrate`.
+- `internal/domain/ports.go` `RunStore` gains `FailInterruptedRuns(reason string) (int, error)`; `internal/store/pgstore_run.go` implements it in one transaction, sharing the order-preserving latest-per-task dedup (`dedupLatestTaskResults`) that `CancelRun` already used.
+- `internal/web/server.go`: `NewServerE` split into `InitServerDeps` (JWT-key validation + store construction) and `NewServerEWithDeps` (the rest), so `cmdServe` can hold the `RunStore` before the server exists.
+- `cmd/kestrix/main.go` `cmdServe` calls `InitServerDeps`, then `FailInterruptedRuns` via the new `reconcileInterruptedRuns`, then `NewServerEWithDeps`.
 - Fakes in `internal/mocks` and service tests.
 - `docs/architecture.md` (single-instance note), `CHANGELOG.md`.

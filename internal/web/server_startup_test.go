@@ -202,6 +202,38 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	}
 }
 
+// TestServer_FailInterruptedRuns_MatchesProductionSequence exercises the
+// exact sequence cmdServe runs in production: NewServerE, then
+// FailInterruptedRuns on the result, before ListenAndServe. Every other test
+// here only calls NewServerE and inspects the wired server; this is the one
+// that proves the reconcile step - added so cmdServe can run it before the
+// listener opens - actually reaches the RunStore NewServerE built.
+func TestServer_FailInterruptedRuns_MatchesProductionSequence(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{}
+	runStore := &mocks.MockRunStore{FailInterruptedResult: 3}
+	old := newPGStores
+	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+		return projectStore, runStore, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
+	if err != nil {
+		t.Fatalf("NewServerE: %v", err)
+	}
+
+	n, err := server.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedRuns: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("n = %d, want 3", n)
+	}
+	if len(runStore.FailInterruptedCalls) != 1 || runStore.FailInterruptedCalls[0] != "interrupted by server restart" {
+		t.Fatalf("FailInterruptedCalls = %v, want one call with the restart reason", runStore.FailInterruptedCalls)
+	}
+}
+
 func TestNewServerEWiresLoginThrottleWhenConfigured(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}

@@ -268,8 +268,12 @@ func cmdServe(args []string) {
 	webCfg := buildServeConfig(cfg, env, *staticDir, *method)
 	logConfigSources(os.Stderr, cfg, *configPath)
 
-	server, err := buildServer(webCfg)
+	server, err := web.NewServerE(webCfg)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := reconcileInterruptedRuns(server, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
 		os.Exit(1)
 	}
@@ -277,6 +281,26 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runReconciler is satisfied by *web.Server in production and by a fake
+// store in tests, so reconcileInterruptedRuns needs neither a real server
+// nor internal/domain.
+type runReconciler interface {
+	FailInterruptedRuns(reason string) (int, error)
+}
+
+// reconcileInterruptedRuns fails every run left "running" by a previous
+// kestrix instance before the HTTP listener opens, so a restart cannot
+// leave ghost runs in lists, counters, and guards. It logs the count,
+// including zero, so every start reports whether it found any.
+func reconcileInterruptedRuns(r runReconciler, w io.Writer) error {
+	n, err := r.FailInterruptedRuns("interrupted by server restart")
+	if err != nil {
+		return fmt.Errorf("reconcile interrupted runs: %w", err)
+	}
+	fmt.Fprintf(w, "runs: failed %d interrupted run(s) from a previous instance\n", n)
+	return nil
 }
 
 // logConfigSources names which source won for each multi-form setting
@@ -289,10 +313,6 @@ func logConfigSources(w io.Writer, cfg *config.Config, configPath string) {
 	for _, line := range cfg.SourceReport() {
 		fmt.Fprintf(w, "config: %s\n", line)
 	}
-}
-
-func buildServer(cfg web.Config) (*web.Server, error) {
-	return web.NewServerE(cfg)
 }
 
 func cmdResolve(args []string) {
