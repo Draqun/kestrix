@@ -3,9 +3,12 @@
 # ─────────────────────────────────────────────────────────────
 #
 # Usage:
-#   KESTRIX_IMAGE=kestrix:latest KESTRIX_MASTER_KEY_PATH=/srv/kestrix/master.key \
+#   KESTRIX_MASTER_KEY_PATH=/srv/kestrix/master.key \
 #     KESTRIX_JWT_SIGNING_KEY_PATH=/srv/kestrix/jwt.key \
 #     docker compose -f docker-compose.prod.yml up -d
+#
+# Pulls registry.gitlab.com/kestrix/kestrix:latest by default. Pin a specific
+# release instead with KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:vX.Y.Z.
 #
 # Kestrix serves no request until an administrator account exists. Open the
 # UI: a fresh instance shows a "Create the first administrator" form instead
@@ -16,7 +19,9 @@
 #
 services:
   kestrix:
-    image: ${KESTRIX_IMAGE:-kestrix:latest}
+    # Keep the registry+namespace here in sync with scripts/deploy.sh's
+    # DOCKER_REGISTRY default - they name the same image.
+    image: ${KESTRIX_IMAGE:-registry.gitlab.com/kestrix/kestrix:latest}
     ports:
       - "${KESTRIX_PORT:-18080}:8080"
     environment:

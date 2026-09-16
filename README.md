@@ -29,11 +29,24 @@ ci_task "deploy_staging" {
 }
 ```
 
+## Install
+
+Pull a released image from the GitLab Container Registry - `latest` tracks
+the newest tagged release, or pin a specific one:
+
+```bash
+docker pull registry.gitlab.com/kestrix/kestrix:latest   # or a pinned tag, e.g. :v0.3.0
+docker run --rm registry.gitlab.com/kestrix/kestrix:latest version
+```
+
+For a full production deployment (Docker Compose, TLS, backups, upgrades),
+see [Production deployment](docs/deployment.md), which defaults to this same
+registry image.
+
 ## Quick Start
 
-For a production install (Docker Compose, TLS, backups, upgrades), see
-[Production deployment](docs/deployment.md) instead - the steps below are for
-running Kestrix from source.
+The steps below are for running Kestrix from source instead of the published
+image.
 
 ### 1. Build
 
@@ -113,6 +126,10 @@ The CLI works on a pipeline file and needs no server:
 
 # Manage accounts directly against the database
 ./bin/kestrix user list
+
+# Print the running build's version - a released build reports its tag,
+# e.g. v0.3.0; an unversioned local build reports dev
+./bin/kestrix version
 ```
 
 The API needs a bearer token from the login route:

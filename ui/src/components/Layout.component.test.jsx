@@ -56,6 +56,12 @@ beforeEach(() => {
   }));
 });
 
+test('footer chip shows the server version once fetched', async () => {
+  renderLayout(1200);
+
+  assert.ok(await screen.findByText('vtest'));
+});
+
 test('desktop Settings navigation opens /settings and receives active state', async () => {
   const user = userEvent.setup();
   renderLayout(1200);

@@ -33,6 +33,7 @@ import (
 	"kestrix/internal/parser"
 	"kestrix/internal/runner"
 	"kestrix/internal/variables"
+	"kestrix/internal/version"
 	"kestrix/internal/web"
 )
 
@@ -57,6 +58,8 @@ func main() {
 		cmdVariables(os.Args[2:])
 	case "user":
 		cmdUser(os.Args[2:])
+	case "version":
+		fmt.Println(version.Version)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -78,7 +81,8 @@ Usage:
   kestrix user create [--role viewer|operator|admin] <name>
   kestrix user list
   kestrix user passwd <name>
-  kestrix user delete <name>`)
+  kestrix user delete <name>
+  kestrix version`)
 }
 
 func cmdRun(args []string) {

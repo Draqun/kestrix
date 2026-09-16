@@ -30,7 +30,11 @@ fi
 echo "Pushing ${FULL_IMAGE}..."
 docker push "${FULL_IMAGE}"
 
-echo "Pushing ${LATEST}..."
-docker push "${LATEST}"
+if [ -z "${SKIP_LATEST:-}" ]; then
+  echo "Pushing ${LATEST}..."
+  docker push "${LATEST}"
+else
+  echo "Skipping ${LATEST} (SKIP_LATEST set)"
+fi
 
 echo "=== Docker push passed ==="

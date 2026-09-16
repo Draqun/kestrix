@@ -4,6 +4,7 @@
 BINARY    := bin/kestrix
 GO        := go
 GOFLAGS   :=
+VERSION   ?= $(shell git describe --tags --always --dirty)
 
 # Pinned development tools. staticcheck must stay compatible with the Go
 # release in go.mod: newer staticcheck releases raise their minimum Go version
@@ -47,7 +48,7 @@ $(BINARY): $(shell find . -name '*.go' -type f 2>/dev/null) go.mod
 
 ## build-release: Build release binary (stripped)
 build-release:
-	$(GOENV) $(GO) build -ldflags="-s -w" -o $(BINARY) ./cmd/kestrix
+	$(GOENV) $(GO) build -ldflags="$$(sh scripts/ldflags.sh $(VERSION))" -o $(BINARY) ./cmd/kestrix
 
 ## test: Run unit tests (integration and e2e are separate targets)
 test:

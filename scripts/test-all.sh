@@ -19,10 +19,11 @@ layer_cmd() {
     e2e) echo "make test-e2e" ;;
     runner-coverage) echo "make runner-unit-coverage" ;;
     ui) echo "make ui-test" ;;
+    shell) echo "bash scripts/test-shell.sh" ;;
     *) echo "" ;;
   esac
 }
-ORDER=(unit coverage integration e2e runner-coverage ui)
+ORDER=(unit coverage integration e2e runner-coverage ui shell)
 
 selected=("$@")
 if [[ ${#selected[@]} -eq 0 ]]; then

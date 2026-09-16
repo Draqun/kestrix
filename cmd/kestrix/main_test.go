@@ -124,6 +124,43 @@ func TestCLI_Help(t *testing.T) {
 	}
 }
 
+func TestCLI_Version(t *testing.T) {
+	bin := buildKestrix(t)
+	stdout, _, code := runKestrix(t, bin, "version")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if strings.TrimSpace(stdout) != "dev" {
+		t.Errorf("stdout = %q, want %q", stdout, "dev")
+	}
+}
+
+// TestCLI_Version_LdflagInjection exercises the actual mechanism
+// Makefile's build-release, docker/Dockerfile's ARG VERSION, and the
+// release-binary CI job all rely on: -ldflags -X
+// kestrix/internal/version.Version=<value>. TestCLI_Version alone only
+// ever sees the unversioned "dev" default and would not catch a typo in
+// that import path or variable name.
+func TestCLI_Version_LdflagInjection(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "kestrix")
+	cmd := exec.Command("go", "build",
+		"-ldflags", "-X kestrix/internal/version.Version=vtest",
+		"-o", bin, ".")
+	cmd.Dir = "."
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build -ldflags ...Version=vtest: %v\n%s", err, out)
+	}
+
+	stdout, _, code := runKestrix(t, bin, "version")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if strings.TrimSpace(stdout) != "vtest" {
+		t.Errorf("stdout = %q, want %q", stdout, "vtest")
+	}
+}
+
 func TestCLI_UnknownCommand(t *testing.T) {
 	bin := buildKestrix(t)
 	_, stderr, code := runKestrix(t, bin, "frobnicate")
