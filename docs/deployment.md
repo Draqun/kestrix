@@ -195,8 +195,11 @@ untouched, so this is safe as long as no forward-only database migration ran
 in between (check `CHANGELOG.md` for the versions in between):
 
 ```bash
-KESTRIX_IMAGE=kestrix:<previous-tag> docker compose -f docker-compose.prod.yml up -d
+KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:<previous-tag> docker compose -f docker-compose.prod.yml up -d
 ```
+
+See [Cutting a release](usage.md#cutting-a-release) for removing a bad tag
+and Release at the source instead of just rolling a deployment back from it.
 
 ## Non-goals
 

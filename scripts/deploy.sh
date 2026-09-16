@@ -3,7 +3,12 @@ set -euo pipefail
 
 echo "=== Deploy ==="
 
-REGISTRY="${DOCKER_REGISTRY:-}"
+# Keep this default's registry+namespace in sync with the
+# registry.gitlab.com/kestrix/kestrix:latest default in
+# docker/docker-compose.prod.yml's KESTRIX_IMAGE - this script always
+# exports KESTRIX_IMAGE explicitly below, overriding that default, but the
+# two should still name the same image.
+REGISTRY="${DOCKER_REGISTRY:-registry.gitlab.com/kestrix}"
 IMAGE="${DOCKER_IMAGE:-kestrix}"
 TAG="${DOCKER_TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo 'dev')}"
 COMPOSE_DIR="${COMPOSE_DIR:-docker}"

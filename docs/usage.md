@@ -113,6 +113,44 @@ The server validates remote access and parses the pipeline before persisting
 the project. Registered pipeline content can be viewed in Kestrix but must be
 edited and committed in Git. See [Remote projects](remote-projects.md).
 
+## Cutting a release
+
+`scripts/release.sh <X.Y.Z>` is the only supported way to cut a release. Run
+it on a clean `main`:
+
+```bash
+scripts/release.sh 0.3.0
+```
+
+It refuses to run on a dirty working copy or off `main`, moves the
+`CHANGELOG.md` `[Unreleased]` section under a new `## [vX.Y.Z] - YYYY-MM-DD`
+heading (leaving a fresh empty `[Unreleased]`), commits
+`chore: release vX.Y.Z`, tags it, and pushes the commit and tag. Pushing the
+tag triggers the `release` stage in `.gitlab-ci.yml`, which only runs once
+every analysis/test/build job for that commit has passed:
+
+- `publish-image` builds and pushes `registry.gitlab.com/kestrix/kestrix:vX.Y.Z`
+  and `:latest`.
+- `release-binary` builds the stripped Linux amd64 binary and uploads it to
+  the project's generic package registry.
+- `create-release` creates a GitLab Release for the tag, with the matching
+  `CHANGELOG.md` section as its description and the binary linked as an
+  asset.
+
+Watch it with `scripts/wait-green.sh vX.Y.Z`, then verify from outside the
+runner: `docker pull registry.gitlab.com/kestrix/kestrix:vX.Y.Z` and
+`docker run --rm registry.gitlab.com/kestrix/kestrix:vX.Y.Z version` should
+both report the tag, and the project's Releases page should list it.
+
+**Rollback:** a tag pushed by mistake is not silently fixed - delete it by
+hand. Delete the GitLab Release and the `vX.Y.Z` tag from the project (UI or
+`glab release delete vX.Y.Z` / `git push origin :refs/tags/vX.Y.Z`), which
+also removes the published Release notes; the pushed image and package
+registry asset are left in the registry and can be deleted separately if
+needed. A deployment already pinned to that tag is unaffected until it next
+pulls. See [Production deployment](deployment.md#10-rollback) for rolling a
+running deployment back to a previous tag.
+
 ## Docker deployment E2E test
 
 Run the isolated production Compose smoke test with:

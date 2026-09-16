@@ -5,6 +5,8 @@
 # Stage 1: Build backend
 FROM golang:1.25-alpine AS backend
 
+ARG VERSION=dev
+
 RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
@@ -13,7 +15,7 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
+    -ldflags="$(sh scripts/ldflags.sh ${VERSION})" \
     -o /kestrix \
     ./cmd/kestrix
 
