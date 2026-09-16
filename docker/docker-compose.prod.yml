@@ -20,7 +20,7 @@ services:
     ports:
       - "${KESTRIX_PORT:-18080}:8080"
     environment:
-      - DATABASE_URL=postgres://kestrix:kestrix@postgres:5432/kestrix?sslmode=disable
+      - DATABASE_URL=${DATABASE_URL:-postgres://kestrix:${POSTGRES_PASSWORD}@postgres:5432/kestrix?sslmode=disable}
       # BREAKING: no default secret. Deliveries to /webhook are refused with
       # 401 until KESTRIX_WEBHOOK_SECRET or a per-project secret is set; see
       # design.md D5/Migration Plan in webhook-ingress-hardening.
@@ -31,6 +31,11 @@ services:
       - KESTRIX_IDENTITY_CACHE_TTL=${KESTRIX_IDENTITY_CACHE_TTL:-}
       - KESTRIX_LOGIN_MAX_ATTEMPTS=${KESTRIX_LOGIN_MAX_ATTEMPTS:-}
       - KESTRIX_LOGIN_WINDOW=${KESTRIX_LOGIN_WINDOW:-}
+      # Set to true only together with --profile tls (or another reverse
+      # proxy you control) - never derived from KESTRIX_DOMAIN alone, since
+      # this service always starts regardless of which profiles are active
+      # and trusting X-Forwarded-For without a proxy in front lets any client
+      # forge its own login-throttle key.
       - KESTRIX_TRUST_PROXY_HEADER=${KESTRIX_TRUST_PROXY_HEADER:-}
       - KESTRIX_CONTENT_SECURITY_POLICY=${KESTRIX_CONTENT_SECURITY_POLICY:-}
       - KESTRIX_COOKIE_SECURE=${KESTRIX_COOKIE_SECURE:-}
@@ -82,6 +87,7 @@ services:
 
   business:
     image: nginx:1.27-alpine
+    profiles: [business]
     ports:
       - "${BUSINESS_BIND_HOST:-127.0.0.1}:${BUSINESS_PORT:-8082}:80"
     volumes:
@@ -94,9 +100,7 @@ services:
     environment:
       POSTGRES_DB: kestrix
       POSTGRES_USER: kestrix
-      POSTGRES_PASSWORD: kestrix
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to the database password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -106,6 +110,56 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Opt-in host access to postgres (`--profile db-port`, plus POSTGRES_PORT).
+  # A plain TCP forwarder rather than a port on the postgres service itself:
+  # Compose cannot make one service's own `ports` entry conditional on a
+  # profile, and `network_mode: service:postgres` rejects `ports` outright
+  # ("conflicting options: port publishing and the container type network
+  # mode"). Set POSTGRES_PORT whenever this profile is used - otherwise the
+  # bind lands on a random ephemeral port.
+  postgres-port:
+    image: alpine/socat
+    profiles: [db-port]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT}:5432"
+    command: ["tcp-listen:5432,fork,reuseaddr,max-children=10", "tcp-connect:postgres:5432"]
+    restart: unless-stopped
+
+  # TLS termination (`--profile tls`, plus KESTRIX_DOMAIN). Caddy gets a
+  # certificate for KESTRIX_DOMAIN automatically and forwards to Kestrix.
+  proxy:
+    image: caddy:2-alpine
+    profiles: [tls]
+    environment:
+      - KESTRIX_DOMAIN=${KESTRIX_DOMAIN:-}
+    # KESTRIX_DOMAIN can't use the file's usual ${VAR:?message} guard: Compose
+    # interpolates every service's environment eagerly, even one gated by an
+    # inactive profile, so a required guard here would break a plain `up -d`
+    # that never uses --profile tls. Fail fast in the container instead.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ -z "$$KESTRIX_DOMAIN" ]; then
+          echo "KESTRIX_DOMAIN is required with --profile tls" >&2
+          exit 1
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - kestrix
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   source_cache:
+  caddy_data:
+  caddy_config:

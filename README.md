@@ -31,6 +31,10 @@ ci_task "deploy_staging" {
 
 ## Quick Start
 
+For a production install (Docker Compose, TLS, backups, upgrades), see
+[Production deployment](docs/deployment.md) instead - the steps below are for
+running Kestrix from source.
+
 ### 1. Build
 
 ```bash

@@ -17,6 +17,7 @@ if [ -n "$REGISTRY" ] && [[ "$IMAGE" != */* ]]; then
 fi
 
 export KESTRIX_IMAGE="${FULL_IMAGE}"
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required to start docker-compose.prod.yml - see .env.template}"
 
 echo "Image:   ${FULL_IMAGE}"
 echo "Compose: ${COMPOSE_DIR}"
