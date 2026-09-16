@@ -56,6 +56,7 @@ MASTER_KEY_FILE="${TEMP_DIR}/master.key"
 JWT_SIGNING_KEY_FILE="${TEMP_DIR}/jwt.key"
 ADMIN_NAME="e2e-admin"
 ADMIN_PASSWORD="e2e-admin-password-$$"
+POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 
 mkdir -p "${REMOTE_WORK}/ci"
 git init --quiet --bare --initial-branch=main "${REMOTE_BARE}"
@@ -150,6 +151,7 @@ export KESTRIX_PORT="${BASE_PORT}"
 export BUSINESS_PORT
 export BUSINESS_BIND_HOST=127.0.0.1
 export POSTGRES_PORT
+export POSTGRES_PASSWORD
 
 compose() {
   "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" "$@"
@@ -157,6 +159,11 @@ compose() {
 
 if env -u KESTRIX_MASTER_KEY_PATH "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" config >/dev/null 2>&1; then
   echo "Production Compose unexpectedly accepts a missing KESTRIX_MASTER_KEY_PATH." >&2
+  exit 1
+fi
+
+if env -u POSTGRES_PASSWORD "${COMPOSE[@]}" -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" config >/dev/null 2>&1; then
+  echo "Production Compose unexpectedly accepts a missing POSTGRES_PASSWORD." >&2
   exit 1
 fi
 
@@ -201,6 +208,32 @@ else
 fi
 
 compose config >/dev/null
+
+DEFAULT_SERVICES="$(compose config --services | sort | tr '\n' ' ')"
+if [[ "${DEFAULT_SERVICES}" != "kestrix postgres " ]]; then
+  echo "Default 'up -d' (no profile) would start unexpected services: ${DEFAULT_SERVICES}" >&2
+  echo "Expected exactly: kestrix postgres" >&2
+  exit 1
+fi
+
+if ! compose --profile business config --services | grep -qx business; then
+  echo "--profile business unexpectedly omits the business service." >&2
+  exit 1
+fi
+
+if ! compose --profile tls config --services | grep -qx proxy; then
+  echo "--profile tls unexpectedly omits the proxy service." >&2
+  exit 1
+fi
+
+echo "Validating docker/Caddyfile..."
+if ! docker run --rm -v "${REPO_ROOT}/docker/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -e KESTRIX_DOMAIN=e2e-test.invalid caddy:2-alpine \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+  echo "docker/Caddyfile failed 'caddy validate'." >&2
+  exit 1
+fi
+
 compose up -d --force-recreate
 
 wait_for_health() {
@@ -220,6 +253,26 @@ wait_for_health() {
 }
 
 wait_for_health
+
+echo "Verifying PostgreSQL has no published host port by default..."
+if compose ps postgres | grep -q '5432->'; then
+  echo "postgres unexpectedly published a host port by default:" >&2
+  compose ps postgres >&2
+  exit 1
+fi
+
+echo "Verifying --profile db-port publishes PostgreSQL on 127.0.0.1:${POSTGRES_PORT}..."
+compose --profile db-port up -d postgres-port
+DB_PORT_DEADLINE=$((SECONDS + 20))
+until (exec 3<>"/dev/tcp/127.0.0.1/${POSTGRES_PORT}") 2>/dev/null; do
+  if (( SECONDS >= DB_PORT_DEADLINE )); then
+    echo "--profile db-port did not open a reachable port within timeout." >&2
+    exit 1
+  fi
+  sleep 1
+done
+echo "--profile db-port: PostgreSQL reachable on 127.0.0.1:${POSTGRES_PORT}"
+compose --profile db-port stop postgres-port >/dev/null
 
 # Kestrix serves no /api route until an administrator exists - see
 # user-authentication spec, "Server never runs unauthenticated". Bootstrap

@@ -4,6 +4,19 @@ The Docker Compose configuration uses `kestrix` for application,
 business-site, PostgreSQL database, and test-database identities. Runtime
 configuration uses only the canonical `KESTRIX_*` environment variables.
 
+See [Production deployment](../docs/deployment.md) for the full install,
+upgrade, backup, and TLS walkthrough. Summary of `docker-compose.prod.yml`:
+
+- Plain `up -d` starts only `kestrix` and `postgres`; `POSTGRES_PASSWORD` is
+  required and the database is never published on the host.
+- `--profile tls` (plus `KESTRIX_DOMAIN`) adds a Caddy reverse proxy that
+  terminates HTTPS with an automatic certificate.
+- `--profile db-port` (plus `POSTGRES_PORT`) publishes PostgreSQL on the host
+  via a small TCP relay, not Postgres's own listener (Compose can't gate one
+  service's `ports` entry on a profile) - bound to `127.0.0.1` unless
+  `POSTGRES_BIND_HOST` says otherwise.
+- `--profile business` starts the marketing site; most installs don't need it.
+
 ## Credential master key
 
 Both Compose profiles require a separately provisioned, mode-`0600` file with
