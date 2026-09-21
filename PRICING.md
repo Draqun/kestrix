@@ -1,8 +1,10 @@
 # Kestrix Pricing
 
-Kestrix is free for personal, non-commercial use — see `LICENSE.md` for the
-exact terms. Commercial use requires a paid plan, priced by how many people
-use it, not by company revenue or headcount.
+Kestrix is free for personal, non-commercial use under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) — see that file for the exact
+terms. Commercial use requires a paid plan and the separate
+[commercial license](LICENSE-COMMERCIAL.md), priced by how many people use it,
+not by company revenue or headcount.
 
 ## How a plan is determined
 
@@ -29,5 +31,7 @@ not change what you pay.
 ## Non-commercial use
 
 Personal projects, evaluation, and learning are free without a paid plan,
-regardless of account count. See `LICENSE.md` for what counts as
-non-commercial use.
+regardless of account count. See the [PolyForm Noncommercial License](LICENSE)
+for what counts as a noncommercial purpose; it also covers charitable,
+educational, public research, public safety, health, environmental, and
+government organizations.

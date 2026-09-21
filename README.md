@@ -478,4 +478,9 @@ signing-key provisioning, and account recovery.
 
 ## License
 
-MIT
+Kestrix is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
+personal projects, evaluation, study, and use by noncommercial organizations
+are free. Commercial use requires a separate commercial license — see
+[LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md) for the terms and
+[PRICING.md](PRICING.md) for the plans. The software enforces no plan, account
+limit, or license key.
