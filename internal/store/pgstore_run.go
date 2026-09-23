@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
+	"kestrix/internal/redact"
 )
 
 func (s *PGStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
@@ -192,10 +193,16 @@ func dedupLatestTaskResults(results []TaskResult) (order []string, latest map[st
 // - pending (no incomplete deps) → canceled
 // - pending (depends on incomplete/failed) → skipped
 // - passed left unchanged
-func (s *PGStore) CancelRun(id int, canceledBy string) error {
+//
+// changed reports whether this call actually performed the running/queued →
+// canceled transition. The terminal UPDATE below is guarded by the same
+// status check in its own WHERE clause, so two concurrent CancelRun calls
+// for the same run serialize on the row: only the first to commit affects a
+// row, the second affects zero and reports changed=false - see REVIEW.md R2.
+func (s *PGStore) CancelRun(id int, canceledBy string) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin cancel run: %w", err)
+		return false, fmt.Errorf("begin cancel run: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -205,10 +212,10 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 		`SELECT status, task_results FROM runs WHERE id = $1`, id,
 	).Scan(&status, &taskResultsJSON)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if status != "running" && status != "queued" {
-		return nil
+		return false, nil
 	}
 
 	var results []TaskResult
@@ -266,21 +273,35 @@ func (s *PGStore) CancelRun(id int, canceledBy string) error {
 	}
 
 	b, _ := json.Marshal(final)
-	if _, err := tx.Exec(
-		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now(), canceled_by = $2 WHERE id = $3`,
+	res, err := tx.Exec(
+		`UPDATE runs SET status = 'canceled', task_results = $1, error = 'canceled', finished_at = now(), canceled_by = $2 WHERE id = $3 AND status IN ('running', 'queued')`,
 		string(b), canceledBy, id,
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		// Lost the race to a concurrent CancelRun (or FailInterruptedRuns)
+		// between our SELECT above and this UPDATE - the run is already
+		// terminal, so this call performed no transition.
+		return false, nil
 	}
 
 	// A canceled run is terminal, so it must count against run_history_limit
 	// the same as a passed/failed run finishing via FinishRun - see
 	// REVIEW.md R3.
 	if err := s.pruneRuns(tx); err != nil {
-		return err
+		return false, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // FailInterruptedRuns marks every run left "running" or "queued" by a
@@ -328,7 +349,12 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 	for _, r := range runRows {
 		var results []TaskResult
 		if err := json.Unmarshal([]byte(r.taskResultsJSON), &results); err != nil {
-			log.Printf("FailInterruptedRuns: run %d has malformed task_results, proceeding with a partial decode: %v", r.id, err)
+			// No known secret is reachable from this package (it decodes
+			// already-redacted stored JSON), so this passes a nil value set -
+			// still routed through redact.Err for the same pattern every
+			// other err-carrying log call in this repo now follows.
+			slog.Warn("FailInterruptedRuns: run has malformed task_results, proceeding with a partial decode",
+				"run_id", r.id, "err", redact.Err(err, nil))
 		}
 
 		order, latest := dedupLatestTaskResults(results)
@@ -389,11 +415,13 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 	return count, nil
 }
 
-// ApplyTaskResult appends a task result and recomputes overall run status.
-func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) error {
+// ApplyTaskResult appends a task result and recomputes overall run status,
+// returning that status so the caller can detect a terminal outcome
+// (passed/failed/canceled) without a separate GetRun call - see REVIEW.md R1.
+func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (string, error) {
 	run, err := s.GetRun(id)
 	if err != nil || run == nil {
-		return fmt.Errorf("run not found")
+		return "", fmt.Errorf("run not found")
 	}
 	results := append(run.TaskResults, tr)
 	// Latest status per task name.
@@ -453,6 +481,19 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) err
 			status, string(b), out, errMsg, id,
 		)
 	}
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+// SetCanceledBy records which actor canceled a run, for the path where
+// ApplyTaskResult (not CancelRun) performed the canceled transition - see
+// REVIEW.md R9. canceled_by defaults to ” (pgstore.go's migration), so the
+// guard only ever fills an unset value; it never overwrites CancelRun's own
+// write, whichever of the two runs first.
+func (s *PGStore) SetCanceledBy(id int, canceledBy string) error {
+	_, err := s.db.Exec(`UPDATE runs SET canceled_by = $1 WHERE id = $2 AND canceled_by = ''`, canceledBy, id)
 	return err
 }
 

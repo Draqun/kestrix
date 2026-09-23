@@ -127,6 +127,17 @@ it with `slog.SetDefault`, then routes the stdlib logger into it with
 key/value fields; `err` carries `error.Error()` after passing through the
 existing redactor.
 
+### D8: Redaction lives in a new `internal/redact` package, below `internal/service`
+
+Log fields (this change) and run output (existing) both need secret
+redaction, and `internal/store` now needs it too - `pgstore_run.go` redacts
+before persisting, and `internal/store` must not import `internal/service`,
+which sits above it in this repo's hexagonal layering. The redaction
+primitive (`Values`/`Prepare`/`Err`) moved into a new `internal/redact`
+package with no dependency on `service`, `store`, or `web`, so every layer
+can import it directly; `internal/service/redact.go` keeps a thin delegator
+for its existing call sites. See REVIEW.md R5.
+
 ## Risks / Trade-offs
 
 - **Hand-rolled exposition is subtly wrong (bad escaping, wrong type line) and a
@@ -140,9 +151,10 @@ existing redactor.
 - **The JSON log switch breaks an operator's existing `grep`** → called out as
   **BREAKING** in the changelog, and the level setting lets them raise or lower
   volume without a rebuild.
-- **Redaction misses a field and a secret reaches a log line** → log fields go
-  through the same `internal/service` redactor as run output; a unit test feeds
-  a known secret through every new call site that carries an `err`.
+- **Redaction misses a field and a secret reaches a log line** → log fields,
+  run output, and stored run data go through the same `internal/redact`
+  primitive (see D8); a unit test feeds a known secret through every new
+  call site that carries an `err`.
 - **Deriving gauges on scrape ties the handler to scheduler internals** → the
   scheduler exposes a single `Counts()` accessor; the handler does not reach
   into its fields.

@@ -2,15 +2,9 @@ package service
 
 import (
 	"io"
-	"sort"
-	"strings"
-)
 
-// minRedactedSecretLen is the shortest resolved secret value redactingWriter
-// will ever match; see design.md D5. Redacting "", "1", or "ok" would shred
-// unrelated output, so a shorter value is still injected into a task but is
-// not guaranteed to be redacted from output - documented, not a bug.
-const minRedactedSecretLen = 8
+	"kestrix/internal/redact"
+)
 
 // redactingWriter wraps an io.Writer, replacing every occurrence of a
 // configured secret value with "***" before the bytes reach the underlying
@@ -18,37 +12,22 @@ const minRedactedSecretLen = 8
 // value split across two writes is still matched; call Flush once no more
 // data is coming so a value sitting in that trailing buffer is redacted
 // before being lost. See design.md D5: this is a byte-string match on the
-// raw value, not redaction that survives encoding.
+// raw value, not redaction that survives encoding. The matching itself
+// lives in internal/redact, shared with the process log fields internal/web
+// and internal/store redact - see that package's doc comment for why it
+// sits below internal/service.
 type redactingWriter struct {
 	w       io.Writer
-	values  []string // len >= minRedactedSecretLen, longest first
+	values  []string // len >= redact.MinSecretLen, longest first
 	maxLen  int
 	pending []byte
 }
 
-// prepareRedactionValues drops any value shorter than minRedactedSecretLen
-// and deduplicates and sorts the rest longest-first, so a longer secret is
-// fully redacted before a shorter one that happens to be its substring is
-// considered - otherwise part of the longer secret's bytes would stay
-// exposed after the shorter match consumed only part of it.
-func prepareRedactionValues(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	filtered := make([]string, 0, len(values))
-	for _, v := range values {
-		if len(v) < minRedactedSecretLen || seen[v] {
-			continue
-		}
-		seen[v] = true
-		filtered = append(filtered, v)
-	}
-	sort.Slice(filtered, func(i, j int) bool { return len(filtered[i]) > len(filtered[j]) })
-	return filtered
-}
-
-// newRedactingWriter builds a redactingWriter over w from values (see
-// prepareRedactionValues).
+// newRedactingWriter builds a redactingWriter over w from values, dropping
+// any value shorter than redact.MinSecretLen and deduplicating and sorting
+// the rest longest-first (see redact.Prepare).
 func newRedactingWriter(w io.Writer, values []string) *redactingWriter {
-	filtered := prepareRedactionValues(values)
+	filtered := redact.Prepare(values)
 	maxLen := 0
 	for _, v := range filtered {
 		if len(v) > maxLen {
@@ -63,10 +42,7 @@ func newRedactingWriter(w io.Writer, values []string) *redactingWriter {
 // already a complete string - TaskResult.Output and ApplyTaskResult's
 // outputExtra - so no cross-write buffering is needed.
 func redactValues(s string, values []string) string {
-	for _, v := range prepareRedactionValues(values) {
-		s = strings.ReplaceAll(s, v, "***")
-	}
-	return s
+	return redact.Values(s, values)
 }
 
 // Write implements io.Writer. It always reports len(p) consumed - any
@@ -80,7 +56,7 @@ func (r *redactingWriter) Write(p []byte) (int, error) {
 	buf := r.redact(append(r.pending, p...))
 	// keep is never negative here: the len(r.values) == 0 fast path above
 	// already covers an empty configured set, so maxLen is always at least
-	// minRedactedSecretLen whenever this line runs.
+	// redact.MinSecretLen whenever this line runs.
 	keep := r.maxLen - 1
 	if keep > len(buf) {
 		keep = len(buf)
@@ -114,9 +90,7 @@ func (r *redactingWriter) Flush() error {
 }
 
 func (r *redactingWriter) redact(buf []byte) []byte {
-	s := string(buf)
-	for _, v := range r.values {
-		s = strings.ReplaceAll(s, v, "***")
-	}
-	return []byte(s)
+	// r.values is already Prepare-d (see newRedactingWriter), so this uses
+	// ValuesPrepared rather than re-filtering/re-sorting on every Write.
+	return []byte(redact.ValuesPrepared(string(buf), r.values))
 }

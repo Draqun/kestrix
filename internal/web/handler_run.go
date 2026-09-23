@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/redact"
 	"kestrix/internal/service"
 
 	"kestrix/internal/web/pagination"
@@ -172,15 +174,16 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			errMsg = tr.Error
 		}
 	}
-	// Cancel records its outcome via CancelRun once RunTask's done channel
-	// closes, which happens before this point; do not overwrite a run it
-	// already marked canceled with this handler's local verdict — in the
-	// stored record or in this response.
+	// RunTask's own runTaskInternal already recorded this run's terminal
+	// metric (from ApplyTaskResult's returned status) before returning here,
+	// including the canceled case - see REVIEW.md R1. This handler only
+	// normalizes the stored record/response and must never record the
+	// metric itself, or it would double-count.
 	if run, _ := s.runStore.GetRun(runID); run != nil && run.Status == "canceled" {
-		log.Printf("run: task finished after cancel, keeping canceled status run=%d", runID)
+		slog.Info("run: task finished after cancel, keeping canceled status", "run_id", runID)
 		status, errMsg = "canceled", "canceled"
 	} else if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
-		log.Printf("warning: could not finish run record: %v", err)
+		slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(err, s.knownSecrets()))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -406,9 +409,10 @@ func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, 
 	if s.runStore == nil {
 		return
 	}
+	startedAt := time.Now()
 	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj, actor)
 	if err != nil {
-		log.Printf("warning: could not record run for secret resolution failure: %v", err)
+		slog.Warn("could not record run for secret resolution failure", "project", projectName, "err", redact.Err(err, s.knownSecrets()))
 		return
 	}
 	taskResults := make([]domain.TaskResult, 0, len(proj.Tasks))
@@ -416,6 +420,10 @@ func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, 
 		taskResults = append(taskResults, domain.TaskResult{Name: t.Name, Status: "skipped", Error: secretErr.Error()})
 	}
 	if err := s.runStore.FinishRun(runID, "failed", "", secretErr.Error(), taskResults); err != nil {
-		log.Printf("warning: could not finish run record for secret resolution failure: %v", err)
+		slog.Warn("could not finish run record for secret resolution failure", "run_id", runID, "project", projectName, "err", redact.Err(err, s.knownSecrets()))
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.RunFinished("failed", projectName, time.Since(startedAt))
 	}
 }

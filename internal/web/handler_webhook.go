@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +16,7 @@ import (
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/parser"
+	"kestrix/internal/redact"
 	"kestrix/internal/source"
 )
 
@@ -120,7 +121,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	keys := sourceMatchKeys(collectRepoURLs(probe))
 	matches, ignored, err := s.matchProjects(probe.ID, keys)
 	if err != nil {
-		log.Printf("webhook: store lookup error: %v", err)
+		slog.Warn("webhook: store lookup error", "err", redact.Err(err, s.knownSecrets()))
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
@@ -131,10 +132,16 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(matches) > 0 && len(verified) == 0 {
+		if s.metrics != nil {
+			s.metrics.WebhookDelivery("rejected")
+		}
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	if len(matches) == 0 && !verifyDelivery(s.cfg.Signature.Method, r.Header, body, "", s.cfg.Signature.Secret) {
+		if s.metrics != nil {
+			s.metrics.WebhookDelivery("rejected")
+		}
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -149,10 +156,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if ignored {
 		// Log the match keys, not the raw URLs: a key never carries userinfo.
-		log.Printf("webhook: unknown project gitlab_id=%d source_keys=%v", event.GitLabProjectID, keys)
+		slog.Info("webhook: unknown project", "gitlab_project_id", event.GitLabProjectID, "source_keys", keys)
 		logEntry.Status = domain.WebhookStatusIgnored
 		logEntry.Error = "unknown project"
 		s.logWebhook(logEntry)
+		if s.metrics != nil {
+			s.metrics.WebhookDelivery("skipped")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "ignored", "reason": "unknown project",
@@ -167,7 +177,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		// keeps the history Project column usable in this deployment too.
 		proj, err := parser.ParseDir(s.cfg.PipelineDir)
 		if err != nil {
-			log.Printf("webhook: parse error: %v", err)
+			slog.Warn("webhook: parse error", "err", redact.Err(err, s.knownSecrets()))
 			logEntry.Error = err.Error()
 			s.logWebhook(logEntry)
 			writeWebhookErrorResponse(w, logEntry)
@@ -366,11 +376,16 @@ func (s *Server) resolveAndDispatch(event *PushEvent, proj model.Project, change
 	}
 	entry.TriggeredTasks = tasks
 	entry.Status = domain.WebhookStatusTriggered
+	outcome := "accepted"
 	if len(tasks) == 0 {
 		entry.Status = domain.WebhookStatusSkipped
+		outcome = "skipped"
 	}
-	log.Printf("webhook: repo=%s branch=%s commits=%d files=%d tasks=%v",
-		event.Repo, event.Branch, event.CommitCount, len(changed), tasks)
+	if s.metrics != nil {
+		s.metrics.WebhookDelivery(outcome)
+	}
+	slog.Info("webhook processed", "repo", event.Repo, "branch", event.Branch,
+		"commits", event.CommitCount, "files", len(changed), "tasks", tasks)
 
 	// entry.ProjectName is the registration name for a registered project and
 	// the HCL name in single-directory mode, so results pair with history rows.
@@ -401,12 +416,12 @@ func (s *Server) resolveAndDispatch(event *PushEvent, proj model.Project, change
 			Variables: vars,
 		})
 		if err != nil {
-			log.Printf("webhook: dispatch error: %v", err)
+			slog.Warn("webhook: dispatch error", "err", redact.Err(err, s.knownSecrets()))
 			entry.Status = domain.WebhookStatusError
 			entry.Error = err.Error()
 			res.Error = err.Error()
 		} else {
-			log.Printf("webhook: dispatched pipeline %d (%s)", resp.PipelineID, resp.WebURL)
+			slog.Info("webhook: dispatched pipeline", "pipeline_id", resp.PipelineID, "pipeline_url", resp.WebURL)
 			entry.DispatchedID = resp.PipelineID
 			entry.DispatchedURL = resp.WebURL
 			res.Dispatched = true

@@ -138,3 +138,25 @@ func (s *RunService) acquireSlot(ctx context.Context, runID int) bool {
 	}
 	return s.waitAndStart(ctx, runID)
 }
+
+// Counts reports the current running and queued run counts for the
+// /metrics gauges - see observability design.md D3: derived on scrape from
+// the scheduler's own live state, never a separately tracked counter that
+// could drift. running comes from the concurrency semaphore itself
+// (occupied slots = capacity - free tokens currently sitting in the
+// channel); a nil slots channel (unlimited concurrency) reports 0, since
+// there is no capacity to measure occupancy against. queued has no
+// in-memory counterpart - "queued" is purely a store status, so it is read
+// from RunStore.CountRunsByStatus, the same source the dashboard already
+// uses for the same number.
+func (s *RunService) Counts() (running, queued int) {
+	if s.slots != nil {
+		running = cap(s.slots) - len(s.slots)
+	}
+	if s.runStore != nil {
+		if counts, err := s.runStore.CountRunsByStatus(); err == nil {
+			queued = counts["queued"]
+		}
+	}
+	return running, queued
+}

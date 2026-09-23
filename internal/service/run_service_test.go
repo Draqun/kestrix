@@ -16,6 +16,40 @@ import (
 	"kestrix/internal/model"
 )
 
+// fakeRecorder is a minimal metrics.Recorder double: it just remembers every
+// call, so a test can assert RunService recorded exactly the status,
+// project, and (roughly) duration it expects without depending on the real
+// internal/metrics package's internals.
+type fakeRecorder struct {
+	mu    sync.Mutex
+	runs  []fakeRunFinished
+	hooks []string
+}
+
+type fakeRunFinished struct {
+	status   string
+	project  string
+	duration time.Duration
+}
+
+func (f *fakeRecorder) RunFinished(status, project string, d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runs = append(f.runs, fakeRunFinished{status: status, project: project, duration: d})
+}
+
+func (f *fakeRecorder) WebhookDelivery(outcome string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hooks = append(f.hooks, outcome)
+}
+
+func (f *fakeRecorder) snapshot() []fakeRunFinished {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeRunFinished(nil), f.runs...)
+}
+
 // captureLog redirects the standard logger to a buffer for the rest of the
 // test, restoring it on cleanup. Tests using this must not run with
 // t.Parallel(), since the standard logger is a package-level global.
@@ -106,6 +140,8 @@ func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
 		TaskResultList: []domain.TaskResult{{Name: "build", Status: "passed"}},
 	}
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
 
 	_, err := svc.Start(context.Background(), "myproject", &model.Project{
 		Name:  "myproject",
@@ -119,12 +155,28 @@ func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "run: started") || !strings.Contains(out, `actor="user:alice"`) ||
-		!strings.Contains(out, `project="myproject"`) || !strings.Contains(out, "run=42") {
-		t.Fatalf("log output = %q, want a started record naming the actor, project, and run id", out)
+	if !strings.Contains(out, "run started") || !strings.Contains(out, "account=user:alice") ||
+		!strings.Contains(out, "project=myproject") || !strings.Contains(out, "run_id=42") {
+		t.Fatalf("log output = %q, want a started record naming the account, project, and run_id", out)
 	}
 	if strings.Contains(out, "main.go") {
-		t.Fatalf("log output leaked request data beyond actor/project/run: %q", out)
+		t.Fatalf("log output leaked request data beyond account/project/run_id: %q", out)
+	}
+
+	select {
+	case <-finishCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for FinishRun")
+	}
+	runs := rec.snapshot()
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 recorded run, got %d: %+v", len(runs), runs)
+	}
+	if runs[0].status != "passed" || runs[0].project != "myproject" {
+		t.Errorf("recorded run = %+v, want status=passed project=myproject", runs[0])
+	}
+	if runs[0].duration < 0 {
+		t.Errorf("recorded duration = %v, want non-negative", runs[0].duration)
 	}
 }
 
@@ -138,6 +190,8 @@ func TestRunServicePersistsPinsAndRetainsSourcesForManualWork(t *testing.T) {
 	manager := &sourceSessionTracker{}
 	primary := domain.AcquiredSource{RepoName: "app", URL: "https://git.test/app.git", RequestedRef: "main", ResolvedRevision: "app-sha", Primary: true}
 	svc := NewRunService(store, runner, runner)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
 	_, err := svc.Start(context.Background(), "app", &model.Project{Name: "app", Tasks: []model.Task{{Name: "deploy", Manual: true}}}, nil, domain.RunnerOptions{
 		SourceSessions: manager, InitialSources: []domain.AcquiredSource{primary},
 	})
@@ -145,6 +199,12 @@ func TestRunServicePersistsPinsAndRetainsSourcesForManualWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.WaitFinish()
+	// A "running" status (a manual task is still pending) is not terminal -
+	// see observability spec.md "Run outcome counted once" - so it must not
+	// be recorded as a finished run.
+	if runs := rec.snapshot(); len(runs) != 0 {
+		t.Fatalf("recorded runs = %+v, want none for a non-terminal 'running' status", runs)
+	}
 	if len(store.UpdateSourcesCalls) != 1 || len(store.UpdateSourcesCalls[0]) != 2 {
 		t.Fatalf("persisted sources = %+v", store.UpdateSourcesCalls)
 	}
@@ -270,6 +330,8 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	mockRunner := &mocks.MockPipelineRunner{PanicMsg: "boom"}
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
@@ -289,6 +351,13 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 	}
 	if mockRun.FinishRunCalls[0].Status != "failed" {
 		t.Errorf("expected finish status 'failed' after panic, got %q", mockRun.FinishRunCalls[0].Status)
+	}
+	// The panic-recovery path records its own metric directly (it returns
+	// before executeRun's normal finishRun call), so this is a separate
+	// assertion from the metric recorded on the ordinary completion path.
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "failed" || runs[0].project != "proj" {
+		t.Fatalf("recorded runs = %+v, want exactly one failed/proj entry", runs)
 	}
 }
 
@@ -517,9 +586,9 @@ func TestRunService_ApproveManualTask_LogsActorOnSuccess(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "run: approved") || !strings.Contains(out, `actor="user:alice"`) ||
-		!strings.Contains(out, `project="proj"`) || !strings.Contains(out, "run=7") || !strings.Contains(out, `task="manual"`) {
-		t.Fatalf("log output = %q, want an approved record naming actor, project, run id, and task", out)
+	if !strings.Contains(out, "manual task approved") || !strings.Contains(out, "account=user:alice") ||
+		!strings.Contains(out, "project=proj") || !strings.Contains(out, "run_id=7") || !strings.Contains(out, "task=manual") {
+		t.Fatalf("log output = %q, want an approved record naming account, project, run_id, and task", out)
 	}
 }
 
@@ -878,7 +947,14 @@ func (r *blockingTaskRunner) RunTask(ctx context.Context, project domain.Project
 	if r.returnedCh != nil {
 		close(r.returnedCh)
 	}
-	return domain.TaskResult{Name: taskName, Status: "passed"}, nil
+	// Mirrors runner.go's real Executor.RunTask: a task whose context was
+	// canceled reports its own result as "canceled", not "passed" - see
+	// REVIEW.md R1/R9.
+	status := "passed"
+	if r.sawCancel {
+		status = "canceled"
+	}
+	return domain.TaskResult{Name: taskName, Status: status}, nil
 }
 
 func waitActiveAbsent(t *testing.T, svc *RunService, runID int) {
@@ -1133,6 +1209,61 @@ func TestRunService_Cancel_TerminatesActiveRunTask(t *testing.T) {
 	}
 }
 
+// TestRunService_Cancel_PersistsCanceledByWhenRunTaskLosesTheRace covers
+// REVIEW.md R9: runTaskInternal's own ApplyTaskResult call - not CancelRun -
+// performs the canceled transition here (CancelRun's status-guarded UPDATE,
+// R2, loses the race and no-ops), so nothing would ever persist who
+// canceled the run unless runTaskInternal does it itself via the actor
+// Cancel recorded on the active entry before canceling its context.
+func TestRunService_Cancel_PersistsCanceledByWhenRunTaskLosesTheRace(t *testing.T) {
+	const runID = 74
+	store := &mocks.MockRunStore{}
+	runner := &blockingTaskRunner{
+		startedCh:  make(chan struct{}),
+		releaseCh:  make(chan struct{}),
+		returnedCh: make(chan struct{}),
+	}
+	svc := NewRunService(store, runner, runner)
+
+	runTaskErrCh := make(chan error, 1)
+	go func() {
+		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		runTaskErrCh <- err
+	}()
+
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task to start")
+	}
+
+	cancelErrCh := make(chan error, 1)
+	go func() {
+		cancelErrCh <- svc.Cancel(context.Background(), runID, "user:alice")
+	}()
+
+	select {
+	case <-runner.returnedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the blocking task to return after Cancel")
+	}
+	if err := <-runTaskErrCh; err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if err := <-cancelErrCh; err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if len(store.SetCanceledByCalls) != 1 || store.SetCanceledByCalls[0].ID != runID || store.SetCanceledByCalls[0].CanceledBy != "user:alice" {
+		t.Fatalf("SetCanceledByCalls = %+v, want exactly one call for run %d by user:alice", store.SetCanceledByCalls, runID)
+	}
+	// CancelRun itself lost the race (the run is already canceled by the
+	// time it runs) and must not also try to set canceled_by.
+	if len(store.CancelRunCalls) != 1 {
+		t.Fatalf("CancelRunCalls = %+v, want exactly 1", store.CancelRunCalls)
+	}
+}
+
 func TestRunService_Start_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 7}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
@@ -1196,6 +1327,145 @@ func TestRunService_Cancel_ActiveRunTerminatesInTime(t *testing.T) {
 	}
 }
 
+// TestRunService_Cancel_PersistsCanceledByForMultiTaskRun covers REVIEW.md
+// R9 on the Start/executeRun/finishRun path (not just RunTask/
+// ApproveManualTask): when the pipeline itself reports a task as "canceled"
+// (ctx canceled mid-execution), finishRun's own FinishRun call wins the
+// race to the canceled transition before CancelRun runs, so it must persist
+// canceled_by itself using the actor Cancel recorded on the active entry.
+func TestRunService_Cancel_PersistsCanceledByForMultiTaskRun(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 9}
+	runner := &blockingPipelineRunner{
+		startedCh: make(chan struct{}),
+		releaseCh: make(chan struct{}),
+		result:    []domain.TaskResult{{Name: "t", Status: "canceled", Error: "canceled"}},
+	}
+	svc := NewRunService(store, runner, runner)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+
+	if err := svc.Cancel(context.Background(), runID, "user:bob"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if len(store.SetCanceledByCalls) != 1 || store.SetCanceledByCalls[0].ID != runID || store.SetCanceledByCalls[0].CanceledBy != "user:bob" {
+		t.Fatalf("SetCanceledByCalls = %+v, want exactly one call for run %d by user:bob", store.SetCanceledByCalls, runID)
+	}
+}
+
+// TestRunService_Start_CanceledTaskWithNoKnownActorSkipsSetCanceledBy covers
+// persistCanceledByIfLost's defensive branch: a run can only ever reach a
+// "canceled" task result through RunService.Cancel canceling its context, so
+// this models the case where Cancel is never called on this RunService
+// instance - the active entry then has no recorded canceledBy, and
+// persistCanceledByIfLost must skip the store call rather than record an
+// empty actor.
+func TestRunService_Start_CanceledTaskWithNoKnownActorSkipsSetCanceledBy(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 10}
+	runner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "t", Status: "canceled", Error: "canceled"}},
+	}
+	svc := NewRunService(store, runner, runner)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Wait for the run to fall out of active/done - the last thing
+	// executeRun's goroutine does, strictly after finishRun (and any
+	// persistCanceledByIfLost call within it) has returned.
+	waitActiveAbsent(t, svc, runID)
+
+	if len(store.SetCanceledByCalls) != 0 {
+		t.Fatalf("SetCanceledByCalls = %+v, want none - Cancel was never called, so no actor is known", store.SetCanceledByCalls)
+	}
+}
+
+// TestRunService_Cancel_DoneChBranch_SkipsMetricWhenAlreadyTerminal covers
+// the double-count fix: once executeRun's own finishRun has already
+// recorded a metric for a run that actually executed (its store status is
+// already terminal by the time doneCh closes), CancelRun's own
+// status-guarded UPDATE performs no transition - modeled here via
+// CancelRunNoChange - so the doneCh branch must not record a second metric.
+func TestRunService_Cancel_DoneChBranch_SkipsMetricWhenAlreadyTerminal(t *testing.T) {
+	store := &mocks.MockRunStore{
+		CreateRunID:       8,
+		GetRunResult:      &domain.Run{ID: 8, ProjectName: "proj", Status: "passed"},
+		CancelRunNoChange: true,
+	}
+	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	svc := NewRunService(store, runner, runner)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.startedCh
+
+	if err := svc.Cancel(context.Background(), runID, "user:alice"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	// The async completion path (finishRun, via the blockingPipelineRunner
+	// returning nil/nil on ctx-done) records exactly one "passed" entry;
+	// Cancel's own check sees CancelRun reported no transition and correctly
+	// records nothing further.
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "passed" {
+		t.Fatalf("recorded runs = %+v, want exactly the one entry from the async completion, none from Cancel", runs)
+	}
+}
+
+// TestRunService_Cancel_DoneChBranch_RecordsMetricForQueuedRun covers the
+// other half: a run canceled while still queued never reaches executeRun,
+// so nothing else records it - the doneCh branch must record it itself. One
+// shared blockingPipelineRunner occupies the only slot; the second run never
+// calls its Run method at all while queued, so sharing it is race-free.
+func TestRunService_Cancel_DoneChBranch_RecordsMetricForQueuedRun(t *testing.T) {
+	blocker := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	inner := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{ProjectName: "proj", Status: "queued"},
+	}
+	store := &seqIDMockRunStore{MockRunStore: inner}
+	svc := NewRunService(store, blocker, blocker)
+	svc.SetMaxConcurrentRuns(1)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
+
+	_, err := svc.Start(context.Background(), "blocker", &model.Project{Name: "blocker", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start (blocker): %v", err)
+	}
+	<-blocker.startedCh
+	defer close(blocker.releaseCh)
+
+	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("Start (queued): %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	for store.SetRunQueuedCallCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the second run to queue")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	if err := svc.Cancel(context.Background(), runID, "user:alice"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "canceled" || runs[0].project != "proj" {
+		t.Fatalf("recorded runs = %+v, want exactly one canceled/proj entry", runs)
+	}
+}
+
 func TestRunService_Cancel_ActiveRunStoreErrorReturnedUnchanged(t *testing.T) {
 	wantErr := errors.New("store exploded")
 	store := &mocks.MockRunStore{CreateRunID: 9, CancelRunErr: wantErr}
@@ -1241,14 +1511,49 @@ func TestRunService_Cancel_TimesOutWhenRunDoesNotTerminate(t *testing.T) {
 }
 
 func TestRunService_Cancel_NoActiveEntryCancelsInStoreDirectly(t *testing.T) {
-	store := &mocks.MockRunStore{}
+	started := time.Now().Add(-time.Minute)
+	store := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{ID: 123, ProjectName: "proj", Status: "queued", StartedAt: started},
+	}
 	svc := NewRunService(store, nil, nil)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
 
 	if err := svc.Cancel(context.Background(), 123, "user:alice"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if len(store.CancelRunCalls) != 1 || store.CancelRunCalls[0].ID != 123 || store.CancelRunCalls[0].CanceledBy != "user:alice" {
 		t.Fatalf("CancelRunCalls = %v, want [{123 user:alice}]", store.CancelRunCalls)
+	}
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "canceled" || runs[0].project != "proj" {
+		t.Fatalf("recorded runs = %+v, want exactly one canceled/proj entry", runs)
+	}
+	if runs[0].duration < time.Minute {
+		t.Errorf("duration = %v, want at least 1m (measured from GetRun's StartedAt)", runs[0].duration)
+	}
+}
+
+// TestRunService_Cancel_NoActiveEntryGetRunFailsStillCancels covers the
+// GetRun-error sub-branch: Cancel still succeeds (the store call it actually
+// depends on is CancelRun, not this lookup), but records no metric -
+// recordCanceledMetric's post-CancelRun GetRun call (for project/startedAt)
+// fails, so it has nothing to ground a metric in and skips recording rather
+// than guessing; see recordCanceledMetric.
+func TestRunService_Cancel_NoActiveEntryGetRunFailsStillCancels(t *testing.T) {
+	store := &mocks.MockRunStore{GetRunErr: errors.New("lookup failed")}
+	svc := NewRunService(store, nil, nil)
+	rec := &fakeRecorder{}
+	svc.Metrics = rec
+
+	if err := svc.Cancel(context.Background(), 123, "user:alice"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(store.CancelRunCalls) != 1 {
+		t.Fatalf("CancelRunCalls = %v, want exactly 1 (Cancel must still proceed)", store.CancelRunCalls)
+	}
+	if runs := rec.snapshot(); len(runs) != 0 {
+		t.Fatalf("recorded runs = %+v, want none when the pre-check can't confirm cancelability", runs)
 	}
 }
 
@@ -1339,9 +1644,10 @@ func (s *seqRunStore) FinishRun(int, string, string, string, []domain.TaskResult
 
 func (s *seqRunStore) AppendTaskResult(int, domain.TaskResult) error { return nil }
 func (s *seqRunStore) FlushRunOutput(int, string) error              { return nil }
-func (s *seqRunStore) CancelRun(int, string) error                   { return nil }
-func (s *seqRunStore) ApplyTaskResult(int, domain.TaskResult, string) error {
-	return nil
+func (s *seqRunStore) CancelRun(int, string) (bool, error)           { return true, nil }
+func (s *seqRunStore) SetCanceledBy(int, string) error               { return nil }
+func (s *seqRunStore) ApplyTaskResult(int, domain.TaskResult, string) (string, error) {
+	return "", nil
 }
 func (s *seqRunStore) GetRun(int) (*domain.Run, error)                 { return nil, nil }
 func (s *seqRunStore) CountRuns(string) (int, error)                   { return 0, nil }

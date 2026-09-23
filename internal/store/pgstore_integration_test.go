@@ -652,7 +652,7 @@ func TestPG_ApplyTaskResult_Passed(t *testing.T) {
 	mustUpsert(t, pg, "ap", "/ap")
 	id := mustCreateRun(t, pg, "ap", nil)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, "building...\n"); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, "building...\n"); err != nil {
 		t.Fatalf("ApplyTaskResult(running): %v", err)
 	}
 
@@ -664,7 +664,7 @@ func TestPG_ApplyTaskResult_Passed(t *testing.T) {
 		t.Errorf("Status after running = %q, want running", run1.Status)
 	}
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "passed", Output: "ok"}, "done\n"); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "passed", Output: "ok"}, "done\n"); err != nil {
 		t.Fatalf("ApplyTaskResult(passed): %v", err)
 	}
 
@@ -689,12 +689,12 @@ func TestPG_ApplyTaskResult_ApprovalSurvivesTerminalEntry(t *testing.T) {
 	id := mustCreateRun(t, pg, "apr", nil)
 	approvedAt := time.Now().Truncate(time.Millisecond)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{
 		Name: "deploy", Status: "running", ApprovedBy: "user:alice", ApprovedAt: &approvedAt,
 	}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(running): %v", err)
 	}
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{
 		Name: "deploy", Status: "passed", Output: "ok", ApprovedBy: "user:alice", ApprovedAt: &approvedAt,
 	}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(passed): %v", err)
@@ -726,10 +726,10 @@ func TestPG_ApplyTaskResult_Failed(t *testing.T) {
 	mustUpsert(t, pg, "af", "/af")
 	id := mustCreateRun(t, pg, "af", nil)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(running): %v", err)
 	}
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(failed): %v", err)
 	}
 
@@ -750,10 +750,10 @@ func TestPG_ApplyTaskResult_Canceled(t *testing.T) {
 	mustUpsert(t, pg, "ac", "/ac")
 	id := mustCreateRun(t, pg, "ac", nil)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "running"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(running): %v", err)
 	}
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "canceled", Error: "canceled"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "canceled", Error: "canceled"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(canceled): %v", err)
 	}
 
@@ -774,10 +774,10 @@ func TestPG_ApplyTaskResult_CanceledOutranksFailed(t *testing.T) {
 	mustUpsert(t, pg, "acf", "/acf")
 	id := mustCreateRun(t, pg, "acf", nil)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(failed): %v", err)
 	}
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "test", Status: "canceled", Error: "canceled"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "test", Status: "canceled", Error: "canceled"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(canceled): %v", err)
 	}
 
@@ -795,10 +795,10 @@ func TestPG_ApplyTaskResult_FailureRemainsNonTerminalWhileManualWorkExists(t *te
 	mustUpsert(t, pg, "afm", "/afm")
 	id := mustCreateRun(t, pg, "afm", nil)
 
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "deploy", Status: "manual"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "deploy", Status: "manual"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(manual): %v", err)
 	}
-	if err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
+	if _, err := pg.ApplyTaskResult(id, domain.TaskResult{Name: "build", Status: "failed", Error: "exit 1"}, ""); err != nil {
 		t.Fatalf("ApplyTaskResult(failed): %v", err)
 	}
 
@@ -816,7 +816,7 @@ func TestPG_ApplyTaskResult_FailureRemainsNonTerminalWhileManualWorkExists(t *te
 
 func TestPG_ApplyTaskResult_RunNotFound(t *testing.T) {
 	pg := testPG(t)
-	err := pg.ApplyTaskResult(999999, domain.TaskResult{Name: "x", Status: "passed"}, "")
+	_, err := pg.ApplyTaskResult(999999, domain.TaskResult{Name: "x", Status: "passed"}, "")
 	if err == nil {
 		t.Fatal("expected error for non-existent run")
 	}
@@ -934,7 +934,7 @@ func TestPG_CancelRun_Running(t *testing.T) {
 		t.Fatalf("AppendTaskResult: %v", err)
 	}
 
-	if err := pg.CancelRun(id, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 	run, err := pg.GetRun(id)
@@ -956,7 +956,7 @@ func TestPG_FinishRun_DoesNotOverwriteCanceled(t *testing.T) {
 	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "test", Status: "running"}); err != nil {
 		t.Fatalf("AppendTaskResult: %v", err)
 	}
-	if err := pg.CancelRun(id, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 
@@ -995,7 +995,7 @@ func TestPG_CancelRun_AlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
-	if err := pg.CancelRun(id, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun on finished: %v", err)
 	}
 	run, err := pg.GetRun(id)
@@ -1028,7 +1028,7 @@ func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 		t.Fatalf("AppendTaskResult: %v", err)
 	}
 
-	if err := pg.CancelRun(id, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 
@@ -1417,7 +1417,7 @@ func TestPG_CancelRun_Queued(t *testing.T) {
 		t.Fatalf("SetRunQueued: %v", err)
 	}
 
-	if err := pg.CancelRun(id, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 	run, err := pg.GetRun(id)
@@ -1447,7 +1447,7 @@ func TestPG_CancelRun_PrunesHistory(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	newer := mustCreateRun(t, pg, "cancel-prune", nil)
 
-	if err := pg.CancelRun(newer, "user:bob"); err != nil {
+	if _, err := pg.CancelRun(newer, "user:bob"); err != nil {
 		t.Fatalf("CancelRun: %v", err)
 	}
 

@@ -189,6 +189,20 @@ func precedenceSettings() []precedenceSetting {
 			wantFile: "2048", wantEnv: "4096", wantFlag: "2048",
 			get: func(c web.Config) string { return fmt.Sprintf("%d", c.Runner.MaxOutputBytes) },
 		},
+		{
+			name: config.KeyMetricsEnabled, fileYAML: "metrics:\n  enabled: true\n",
+			envKV:    "KESTRIX_METRICS_ENABLED=false",
+			flag:     nil,
+			wantFile: "true", wantEnv: "false", wantFlag: "true",
+			get: func(c web.Config) string { return fmt.Sprintf("%v", c.Metrics.Enabled) },
+		},
+		{
+			name: config.KeyMetricsToken, fileYAML: "metrics:\n  token: file-scrape-token\n",
+			envKV:    "KESTRIX_METRICS_TOKEN=env-scrape-token",
+			flag:     nil,
+			wantFile: "file-scrape-token", wantEnv: "env-scrape-token", wantFlag: "file-scrape-token",
+			get: func(c web.Config) string { return c.Metrics.Token },
+		},
 	}
 }
 
@@ -339,6 +353,13 @@ func TestPrecedenceCompleteness(t *testing.T) {
 	}
 	// webhook.method is env-or-flag with no yaml form; its equivalence is
 	// pinned by TestResolveWebhookMethodEnvFallback, not the table.
+	//
+	// LogLevel has a yaml form (logging.level, allowlisted below) but never
+	// reaches web.Config: cmdServe passes cfg.Logging.Level straight to
+	// installLogging, not through buildServeConfig. Its file > env >
+	// default precedence is proven at the config package level instead -
+	// see internal/config's TestObservabilitySettingsFileWinsOverEnvironment
+	// and TestObservabilitySettingsEnvironmentFillsAbsentKey.
 	envAllow := map[string]bool{
 		"WebhookMethod": true, "TestDatabaseURL": true,
 		"MasterKeyPath": true, "JWTSigningKeyPath": true,
@@ -347,6 +368,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"RunnerEnvPassthrough": true,
 		"HTTPReadTimeout":      true, "HTTPWriteTimeout": true, "HTTPIdleTimeout": true,
 		"HTTPMaxBodyBytes": true, "WebhookMaxBodyBytes": true,
+		"LogLevel": true,
 	}
 	envFieldToSetting := map[string]string{
 		"ListenAddr": config.KeyListenAddr, "PipelineDir": config.KeyPipelineDir,
@@ -359,6 +381,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"Directory": config.KeySourceCacheDirectory, "MaxAge": config.KeySourceCacheMaxAge, "MaxBytes": config.KeySourceCacheMaxBytes,
 		"RunnerMaxConcurrentRuns": config.KeyRunnerMaxConcurrentRuns, "RunHistoryLimit": config.KeyRunHistoryLimit,
 		"RunnerMaxOutputBytes": config.KeyRunnerMaxOutputBytes,
+		"MetricsEnabled":       config.KeyMetricsEnabled, "MetricsToken": config.KeyMetricsToken,
 	}
 
 	var missing []string
@@ -396,6 +419,8 @@ func TestPrecedenceCompleteness(t *testing.T) {
 	// Config yaml keys, recursively.
 	fileAllow := map[string]bool{
 		"runner.mode": true, "dispatch.enabled": true,
+		// logging.level: see the envAllow comment on LogLevel above.
+		"logging.level": true,
 	}
 	var walkConfig func(rt reflect.Type, prefix string, out *[]string)
 	walkConfig = func(rt reflect.Type, prefix string, out *[]string) {

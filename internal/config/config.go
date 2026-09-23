@@ -37,6 +37,8 @@ type Config struct {
 	Dispatch    DispatchConfig    `yaml:"dispatch"`
 	Runner      RunnerConfig      `yaml:"runner"`
 	SourceCache SourceCacheConfig `yaml:"source_cache"`
+	Metrics     MetricsConfig     `yaml:"metrics"`
+	Logging     LoggingConfig     `yaml:"logging"`
 
 	// presence records which multi-form settings (multiFormSettingKeys) the
 	// config file explicitly set, even to an empty/zero value. Only Load
@@ -86,6 +88,9 @@ const (
 	KeyRunnerMaxConcurrentRuns = "runner.max_concurrent_runs"
 	KeyRunHistoryLimit         = "runner.run_history_limit"
 	KeyRunnerMaxOutputBytes    = "runner.max_output_bytes"
+	KeyMetricsEnabled          = "metrics.enabled"
+	KeyMetricsToken            = "metrics.token"
+	KeyLoggingLevel            = "logging.level"
 )
 
 // multiFormSettingKeys lists every setting with more than one configuration
@@ -99,6 +104,7 @@ var multiFormSettingKeys = []string{
 	KeyRunnerDockerPIDs, KeyRunnerDockerMemory, KeyRunnerDockerCPUs,
 	KeyRunnerDockerUser, KeyRunnerDockerNetwork, KeyRunnerCancelGrace,
 	KeyRunnerMaxConcurrentRuns, KeyRunHistoryLimit, KeyRunnerMaxOutputBytes,
+	KeyMetricsEnabled, KeyMetricsToken, KeyLoggingLevel,
 }
 
 // SourceReport names which source won for each multi-form setting without
@@ -227,6 +233,25 @@ type PipelineConfig struct {
 	Dir string `yaml:"dir"`
 }
 
+// MetricsConfig controls the GET /metrics endpoint; see observability
+// spec.md. Enabled defaults to false - the endpoint does not exist at all
+// until an operator opts in. Token is a secret: never echoed by
+// SourceReport, a log line, or any API response.
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Token   string `yaml:"token"`
+}
+
+// LoggingConfig controls the structured process log; see observability
+// spec.md. Level must be one of debug, info, warn, error.
+type LoggingConfig struct {
+	Level string `yaml:"level"`
+}
+
+// DefaultLogLevel is the logging.level applied when neither the config file
+// nor KESTRIX_LOG_LEVEL set one.
+const DefaultLogLevel = "info"
+
 // WebhookConfig controls webhook authentication and history retention.
 type WebhookConfig struct {
 	Secret string `yaml:"secret"`
@@ -295,6 +320,9 @@ func DefaultConfig() *Config {
 			Directory: filepath.Join(filepath.Dir(DefaultPath()), "cache", "git"),
 			MaxAge:    Duration(30 * 24 * time.Hour),
 			MaxBytes:  10 << 30,
+		},
+		Logging: LoggingConfig{
+			Level: DefaultLogLevel,
 		},
 		sources: make(map[string]string, len(multiFormSettingKeys)),
 	}
@@ -407,6 +435,13 @@ func Load(path string) (*Config, error) {
 			RunHistoryLimit   *int      `yaml:"run_history_limit"`
 			MaxOutputBytes    *int      `yaml:"max_output_bytes"`
 		} `yaml:"runner"`
+		Metrics *struct {
+			Enabled *bool   `yaml:"enabled"`
+			Token   *string `yaml:"token"`
+		} `yaml:"metrics"`
+		Logging *struct {
+			Level *string `yaml:"level"`
+		} `yaml:"logging"`
 	}
 	// Presence tracks only multi-form keys; other known keys (enabled,
 	// mode, default_branch siblings) are ignored here, so this decode
@@ -452,6 +487,13 @@ func Load(path string) (*Config, error) {
 		markFile(KeyRunnerMaxConcurrentRuns, explicit.Runner.MaxConcurrentRuns != nil)
 		markFile(KeyRunHistoryLimit, explicit.Runner.RunHistoryLimit != nil)
 		markFile(KeyRunnerMaxOutputBytes, explicit.Runner.MaxOutputBytes != nil)
+	}
+	if explicit.Metrics != nil {
+		markFile(KeyMetricsEnabled, explicit.Metrics.Enabled != nil)
+		markFile(KeyMetricsToken, explicit.Metrics.Token != nil)
+	}
+	if explicit.Logging != nil {
+		markFile(KeyLoggingLevel, explicit.Logging.Level != nil)
 	}
 	cfg.normalizeWebhookHistoryLimit()
 
@@ -576,8 +618,47 @@ func (c *Config) ApplyEnvironment(env *Environment) error {
 		c.Runner.MaxOutputBytes = env.RunnerMaxOutputBytes
 		c.setSource(KeyRunnerMaxOutputBytes, "env")
 	}
+	// KESTRIX_METRICS_ENABLED has no non-empty-string sentinel the way most
+	// other env branches do: env.MetricsEnabled is already the parsed bool
+	// (false when unset or explicitly false), so this branch, like
+	// KeyRunnerCancelGrace above, always applies when the file did not set
+	// the key - either an explicit env override or the false zero value -
+	// and marks the source "env" even when the variable was never set.
+	if !c.isSet(KeyMetricsEnabled) {
+		c.Metrics.Enabled = env.MetricsEnabled
+		c.setSource(KeyMetricsEnabled, "env")
+	}
+	if !c.isSet(KeyMetricsToken) && env.MetricsToken != "" {
+		c.Metrics.Token = env.MetricsToken
+		c.setSource(KeyMetricsToken, "env")
+	}
+	// env.LogLevel is never empty (LoadEnvironment defaults it to
+	// DefaultLogLevel), so - like KeyRunnerCancelGrace and KeyMetricsEnabled
+	// above - this always applies when the file did not set the key.
+	if !c.isSet(KeyLoggingLevel) {
+		c.Logging.Level = env.LogLevel
+		c.setSource(KeyLoggingLevel, "env")
+	}
 	c.normalizeWebhookHistoryLimit()
-	return c.validateRunnerBounds()
+	if err := c.validateRunnerBounds(); err != nil {
+		return err
+	}
+	return c.validateObservabilitySettings()
+}
+
+// validateObservabilitySettings fails startup naming logging.level when it
+// is not one of the four accepted values - see observability spec.md
+// "Unknown level fails startup". metrics.enabled cannot itself be invalid
+// here: LoadEnvironment already rejects a malformed KESTRIX_METRICS_ENABLED
+// before ApplyEnvironment runs, and a YAML metrics.enabled that is not a
+// bool fails the strict decode in Load.
+func (c *Config) validateObservabilitySettings() error {
+	switch c.Logging.Level {
+	case "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("logging.level must be one of debug, info, warn, error")
+	}
 }
 
 // validateRunnerBounds fails startup naming the first invalid

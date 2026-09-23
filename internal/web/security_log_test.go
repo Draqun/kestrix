@@ -35,7 +35,7 @@ func TestLogAuthFailure_RecordsRejectedAuthentication(t *testing.T) {
 	srv.RequireAuth(okHandler()).ServeHTTP(w, req)
 
 	out := buf.String()
-	if !strings.Contains(out, "auth:") || !strings.Contains(out, "rejected") {
+	if !strings.Contains(out, "auth rejected") {
 		t.Fatalf("log output = %q, want a recorded authentication rejection", out)
 	}
 	if strings.Contains(out, "not-a-real-token") {
@@ -72,7 +72,7 @@ func TestLogDenial_RecordsForbidden(t *testing.T) {
 	srv.RequireRole(domain.RoleAdmin)(okHandler()).ServeHTTP(w, req)
 
 	out := buf.String()
-	if !strings.Contains(out, "authz:") || !strings.Contains(out, "denied") {
+	if !strings.Contains(out, "authz denied") {
 		t.Fatalf("log output = %q, want a recorded denial", out)
 	}
 	if !strings.Contains(out, "viewer-user") {

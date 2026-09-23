@@ -224,8 +224,12 @@ func TestMockRunStore_FlushRunOutput(t *testing.T) {
 
 func TestMockRunStore_CancelRun(t *testing.T) {
 	m := &MockRunStore{}
-	if err := m.CancelRun(1, "user:alice"); err != nil {
+	changed, err := m.CancelRun(1, "user:alice")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("changed = false, want true by default")
 	}
 	if len(m.CancelRunCalls) != 1 || m.CancelRunCalls[0].ID != 1 || m.CancelRunCalls[0].CanceledBy != "user:alice" {
 		t.Errorf("CancelRunCalls = %+v", m.CancelRunCalls)
@@ -235,8 +239,12 @@ func TestMockRunStore_CancelRun(t *testing.T) {
 func TestMockRunStore_ApplyTaskResult(t *testing.T) {
 	m := &MockRunStore{}
 	tr := domain.TaskResult{Name: "deploy", Status: "running"}
-	if err := m.ApplyTaskResult(1, tr, "extra"); err != nil {
+	status, err := m.ApplyTaskResult(1, tr, "extra")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if status != "running" {
+		t.Errorf("status = %q, want running", status)
 	}
 	if len(m.ApplyTaskCalls) != 1 || m.ApplyTaskCalls[0].TaskResult.Name != "deploy" {
 		t.Errorf("ApplyTaskCalls = %+v", m.ApplyTaskCalls)
@@ -314,7 +322,7 @@ func TestMockRunStore_AsyncCallbacksAndHelpers(t *testing.T) {
 	tr := domain.TaskResult{Name: "deploy", Status: "running"}
 	go func() {
 		defer close(applyDone)
-		_ = m.ApplyTaskResult(8, tr, "extra")
+		_, _ = m.ApplyTaskResult(8, tr, "extra")
 	}()
 
 	m.WaitFinish()

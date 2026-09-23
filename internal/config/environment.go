@@ -95,6 +95,15 @@ type Environment struct {
 	// 8388608 (8 MiB).
 	HTTPMaxBodyBytes    int64
 	WebhookMaxBodyBytes int64
+	// MetricsEnabled, MetricsToken, and LogLevel back the observability
+	// settings; see observability design.md. MetricsEnabled defaults to
+	// false, MetricsToken has no default (empty means unconfigured), and
+	// LogLevel is left empty here - config.go's DefaultConfig supplies the
+	// "info" default and validates the four accepted values once file, env,
+	// and default are reconciled.
+	MetricsEnabled bool
+	MetricsToken   string
+	LogLevel       string
 
 	values        map[string]string
 	originalEnvs  []string
@@ -387,6 +396,27 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	var metricsEnabled bool
+	if raw := values[Prefix+"METRICS_ENABLED"]; raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_METRICS_ENABLED must be a boolean")
+			}
+		} else {
+			metricsEnabled = parsed
+		}
+	}
+
+	// logLevel defaults to "info" here, like the other string settings with
+	// a baked-in default (runnerDockerMemory, runnerDockerCPUs, ...), so a
+	// Config never touched by DefaultConfig still resolves to a valid level
+	// through ApplyEnvironment alone.
+	logLevel := DefaultLogLevel
+	if raw := values[Prefix+"LOG_LEVEL"]; raw != "" {
+		logLevel = raw
+	}
+
 	return &Environment{
 		ListenAddr:            values[Prefix+"ADDR"],
 		PipelineDir:           values[Prefix+"DIR"],
@@ -426,6 +456,9 @@ func LoadEnvironment(environ []string) *Environment {
 		HTTPIdleTimeout:         httpIdleTimeout,
 		HTTPMaxBodyBytes:        httpMaxBodyBytes,
 		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
+		MetricsEnabled:          metricsEnabled,
+		MetricsToken:            values[Prefix+"METRICS_TOKEN"],
+		LogLevel:                logLevel,
 		values:                  values,
 		originalEnvs:            normalized,
 		validationErr:           validationErr,

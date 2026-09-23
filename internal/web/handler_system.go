@@ -3,12 +3,13 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/redact"
 	"kestrix/internal/version"
 	"kestrix/internal/web/pagination"
 )
@@ -68,7 +69,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.webhookLogStore != nil {
 		n, err := s.webhookLogStore.CountWebhookEvents(domain.WebhookEventFilter{})
 		if err != nil {
-			log.Printf("health: count webhook events: %v", err)
+			slog.Warn("health: count webhook events failed", "err", redact.Err(err, s.knownSecrets()))
 			resp["status"] = "degraded"
 		} else {
 			resp["webhooks"] = n
@@ -79,7 +80,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.projectStore != nil {
 		projects, err := s.projectStore.List()
 		if err != nil {
-			log.Printf("health: list projects: %v", err)
+			slog.Warn("health: list projects failed", "err", redact.Err(err, s.knownSecrets()))
 			resp["status"] = "degraded"
 		} else {
 			resp["pipelines"] = len(projects)
