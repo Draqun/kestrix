@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/netip"
 	"net/url"
 	"sort"
@@ -16,7 +16,9 @@ import (
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
+	"kestrix/internal/metrics"
 	"kestrix/internal/model"
+	"kestrix/internal/redact"
 	"kestrix/internal/source"
 	"kestrix/internal/variables"
 )
@@ -452,6 +454,11 @@ func (s *ProjectService) FindByGitLabID(id int) (*domain.ProjectConfig, error) {
 type activeRun struct {
 	cancel  context.CancelFunc
 	project string
+	// canceledBy is the actor Cancel is canceling this run on behalf of,
+	// set just before cancel() runs. Read back by persistCanceledByIfLost
+	// when the run's own executeRun/runTaskInternal call - not CancelRun -
+	// wins the race to record the canceled transition; see REVIEW.md R9.
+	canceledBy string
 }
 
 // RunService handles run lifecycle with background execution.
@@ -468,6 +475,12 @@ type RunService struct {
 	// MaxOutputBytes bounds stored run output; see run-concurrency-and-retention
 	// design.md D4. Zero (the default) means unbounded.
 	MaxOutputBytes int
+
+	// Metrics records run terminal-status counts and durations; see
+	// observability design.md D2. Nil is treated the same as a metrics.NoOp:
+	// every call site nil-checks before recording, so a RunService built
+	// without one (most tests) behaves exactly as before this field existed.
+	Metrics metrics.Recorder
 
 	// slots is a counting semaphore bounding concurrent runs; see
 	// run-concurrency-and-retention design.md D1. Nil (the default, set by
@@ -518,7 +531,8 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	if err != nil {
 		return 0, err
 	}
-	log.Printf("run: started actor=%q project=%q run=%d", opts.Actor, projectName, runID)
+	startedAt := time.Now()
+	slog.Info("run started", "run_id", runID, "project", projectName, "account", opts.Actor)
 	output := &bytes.Buffer{}
 	redactor := s.prepareRunExecution(runID, output, &opts)
 
@@ -551,9 +565,54 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 			return
 		}
 		defer s.releaseSlot()
-		s.executeRun(runCtx, runID, proj, changed, opts, output, redactor)
+		s.executeRun(runCtx, runID, proj, changed, opts, output, redactor, startedAt)
 	}()
 	return runID, nil
+}
+
+// recordRunFinished records one run's terminal status and duration on
+// s.Metrics, a no-op when Metrics is nil (a RunService built without one,
+// as most tests do) - see observability design.md D2.
+func (s *RunService) recordRunFinished(status, project string, startedAt time.Time) {
+	if s.Metrics == nil {
+		return
+	}
+	s.Metrics.RunFinished(status, project, time.Since(startedAt))
+}
+
+// recordCanceledMetric records the canceled-run metric only when changed is
+// true - i.e. this call's CancelRun was the one that actually performed the
+// running/queued → canceled transition, per its own atomic status-guarded
+// UPDATE. Project and start time are read fresh via GetRun rather than
+// pre-checked before CancelRun, since neither changes across cancellation;
+// this avoids the check-then-act race a pre-check would reintroduce - see
+// REVIEW.md R2.
+func (s *RunService) recordCanceledMetric(changed bool, runID int) {
+	if !changed || s.Metrics == nil || s.runStore == nil {
+		return
+	}
+	run, err := s.runStore.GetRun(runID)
+	if err != nil || run == nil {
+		return
+	}
+	s.recordRunFinished("canceled", run.ProjectName, run.StartedAt)
+}
+
+// persistCanceledByIfLost records canceled_by for a run that just
+// transitioned to "canceled" via finishRun/runTaskInternal's own store call
+// rather than through CancelRun - CancelRun's status-guarded UPDATE (R2) has
+// already lost the race and no-ops in that case, so nothing else would ever
+// persist who canceled it. A no-op unless Cancel recorded a canceling actor
+// on this run's active entry before canceling its context; see REVIEW.md R9.
+// Callers only reach this with s.runStore already known non-nil.
+func (s *RunService) persistCanceledByIfLost(runID int) {
+	s.mu.Lock()
+	canceledBy := s.active[runID].canceledBy
+	s.mu.Unlock()
+	if canceledBy == "" {
+		return
+	}
+	_ = s.runStore.SetCanceledBy(runID, canceledBy)
 }
 
 // Cancel stops an active run's executing task before its status is recorded
@@ -569,16 +628,22 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 	s.mu.Lock()
 	entry, hasEntry := s.active[runID]
 	doneCh, hasDone := s.done[runID]
+	if hasEntry {
+		entry.canceledBy = actor
+		s.active[runID] = entry
+	}
 	s.mu.Unlock()
 
 	if !hasEntry || !hasDone {
 		if s.runStore == nil {
 			return fmt.Errorf("runs not supported")
 		}
-		if err := s.runStore.CancelRun(runID, actor); err != nil {
+		changed, err := s.runStore.CancelRun(runID, actor)
+		if err != nil {
 			return err
 		}
-		log.Printf("run: canceled actor=%q run=%d", actor, runID)
+		slog.Info("run canceled", "run_id", runID, "account", actor)
+		s.recordCanceledMetric(changed, runID)
 		return nil
 	}
 
@@ -595,11 +660,24 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 	case <-doneCh:
 		// An active entry only exists once Start has registered it, which
 		// requires runStore to create the run in the first place - so
-		// runStore is guaranteed non-nil here.
-		if err := s.runStore.CancelRun(runID, actor); err != nil {
+		// runStore is guaranteed non-nil here. doneCh only closes after
+		// executeRun/runTaskInternal (and, on the path that actually ran
+		// something, its own metric recording) has fully returned - see
+		// Start's defer order - so by this point a run that executed has
+		// already had its terminal status, including any metric, recorded
+		// once. CancelRun's own status-guarded UPDATE is what keeps this
+		// from recording a second one: for a run that reached execution,
+		// its status here is already terminal (not "running"/"queued"), so
+		// CancelRun performs no transition and changed is false; for a run
+		// canceled while still queued - which never reached execution, so
+		// nothing else ever recorded it - CancelRun does transition it, so
+		// this does record. See REVIEW.md R1/R2.
+		changed, err := s.runStore.CancelRun(runID, actor)
+		if err != nil {
 			return err
 		}
-		log.Printf("run: canceled actor=%q run=%d", actor, runID)
+		slog.Info("run canceled", "run_id", runID, "account", actor)
+		s.recordCanceledMetric(changed, runID)
 		return nil
 	case <-timer.C:
 		return fmt.Errorf("run %d did not terminate within %s: %w", runID, timeout, ErrRunCancelTimedOut)
@@ -670,11 +748,12 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 	return redactor
 }
 
-func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter) {
+func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter, startedAt time.Time) {
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
 			_ = redactor.Flush()
 			_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
+			s.recordRunFinished("failed", proj.Name, startedAt)
 			if opts.SourceSessions != nil {
 				_ = opts.SourceSessions.Release(context.Background(), runID)
 			}
@@ -695,7 +774,7 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 	// run, so this slice must be redacted independently rather than relying
 	// on that earlier pass.
 	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues, s.MaxOutputBytes)
-	s.finishRun(runID, output.String(), taskResults, err, opts.SourceSessions)
+	s.finishRun(runID, proj.Name, output.String(), taskResults, err, opts.SourceSessions, startedAt)
 }
 
 // redactTaskResults returns a copy of results with each Output field
@@ -713,10 +792,19 @@ func redactTaskResults(results []domain.TaskResult, values []string, maxOutputBy
 	return out
 }
 
-func (s *RunService) finishRun(runID int, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager) {
+func (s *RunService) finishRun(runID int, projectName string, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager, startedAt time.Time) {
 	status, errMsg := runStatus(taskResults, runErr)
 	if s.runStore != nil {
 		_ = s.runStore.FinishRun(runID, status, output, errMsg, taskResults)
+		if status == "canceled" {
+			s.persistCanceledByIfLost(runID)
+		}
+	}
+	// runStatus can return "running" (a manual task is still pending) - not
+	// a terminal status, so it does not count toward kestrix_runs_total; see
+	// observability spec.md "Run outcome counted once".
+	if status != "running" {
+		s.recordRunFinished(status, projectName, startedAt)
 	}
 	if sourceSessions != nil && !hasExecutableRunState(taskResults) {
 		_ = sourceSessions.Release(context.Background(), runID)
@@ -823,7 +911,7 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 }
 
 func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
-	_ = projectName
+	startedAt := time.Now()
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
 	}
@@ -835,7 +923,7 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 		approvedAt = &t
 	}
 	if s.runStore != nil {
-		_ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running", ApprovedBy: approvedBy, ApprovedAt: approvedAt}, "")
+		_, _ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running", ApprovedBy: approvedBy, ApprovedAt: approvedAt}, "")
 	}
 	if !opts.SourcesPrepared {
 		previousSourcesAcquired := opts.OnSourcesAcquired
@@ -873,8 +961,21 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 	// ApproveManualTask - see design.md D5. Bound after redaction, same
 	// ordering the streaming path uses - see REVIEW.md R1.
 	tr.Output = truncateOutput(redactValues(tr.Output, opts.ResolvedSecretValues), s.MaxOutputBytes)
+	var runStatus string
 	if s.runStore != nil {
-		_ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
+		runStatus, _ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
+		if runStatus == "canceled" {
+			s.persistCanceledByIfLost(runID)
+		}
+	}
+	// ApplyTaskResult's returned status tells us, synchronously and without
+	// a separate racy GetRun-based guess, whether this call is the one that
+	// finalized the run (including a task canceled mid-flight - see
+	// REVIEW.md R1). RunTask/ApproveManualTask never call FinishRun
+	// themselves, so this is the only place that records the metric for
+	// this run's completion.
+	if runStatus == "passed" || runStatus == "failed" || runStatus == "canceled" {
+		s.recordRunFinished(runStatus, projectName, startedAt)
 	}
 	if opts.SourceSessions != nil && s.runStore != nil {
 		if run, getErr := s.runStore.GetRun(runID); getErr == nil && run != nil && !hasExecutableRunState(run.TaskResults) {
@@ -963,7 +1064,7 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 		}
 	}
 
-	log.Printf("run: approved actor=%q project=%q run=%d task=%q", opts.Actor, projectName, runID, taskName)
+	slog.Info("manual task approved", "run_id", runID, "project", projectName, "account", opts.Actor, "task", taskName)
 	if proj == nil {
 		return domain.TaskResult{}, fmt.Errorf("project not loaded")
 	}
@@ -997,7 +1098,7 @@ func (s *WebhookService) Record(event domain.WebhookEvent) {
 		return
 	}
 	if err := s.logSink.Record(event); err != nil {
-		log.Printf("webhook history: record event repo=%s status=%s: %v", event.Repo, event.Status, err)
+		slog.Warn("webhook history: record event failed", "repo", event.Repo, "status", event.Status, "err", redact.Err(err, nil))
 	}
 }
 
@@ -1060,7 +1161,7 @@ func BuildVarStore(ctx context.Context, proj *model.Project, resolver domain.Cre
 // returned to the caller.
 func resolveSecretValue(ctx context.Context, resolver domain.CredentialResolver, ref string) (string, error) {
 	if resolver == nil {
-		log.Printf("secret resolution: no credential resolver configured, ref=%q", ref)
+		slog.Warn("secret resolution: no credential resolver configured", "ref", ref)
 		return "", ErrSecretUnresolved
 	}
 	cred, err := resolver.Resolve(ctx, ref)
@@ -1071,7 +1172,7 @@ func resolveSecretValue(ctx context.Context, resolver domain.CredentialResolver,
 		case errors.Is(err, domain.ErrCredentialRevoked):
 			return "", ErrSecretRevoked
 		default:
-			log.Printf("secret resolution: ref=%q: %v", ref, err)
+			slog.Warn("secret resolution failed", "ref", ref, "err", redact.Err(err, nil))
 			return "", ErrSecretUnresolved
 		}
 	}

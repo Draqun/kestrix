@@ -247,6 +247,9 @@ Optional:
 | `KESTRIX_RUNNER_MAX_CONCURRENT_RUNS` | — | Runs executed at once; runs beyond this are `queued` (default `2`, must be a positive integer) |
 | `KESTRIX_RUN_HISTORY_LIMIT` | — | Retained terminal runs (default `1000`, must be a positive integer) |
 | `KESTRIX_RUNNER_MAX_OUTPUT_BYTES` | — | Stored run output bound in bytes; output beyond it is truncated with a marker line (default `10485760`, must be a positive integer) |
+| `KESTRIX_METRICS_ENABLED` | — | Enables `GET /metrics` in Prometheus text exposition format (default `false` — the route does not exist until enabled) |
+| `KESTRIX_METRICS_TOKEN` | — | Bearer token a scraper presents to `/metrics`; with none set, only a signed-in viewer-or-above account can read it |
+| `KESTRIX_LOG_LEVEL` | — | Minimum level written to the structured JSON process log: `debug`, `info`, `warn`, or `error` (default `info`) |
 | `KESTRIX_GITLAB_TOKEN` | `--gitlab-token` | GitLab API token |
 | `KESTRIX_DISPATCH_PROJECT` | `--dispatch` | GitLab project ID (must be a positive integer; startup fails otherwise) |
 | `KESTRIX_SOURCE_CACHE_DIR` | `--source-cache-dir` | Private bare-mirror cache directory |

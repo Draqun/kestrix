@@ -175,8 +175,22 @@ type RunStore interface {
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
-	CancelRun(id int, canceledBy string) error
-	ApplyTaskResult(id int, tr TaskResult, outputExtra string) error
+	// CancelRun marks a running/queued run canceled. changed reports whether
+	// this call performed the transition (false when the run was already
+	// terminal) - see REVIEW.md R2, the caller uses it to record the
+	// canceled metric exactly once under concurrent Cancel calls.
+	CancelRun(id int, canceledBy string) (changed bool, err error)
+	// ApplyTaskResult appends a task result and recomputes overall run
+	// status, returned as status - the caller uses it to detect and record
+	// a terminal outcome (passed/failed/canceled) exactly once, without a
+	// separate racy GetRun check - see REVIEW.md R1.
+	ApplyTaskResult(id int, tr TaskResult, outputExtra string) (status string, err error)
+	// SetCanceledBy records which actor canceled a run, for the path where a
+	// running task's own ApplyTaskResult call - not CancelRun - performs the
+	// running/queued → canceled transition (RunTask/ApproveManualTask losing
+	// the cancel race; see REVIEW.md R1/R9). A no-op if canceled_by is
+	// already set, so it never overwrites CancelRun's own write.
+	SetCanceledBy(id int, canceledBy string) error
 	// SetRunQueued marks a non-terminal run "queued" while it waits for a
 	// concurrency slot; see run-concurrency-and-retention design.md D1/D2. A
 	// run already terminal (passed/failed/canceled) is left untouched.

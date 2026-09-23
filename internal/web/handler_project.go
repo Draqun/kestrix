@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +19,7 @@ import (
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/parser"
+	"kestrix/internal/redact"
 	"kestrix/internal/service"
 	"kestrix/internal/web/pagination"
 
@@ -368,7 +369,7 @@ func (s *Server) refreshSources(p *domain.ProjectConfig, proj model.Project) {
 		return
 	}
 	if err := s.projectStore.ReplaceSources(p.Name, derived); err != nil {
-		log.Printf("project %s: record sources: %v", p.Name, err)
+		slog.Warn("record sources failed", "project", p.Name, "err", redact.Err(err, s.knownSecrets()))
 		return
 	}
 	p.Sources = derived

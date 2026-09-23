@@ -176,19 +176,23 @@ func (m *MockProjectStore) List() ([]string, error) {
 
 // MockRunStore records calls for RunService tests.
 type MockRunStore struct {
-	mu                    sync.Mutex
-	CreateRunCalls        []createRunCall
-	CreateRunID           int
-	CreateRunErr          error
-	FinishRunCalls        []finishRunCall
-	FinishRunErr          error
-	FinishRunCh           chan struct{} // closed once after the first FinishRun call
-	finishOnce            sync.Once     // protects FinishRunCh from double-close
-	AppendTaskCalls       []domain.TaskResult
-	AppendTaskErr         error
-	FlushRunCalls         []string
-	CancelRunCalls        []cancelRunCall
-	CancelRunErr          error
+	mu              sync.Mutex
+	CreateRunCalls  []createRunCall
+	CreateRunID     int
+	CreateRunErr    error
+	FinishRunCalls  []finishRunCall
+	FinishRunErr    error
+	FinishRunCh     chan struct{} // closed once after the first FinishRun call
+	finishOnce      sync.Once     // protects FinishRunCh from double-close
+	AppendTaskCalls []domain.TaskResult
+	AppendTaskErr   error
+	FlushRunCalls   []string
+	CancelRunCalls  []cancelRunCall
+	CancelRunErr    error
+	// CancelRunNoChange makes CancelRun report changed=false (as if a
+	// concurrent caller, or an already-terminal run, beat this call to the
+	// transition) instead of the default changed=true.
+	CancelRunNoChange     bool
 	ApplyTaskCalls        []applyTaskCall
 	ApplyTaskCh           chan struct{} // closed once after the first ApplyTaskResult call
 	applyOnce             sync.Once     // protects ApplyTaskCh from double-close
@@ -213,6 +217,8 @@ type MockRunStore struct {
 	StartQueuedRunCalls   []int
 	StartQueuedRunResult  bool
 	StartQueuedRunErr     error
+	SetCanceledByCalls    []cancelRunCall
+	SetCanceledByErr      error
 }
 
 type createRunCall struct {
@@ -276,11 +282,14 @@ func (m *MockRunStore) UpdateRunSources(_ int, sources []domain.AcquiredSource) 
 	m.UpdateSourcesCalls = append(m.UpdateSourcesCalls, copySources)
 	return m.UpdateSourcesErr
 }
-func (m *MockRunStore) CancelRun(id int, canceledBy string) error {
+func (m *MockRunStore) CancelRun(id int, canceledBy string) (bool, error) {
 	m.mu.Lock()
 	m.CancelRunCalls = append(m.CancelRunCalls, cancelRunCall{id, canceledBy})
 	m.mu.Unlock()
-	return m.CancelRunErr
+	if m.CancelRunErr != nil {
+		return false, m.CancelRunErr
+	}
+	return !m.CancelRunNoChange, nil
 }
 func (m *MockRunStore) FailInterruptedRuns(reason string) (int, error) {
 	m.mu.Lock()
@@ -288,14 +297,35 @@ func (m *MockRunStore) FailInterruptedRuns(reason string) (int, error) {
 	m.mu.Unlock()
 	return m.FailInterruptedResult, m.FailInterruptedErr
 }
-func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra string) error {
+func (m *MockRunStore) SetCanceledBy(id int, canceledBy string) error {
+	m.mu.Lock()
+	m.SetCanceledByCalls = append(m.SetCanceledByCalls, cancelRunCall{id, canceledBy})
+	m.mu.Unlock()
+	return m.SetCanceledByErr
+}
+func (m *MockRunStore) ApplyTaskResult(id int, tr domain.TaskResult, outputExtra string) (string, error) {
 	m.mu.Lock()
 	m.ApplyTaskCalls = append(m.ApplyTaskCalls, applyTaskCall{id, tr, outputExtra})
 	m.mu.Unlock()
 	if m.ApplyTaskCh != nil {
 		m.applyOnce.Do(func() { close(m.ApplyTaskCh) })
 	}
-	return m.ApplyTaskErr
+	if m.ApplyTaskErr != nil {
+		return "", m.ApplyTaskErr
+	}
+	// Mirrors PGStore.ApplyTaskResult's per-call status computation closely
+	// enough for tests: the newest task result's status decides whether the
+	// run is now terminal.
+	switch tr.Status {
+	case "failed":
+		return "failed", nil
+	case "canceled":
+		return "canceled", nil
+	case "manual", "pending", "running":
+		return "running", nil
+	default:
+		return "passed", nil
+	}
 }
 func (m *MockRunStore) GetRun(id int) (*domain.Run, error) {
 	return m.GetRunResult, m.GetRunErr

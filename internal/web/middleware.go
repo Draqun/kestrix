@@ -3,13 +3,14 @@ package web
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/redact"
 	"kestrix/internal/store"
 )
 
@@ -117,7 +118,7 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		}
 		identity, storeErr := s.resolveIdentity(tokenClaims.UserName)
 		if storeErr != nil {
-			log.Printf("auth: resolve identity for %q: %v", tokenClaims.UserName, storeErr)
+			slog.Warn("auth: resolve identity failed", "account", tokenClaims.UserName, "err", redact.Err(storeErr, s.knownSecrets()))
 			writeError(w, http.StatusServiceUnavailable, "authentication is temporarily unavailable")
 			return
 		}
@@ -199,7 +200,7 @@ func (s *Server) RequireRole(min domain.Role) func(http.Handler) http.Handler {
 			if projectName := chi.URLParam(r, projectRouteParam); projectName != "" && s.grantStore != nil {
 				grant, found, err := s.grantStore.ResolveGrant(claims.UserName, projectName)
 				if err != nil {
-					log.Printf("authz: resolve grant for %q/%q: %v", claims.UserName, projectName, err)
+					slog.Warn("authz: resolve grant failed", "account", claims.UserName, "project", projectName, "err", redact.Err(err, s.knownSecrets()))
 					writeError(w, http.StatusServiceUnavailable, "authorization is temporarily unavailable")
 					return
 				}
@@ -221,13 +222,12 @@ func (s *Server) RequireRole(min domain.Role) func(http.Handler) http.Handler {
 // the token itself failed verification, before any identity is known. Never
 // pass the token, any part of it, or a request body here.
 func (s *Server) logAuthFailure(r *http.Request, account, reason string) {
-	log.Printf("auth: rejected account=%q addr=%q route=%q reason=%q", account, r.RemoteAddr, r.URL.Path, reason)
+	slog.Warn("auth rejected", "account", account, "addr", r.RemoteAddr, "route", r.URL.Path, "reason", reason)
 }
 
 // logDenial records a 403 authorization denial with enough to audit it:
 // the account, the route, and both roles compared. Never pass the token or
 // a request body here.
 func (s *Server) logDenial(r *http.Request, claims domain.Claims, required, effective domain.Role) {
-	log.Printf("authz: denied account=%q addr=%q route=%q required=%q effective=%q",
-		claims.UserName, r.RemoteAddr, r.URL.Path, required, effective)
+	slog.Warn("authz denied", "account", claims.UserName, "addr", r.RemoteAddr, "route", r.URL.Path, "required", required, "effective", effective)
 }

@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -194,6 +195,10 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			MaxConcurrentRuns: cfg.Runner.MaxConcurrentRuns,
 			MaxOutputBytes:    cfg.Runner.MaxOutputBytes,
 		},
+		Metrics: web.MetricsConfig{
+			Enabled: cfg.Metrics.Enabled,
+			Token:   cfg.Metrics.Token,
+		},
 	}
 }
 
@@ -268,6 +273,10 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := installLogging(os.Stderr, cfg.Logging.Level); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Webhook method has no yaml form: flag wins, otherwise env.
 	*method = resolveWebhookMethod(*method, env)
@@ -307,6 +316,45 @@ func reconcileInterruptedRuns(r runReconciler, w io.Writer) error {
 		return fmt.Errorf("reconcile interrupted runs: %w", err)
 	}
 	fmt.Fprintf(w, "runs: failed %d interrupted run(s) from a previous instance\n", n)
+	return nil
+}
+
+// parseLogLevel maps a validated logging.level string to its slog.Level.
+// cfg.ApplyEnvironment already rejected any value outside the four accepted
+// ones before this runs, so the default case is unreachable in production -
+// it exists so a caller passing an unvalidated string fails loudly instead
+// of silently defaulting to Info.
+func parseLogLevel(level string) (slog.Level, error) {
+	switch level {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("logging.level must be one of debug, info, warn, error, got %q", level)
+	}
+}
+
+// installLogging installs a JSON slog handler at level as the process-wide
+// default, writing to w. slog.SetDefault also redirects the stdlib log
+// package's default output through the same handler (see the log/slog
+// package doc for SetDefault), so every log.Printf call site - including
+// chi middleware.Logger's own request lines - shares the same JSON stream
+// without a separate log.SetOutput call; see observability design.md D7 and
+// spec.md "Structured process logging". Call it once, before the server and
+// runner are constructed.
+func installLogging(w io.Writer, level string) error {
+	lvl, err := parseLogLevel(level)
+	if err != nil {
+		return err
+	}
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl})
+	slog.SetDefault(slog.New(handler))
+	slog.SetLogLoggerLevel(lvl)
 	return nil
 }
 

@@ -486,6 +486,13 @@ func TestHandleRunTask_Happy(t *testing.T) {
 		PipelineFile: "pipeline.tf",
 	}
 	srv := runTaskServer(t, cfg, mock)
+	rec := &metricsTestRecorder{}
+	srv.metrics = rec
+	// runTaskServer builds Server directly rather than via NewServer, so the
+	// production s.runService.Metrics = s.metrics wiring (server.go) has to
+	// be replicated here - the run's terminal metric is now recorded by
+	// RunService itself (see REVIEW.md R1), not this handler.
+	srv.runService.Metrics = rec
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
 	r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
@@ -523,6 +530,10 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	}
 	if tr.ApprovedAt == nil {
 		t.Error("ApprovedAt = nil, want set")
+	}
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "passed" || runs[0].project != "demo" {
+		t.Fatalf("recorded runs = %+v, want exactly one passed/demo entry", runs)
 	}
 }
 
@@ -687,6 +698,8 @@ func TestHandleRunTask_SecretResolutionError(t *testing.T) {
 	}
 	srv := runTaskServer(t, cfg, mock)
 	pipeline := srv.taskRunner.(*mocks.MockPipelineRunner)
+	rec := &metricsTestRecorder{}
+	srv.metrics = rec
 	w := httptest.NewRecorder()
 	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/deploy/run", strings.NewReader(`{}`)), "name", "demo", "task", "deploy")
 	srv.handleRunTask(w, r)
@@ -712,6 +725,10 @@ func TestHandleRunTask_SecretResolutionError(t *testing.T) {
 	}
 	if len(finish.TaskResults) != 1 || finish.TaskResults[0].Status != "skipped" {
 		t.Fatalf("task results = %+v, want 1 skipped task", finish.TaskResults)
+	}
+	runs := rec.snapshot()
+	if len(runs) != 1 || runs[0].status != "failed" || runs[0].project != "demo" {
+		t.Fatalf("recorded runs = %+v, want exactly one failed/demo entry", runs)
 	}
 }
 

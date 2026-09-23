@@ -3,7 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +13,8 @@ import (
 	"kestrix/internal/auth"
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
+	"kestrix/internal/metrics"
+	"kestrix/internal/redact"
 	"kestrix/internal/runner"
 	"kestrix/internal/service"
 	"kestrix/internal/source"
@@ -91,6 +93,15 @@ type Config struct {
 	// design.md D5. Zero means the operator-facing default (1 MiB / 8 MiB).
 	MaxBodyBytes        int64
 	WebhookMaxBodyBytes int64
+	Metrics             MetricsConfig
+}
+
+// MetricsConfig controls the GET /metrics endpoint; see observability
+// spec.md. Enabled defaults to false. Token is a secret and is never
+// returned by any handler.
+type MetricsConfig struct {
+	Enabled bool
+	Token   string
 }
 
 // SourceCacheConfig controls the private persistent Git object cache.
@@ -140,6 +151,24 @@ type Server struct {
 	// 429 on POST /api/auth/login for any other client behind the same
 	// address. See first-run-setup design.md D4.
 	setupThrottle *loginThrottle
+	// metrics is the Recorder every FinishRun/CancelRun and webhook-outcome
+	// call site in this package feeds. It is metrics.NoOp{} when
+	// cfg.Metrics.Enabled is false, so nothing is collected or retained in
+	// memory - see observability spec.md "Metrics disabled by default" and
+	// design.md D2.
+	metrics metrics.Recorder
+}
+
+// knownSecrets returns the control-plane secret values that could plausibly
+// leak into an error message surfaced by this server's own operations
+// (webhook signature verification, GitLab dispatch, metrics scrape auth), so
+// a log call site can redact an err against them before writing it - see
+// observability spec.md "Secrets never reach the log". A call site with no
+// error in scope, or one that cannot plausibly surface one of these values,
+// still redacts through the same helper for a single consistent pattern;
+// see design.md's "Redaction misses a field" risk.
+func (s *Server) knownSecrets() []string {
+	return []string{s.cfg.Signature.Secret, s.cfg.Dispatch.GitLabToken, s.cfg.Metrics.Token}
 }
 
 // identityCacheMaxEntries bounds InMemoryIdentityCache regardless of how
@@ -321,7 +350,7 @@ func NewServerE(cfg Config) (*Server, error) {
 	maintenanceCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := cache.Maintain(maintenanceCtx); err != nil && maintenanceCtx.Err() == nil {
-		log.Printf("source cache maintenance warning: %v", err)
+		slog.Warn("source cache maintenance warning", "err", redact.Err(err, s.knownSecrets()))
 	}
 	return s, nil
 }
@@ -349,6 +378,14 @@ func NewServerWithDeps(
 	}
 	if s.webhookService == nil {
 		s.webhookService = service.NewWebhookService(nil)
+	}
+	if cfg.Metrics.Enabled {
+		s.metrics = metrics.NewRegistry()
+	} else {
+		s.metrics = metrics.NoOp{}
+	}
+	if s.runService != nil {
+		s.runService.Metrics = s.metrics
 	}
 	s.router = s.buildRouter()
 	return s
@@ -395,7 +432,7 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	if setter, ok := runStore.(interface{ SetRunHistoryLimit(int) }); ok {
 		setter.SetRunHistoryLimit(cfg.RunHistoryLimit)
 	}
-	log.Printf("connected to PostgreSQL")
+	slog.Info("connected to PostgreSQL")
 	return projectStore, runStore, nil
 }
 
@@ -404,7 +441,7 @@ func (s *Server) buildRouter() chi.Router {
 
 	r.Use(s.SecurityHeaders)
 	r.Use(chiMiddleware.RequestID)
-	r.Use(chiMiddleware.Logger)
+	r.Use(slogRequestLogger)
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Heartbeat("/ping"))
 
@@ -478,6 +515,14 @@ func (s *Server) buildRouter() chi.Router {
 	// Webhook
 	r.With(maxBody(s.webhookMaxBodyBytes())).Post("/webhook", s.handleWebhook)
 
+	// Metrics - registered only when enabled, so a disabled instance
+	// answers /metrics with the router's ordinary 404 and no handler exists
+	// to leak timing or headers; see observability design.md D6 and spec.md
+	// "Metrics disabled by default".
+	if s.cfg.Metrics.Enabled {
+		r.With(s.requireMetricsAuth).Get("/metrics", s.handleMetrics)
+	}
+
 	// Swagger docs - its own, more permissive content security policy;
 	// see design.md D8.
 	r.Group(func(r chi.Router) {
@@ -534,6 +579,6 @@ func (s *Server) FailInterruptedRuns(reason string) (int, error) {
 
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
-	log.Printf("Kestrix server listening on %s", s.cfg.ListenAddr)
+	slog.Info("Kestrix server listening", "addr", s.cfg.ListenAddr)
 	return serveHTTP(s.httpServer())
 }

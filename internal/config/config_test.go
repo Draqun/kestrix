@@ -1328,3 +1328,166 @@ func TestKeyConstantsMatchMultiFormSettingKeys(t *testing.T) {
 			keyConstNamingCollisionHint, sortedKeyConsts, sortedSettingKeys)
 	}
 }
+
+// --- observability settings: metrics.enabled, metrics.token, logging.level ---
+// See observability design.md and runtime-configuration spec.md
+// "Observability settings follow the precedence rule".
+
+func TestObservabilitySettingsDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Metrics.Enabled {
+		t.Error("Metrics.Enabled = true, want false default")
+	}
+	if cfg.Metrics.Token != "" {
+		t.Errorf("Metrics.Token = %q, want empty default", cfg.Metrics.Token)
+	}
+	if cfg.Logging.Level != "info" {
+		t.Errorf("Logging.Level = %q, want info default", cfg.Logging.Level)
+	}
+}
+
+func TestObservabilitySettingsFileWinsOverEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("metrics:\n  enabled: true\n  token: file-token\nlogging:\n  level: debug\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := LoadEnvironment([]string{
+		"KESTRIX_METRICS_ENABLED=false",
+		"KESTRIX_METRICS_TOKEN=env-token",
+		"KESTRIX_LOG_LEVEL=warn",
+	})
+	if err := cfg.ApplyEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Metrics.Enabled {
+		t.Error("Metrics.Enabled = false, want true (file wins)")
+	}
+	if cfg.Metrics.Token != "file-token" {
+		t.Errorf("Metrics.Token = %q, want file-token (file wins)", cfg.Metrics.Token)
+	}
+	if cfg.Logging.Level != "debug" {
+		t.Errorf("Logging.Level = %q, want debug (file wins)", cfg.Logging.Level)
+	}
+	labels := sourceLabels(t, cfg)
+	for _, key := range []string{KeyMetricsEnabled, KeyMetricsToken, KeyLoggingLevel} {
+		if labels[key] != "file" {
+			t.Errorf("source[%s] = %q, want file", key, labels[key])
+		}
+	}
+}
+
+func TestObservabilitySettingsEnvironmentFillsAbsentKey(t *testing.T) {
+	cfg := DefaultConfig()
+	env := LoadEnvironment([]string{
+		"KESTRIX_METRICS_ENABLED=true",
+		"KESTRIX_METRICS_TOKEN=env-token",
+		"KESTRIX_LOG_LEVEL=warn",
+	})
+	if err := cfg.ApplyEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Metrics.Enabled {
+		t.Error("Metrics.Enabled = false, want true (env fills absent file key)")
+	}
+	if cfg.Metrics.Token != "env-token" {
+		t.Errorf("Metrics.Token = %q, want env-token (env fills absent file key)", cfg.Metrics.Token)
+	}
+	if cfg.Logging.Level != "warn" {
+		t.Errorf("Logging.Level = %q, want warn (env fills absent file key)", cfg.Logging.Level)
+	}
+	labels := sourceLabels(t, cfg)
+	for _, key := range []string{KeyMetricsEnabled, KeyMetricsToken, KeyLoggingLevel} {
+		if labels[key] != "env" {
+			t.Errorf("source[%s] = %q, want env", key, labels[key])
+		}
+	}
+}
+
+// sourceLabels indexes cfg.SourceReport() by key, so a test can assert on
+// one setting's winning source without parsing the whole report by hand.
+func sourceLabels(t *testing.T, cfg *Config) map[string]string {
+	t.Helper()
+	out := make(map[string]string, len(multiFormSettingKeys))
+	for _, line := range cfg.SourceReport() {
+		key, src, ok := strings.Cut(line, " source=")
+		if !ok {
+			t.Fatalf("malformed source report line: %q", line)
+		}
+		out[key] = src
+	}
+	return out
+}
+
+func TestValidateObservabilitySettingsRejectsUnknownLevel(t *testing.T) {
+	for _, level := range []string{"", "verbose", "INFO", "trace"} {
+		cfg := DefaultConfig()
+		cfg.Logging.Level = level
+		err := cfg.validateObservabilitySettings()
+		if err == nil {
+			t.Errorf("level %q: expected a validation error", level)
+			continue
+		}
+		if !strings.Contains(err.Error(), "logging.level") {
+			t.Errorf("level %q: error = %q, want it to name logging.level", level, err.Error())
+		}
+	}
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		cfg := DefaultConfig()
+		cfg.Logging.Level = level
+		if err := cfg.validateObservabilitySettings(); err != nil {
+			t.Errorf("level %q: unexpected error %v", level, err)
+		}
+	}
+}
+
+func TestApplyEnvironmentRejectsUnknownLogLevelFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("logging:\n  level: verbose\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.ApplyEnvironment(LoadEnvironment(nil))
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized logging.level set in the file")
+	}
+	if !strings.Contains(err.Error(), "logging.level") {
+		t.Errorf("error = %q, want it to name logging.level", err.Error())
+	}
+}
+
+func TestApplyEnvironmentRejectsInvalidMetricsEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	err := cfg.ApplyEnvironment(LoadEnvironment([]string{"KESTRIX_METRICS_ENABLED=maybe"}))
+	if err == nil {
+		t.Fatal("expected an environment validation error")
+	}
+	if !strings.Contains(err.Error(), "KESTRIX_METRICS_ENABLED") {
+		t.Errorf("error = %q, want it to name KESTRIX_METRICS_ENABLED", err.Error())
+	}
+}
+
+// TestSourceReportOmitsMetricsToken is the observability-specific
+// counterpart to TestSourceReportOmitsValues: metrics.token is a secret
+// like webhook.secret and dispatch.gitlab_token, and must never appear in
+// the rendered report - see runtime-configuration spec.md "Scrape token
+// stays private".
+func TestSourceReportOmitsMetricsToken(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Metrics.Token = "super-secret-scrape-token"
+	for _, line := range cfg.SourceReport() {
+		if strings.Contains(line, "super-secret-scrape-token") {
+			t.Fatalf("source report leaks the metrics token: %q", line)
+		}
+	}
+	labels := sourceLabels(t, cfg)
+	if _, ok := labels[KeyMetricsToken]; !ok {
+		t.Fatal("source report does not name metrics.token at all")
+	}
+}

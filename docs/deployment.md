@@ -201,6 +201,53 @@ KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:<previous-tag> docker compose 
 See [Cutting a release](usage.md#cutting-a-release) for removing a bad tag
 and Release at the source instead of just rolling a deployment back from it.
 
+## Metrics and structured logs
+
+`GET /metrics` (Prometheus text exposition) is disabled by default. Enable it
+and set a scrape token in `.env`:
+
+```bash
+KESTRIX_METRICS_ENABLED=true
+KESTRIX_METRICS_TOKEN=$(openssl rand -hex 32)
+```
+
+Point Prometheus at the endpoint over the internal Compose network rather
+than the public listener - the token is a bearer credential like any other,
+and scraping over `proxy`/the host's public port adds no benefit:
+
+```yaml
+scrape_configs:
+  - job_name: kestrix
+    scheme: http
+    static_configs:
+      - targets: ["kestrix:8080"]
+    authorization:
+      type: Bearer
+      credentials: <the same KESTRIX_METRICS_TOKEN value>
+```
+
+With no token set, only a signed-in account (viewer role or above) can read
+`/metrics` - fine for an ad hoc check, not for a scraper. The endpoint covers
+run counts by terminal status, the running/queued gauges, a run-duration
+histogram, webhook delivery outcomes, and build info; see the
+`observability` spec for the full metric set.
+
+Process logs are one JSON object per line on stdout, replacing the previous
+free-text `log.Printf` format - **a parser reading the old format needs
+updating**. Set the minimum level with `KESTRIX_LOG_LEVEL` (`debug`, `info`,
+`warn`, or `error`; default `info`):
+
+```bash
+KESTRIX_LOG_LEVEL=warn
+```
+
+`docker compose logs kestrix` still works unchanged; pipe through `jq` to
+filter or reformat:
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f kestrix | jq -R 'fromjson? // .'
+```
+
 ## Non-goals
 
 This guide covers a single-host Compose install. Kubernetes/Helm, managed
