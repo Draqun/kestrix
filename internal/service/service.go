@@ -545,11 +545,11 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 
 	// Decide and record queued-vs-running synchronously, before returning
 	// runID, so a caller that immediately queries the run never races the
-	// background goroutine's own scheduling; see design.md D1/D2. The
-	// blocking half (waitAndStart) runs in the goroutine below since it may
-	// wait indefinitely - see REVIEW.md R10, which shares both halves with
-	// acquireSlot (used by RunTask/ApproveManualTask, which have no
-	// synchronous/async split to make).
+	// background goroutine's own scheduling; see run-concurrency-and-retention
+	// design.md D1/D2. The blocking half (waitAndStart) runs in the goroutine
+	// below since it may wait indefinitely. StartTask makes the same
+	// synchronous/async split for a single task; acquireSlot composes both
+	// halves for the synchronous RunTask path.
 	acquired := s.markQueuedIfBusy(runID)
 
 	go func() {
@@ -875,7 +875,7 @@ func (s *RunService) trackActive(ctx context.Context, runID int, projectName str
 	s.mu.Unlock()
 	return runCtx, func() {
 		// Delete only when this call's entry is still current: a second
-		// concurrent RunTask/ApproveManualTask for the same runID
+		// concurrent RunTask/StartTask call for the same runID
 		// overwrites these maps, and an unconditional delete here would
 		// remove the still-running call's entry so Cancel misses it.
 		// Channels are comparable, unlike the CancelFunc.
@@ -890,10 +890,12 @@ func (s *RunService) trackActive(ctx context.Context, runID int, projectName str
 	}
 }
 
-// RunTask executes a single task and appends the result to an existing run.
+// RunTask executes a single task synchronously and appends the result to an
+// existing run; ApproveManualTask runs an approved manual task through it.
 // It registers the run in active/done like Start so Cancel terminates the
 // task's process (via the runner's process-group wiring) instead of only
-// rewriting the run's status in the store; see design.md D1/D2.
+// rewriting the run's status in the store; see cancel-kills-task-process
+// design.md D1/D2. The single-task re-run route uses StartTask instead.
 func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	if proj == nil {
 		return domain.TaskResult{}, fmt.Errorf("project not loaded")
@@ -908,6 +910,65 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	}
 	defer s.releaseSlot()
 	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+}
+
+// StartTask is RunTask's asynchronous counterpart, used by the single-task
+// re-run route: it tracks runID, decides queued-vs-running synchronously
+// through markQueuedIfBusy - the same accepting half Start uses - and
+// returns before the task executes, leaving the rest to executeStartedTask
+// in a goroutine. It reports whether the run was recorded as queued; see
+// ui-single-task-rerun design.md D1.
+func (s *RunService) StartTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (queued bool, err error) {
+	if proj == nil {
+		return false, fmt.Errorf("project not loaded")
+	}
+	if s.taskRunner == nil {
+		return false, fmt.Errorf("task runner not configured")
+	}
+	runCtx, untrack := s.trackActive(ctx, runID, projectName)
+	acquired := s.markQueuedIfBusy(runID)
+	go s.executeStartedTask(runCtx, untrack, acquired, runID, projectName, proj, taskName, opts)
+	return !acquired, nil
+}
+
+// executeStartedTask is StartTask's background half: it waits for a slot
+// unless one was already acquired, executes the task, and records the run's
+// terminal state. A named method rather than a closure so tests can drive
+// it directly; see ui-single-task-rerun design.md D2 and Risks.
+func (s *RunService) executeStartedTask(ctx context.Context, untrack func(), acquired bool, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) {
+	defer untrack()
+	if !acquired && !s.waitAndStart(ctx, runID) {
+		// Canceled while queued: record nothing here. Cancel waits for this
+		// method to return and then makes the canceled transition itself,
+		// with canceled_by and its metric - the same as Start's queued path.
+		// runTaskInternal never ran, so neither did its workspace cleanup.
+		if opts.WorkspaceCleanup != nil {
+			opts.WorkspaceCleanup()
+		}
+		return
+	}
+	defer s.releaseSlot()
+	tr, err := s.runTaskInternal(ctx, runID, projectName, proj, taskName, opts)
+	s.finishStartedTask(runID, tr, err, opts.ResolvedSecretValues)
+}
+
+// finishStartedTask persists a started task's verdict as the run's final
+// record, deriving status and error through runStatus, as finishRun does.
+// Unlike finishRun it never overwrites a run Cancel already recorded
+// canceled, and never records a metric or canceled_by: runTaskInternal
+// already did both from ApplyTaskResult's status.
+func (s *RunService) finishStartedTask(runID int, tr domain.TaskResult, runErr error, secrets []string) {
+	if s.runStore == nil {
+		return
+	}
+	if run, _ := s.runStore.GetRun(runID); run != nil && run.Status == "canceled" {
+		slog.Info("run: task finished after cancel, keeping canceled status", "run_id", runID)
+		return
+	}
+	status, errMsg := runStatus([]domain.TaskResult{tr}, runErr)
+	if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
+		slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(err, secrets))
+	}
 }
 
 func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
@@ -970,10 +1031,11 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 	}
 	// ApplyTaskResult's returned status tells us, synchronously and without
 	// a separate racy GetRun-based guess, whether this call is the one that
-	// finalized the run (including a task canceled mid-flight - see
-	// REVIEW.md R1). RunTask/ApproveManualTask never call FinishRun
-	// themselves, so this is the only place that records the metric for
-	// this run's completion.
+	// finalized the run, including a task canceled mid-flight. This is the
+	// only place that records the metric for this run's completion:
+	// RunTask/ApproveManualTask never call FinishRun, and StartTask's
+	// finishStartedTask calls it only to persist the record, never to record
+	// a metric.
 	if runStatus == "passed" || runStatus == "failed" || runStatus == "canceled" {
 		s.recordRunFinished(runStatus, projectName, startedAt)
 	}
@@ -1065,19 +1127,7 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	}
 
 	slog.Info("manual task approved", "run_id", runID, "project", projectName, "account", opts.Actor, "task", taskName)
-	if proj == nil {
-		return domain.TaskResult{}, fmt.Errorf("project not loaded")
-	}
-	if s.taskRunner == nil {
-		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
-	}
-	runCtx, untrack := s.trackActive(ctx, runID, projectName)
-	defer untrack()
-	if !s.acquireSlot(runCtx, runID) {
-		return domain.TaskResult{}, fmt.Errorf("run %d canceled while queued", runID)
-	}
-	defer s.releaseSlot()
-	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
 }
 
 // WebhookService handles webhook event processing.

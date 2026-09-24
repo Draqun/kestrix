@@ -50,6 +50,7 @@ function RunDetailRoutes() {
       projectName={decodeURIComponent(projectName)}
       runId={Number(runId)}
       onBack={() => navigate('/pipelines')}
+      onRerunStarted={(newRunId) => navigate(`/pipelines/runs/${encodeURIComponent(projectName)}/${newRunId}`)}
     />
   );
 }

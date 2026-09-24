@@ -62,8 +62,9 @@ and `isManualWaiting`.
 Add `RunService.StartTask(ctx, runID, projectName, proj, taskName, opts) (queued bool, err error)`
 that mirrors `Start`: track the run, call `markQueuedIfBusy` synchronously, then
 run `waitAndStart` + `runTaskInternal` + the finish bookkeeping in a goroutine.
-`RunTask` stays for callers that want the synchronous result (tests, and
-`ApproveManualTask`, which is out of scope here).
+`RunTask` stays as the synchronous path, and `ApproveManualTask` now runs an
+approved manual task through it instead of an inline copy of its body; the
+manual-approval route itself is otherwise out of scope here.
 
 **Alternative considered:** keep the handler synchronous and add a client-side
 timeout. Rejected: a queued re-run would still hold a connection for an
@@ -75,6 +76,12 @@ The `FinishRun` call, the "task finished after cancel" check, and the
 `WorkspaceCleanup` callback move with the background half. The handler cannot
 keep them: it has already responded. The cancel check keeps its current
 semantics — a run already marked `canceled` is not overwritten.
+
+A run canceled while still queued never executes, and the background half
+records nothing for it: it only runs the workspace cleanup and returns.
+`Cancel` waits for it and then makes the `canceled` transition itself, with
+`canceled_by` and the canceled metric — the same path `Start` takes for a
+queued pipeline run.
 
 ### D3: The response is the breaking part, and it is the point
 
@@ -91,16 +98,19 @@ cannot support a UI button.
 
 ### D4: UI navigates by run id, reusing the existing run detail route
 
-`handleRerun` calls `runTask(projectName, task)`, then switches the view to the
-returned `run_id` through the same state the run list already uses to open a
-run. No new page, no new polling loop: the detail view's existing poll picks up
-`queued` → `running` → terminal.
+`handleRerun` calls `runTask(projectName, task)`, then calls `onRerunStarted(run_id)`,
+which App wires to a navigate to the existing run detail route. No new page, no
+new polling loop: the detail view's existing poll picks up `queued` → `running`
+→ terminal.
 
 ### D5: Action visibility is computed from the task, not the run
 
 A re-run button is rendered for a task when the run is terminal and the task
-has a terminal status of its own. `isManualWaiting` keeps owning the approval
-button, so the two never render for the same task.
+finished as `passed`, `failed`, or `canceled`. A `skipped` task never ran -
+its dependency failed or was canceled - so it gets no re-run. A task waiting
+for manual approval is `manual` or `skipped`, so it never matches either;
+`isManualWaiting` keeps owning the approval button, and the two never render
+for the same task.
 
 ## Risks / Trade-offs
 
@@ -110,8 +120,9 @@ button, so the two never render for the same task.
   → the background half logs the same warnings; a unit test asserts the run
   record reaches a terminal status when `RunTask`'s internals fail.
 - **Workspace cleanup now runs after the response, so a failure is invisible to
-  the caller** → cleanup already ran through `defer` inside `runTaskInternal`;
-  only the observer changes, and the failure is logged.
+  the caller** → cleanup runs through `defer` inside `runTaskInternal` once
+  the task executes, or directly from the background half when the run is
+  canceled while queued; either way only the observer changes.
 - **A user re-runs the same task repeatedly and fills the queue** → each re-run
   is an ordinary run under `max_concurrent_runs`; the queue bounds it, and the
   button is disabled while its own request is in flight.

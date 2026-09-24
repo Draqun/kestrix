@@ -380,7 +380,7 @@ the minimum needed.
 | GET | `/api/projects/{name}/runs`, `/api/runs` | viewer | Run history |
 | GET | `/api/projects/{name}/runs/{runID}` | viewer | One run with task results |
 | POST | `/api/projects/{name}/run` | operator | Start a run |
-| POST | `/api/projects/{name}/tasks/{task}/run` | operator | Run a single task |
+| POST | `/api/projects/{name}/tasks/{task}/run` | operator | Start a run of a single task; returns `run_id` and `running`/`queued` at once |
 | POST | `/api/projects/{name}/runs/{runID}/cancel` | operator | Cancel a running run |
 | POST | `/api/projects/{name}/runs/{runID}/tasks/{task}/run` | operator | Approve a manual task |
 | POST | `/api/projects/{name}/pipeline` | operator | Unsupported (405); registered pipeline HCL is Git-owned |

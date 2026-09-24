@@ -748,6 +748,50 @@ paths:
       summary: Get a pipeline run by ID
       tags:
       - runs
+  /api/projects/{name}/tasks/{task}/run:
+    post:
+      description: Accepts the run and returns at once; the task executes in the background.
+        Read the outcome from GET /api/projects/{name}/runs/{runID}.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Task name
+        in: path
+        name: task
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: run_id, project, task, and accepted status (running or queued)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start a run containing a single task
+      tags:
+      - runs
   /api/resolve:
     post:
       consumes:

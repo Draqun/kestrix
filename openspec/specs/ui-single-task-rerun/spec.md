@@ -1,16 +1,20 @@
+# ui-single-task-rerun Specification
+
 ## Purpose
 
 Lets an operator re-run one task of a finished run from the run detail view,
 instead of re-running the whole pipeline or calling the API by hand.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Re-run action on a finished task
 
 The run detail view SHALL offer a re-run action for each task of a run that has
-reached a terminal status. The action SHALL be available from the job list and
-from the header of the selected job. Activating it SHALL start a new run
-containing only that task.
+reached a terminal status, when the task itself finished as `passed`, `failed`,
+or `canceled`. A task that never ran - `skipped` because a dependency failed or
+was canceled, or waiting for manual approval - SHALL NOT be offered it. The
+action SHALL be available from the job list and from the header of the selected
+job. Activating it SHALL start a new run containing only that task.
 
 #### Scenario: Re-run a failed task
 - **WHEN** an operator opens a finished run and activates re-run on a failed task
@@ -20,6 +24,10 @@ containing only that task.
 #### Scenario: Action absent while the run is active
 - **WHEN** the run is `running` or `queued`
 - **THEN** no re-run action SHALL be offered for any of its tasks
+
+#### Scenario: No action for a task that never ran
+- **WHEN** a finished run has a task `skipped` because a dependency failed
+- **THEN** no re-run action SHALL be offered for that task
 
 #### Scenario: Manual approval is a separate action
 - **WHEN** a task is waiting for manual approval
@@ -38,7 +46,8 @@ request to the underlying route SHALL be rejected.
 
 #### Scenario: Operator sees the action
 - **WHEN** an account with the operator role or above opens a finished run
-- **THEN** the re-run action SHALL be rendered for each terminal task
+- **THEN** the re-run action SHALL be rendered for each task that finished as
+  `passed`, `failed`, or `canceled`
 
 ### Requirement: Re-run follows the new run
 

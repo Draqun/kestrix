@@ -96,7 +96,18 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// handleRunTask executes a single task by name.
+// handleRunTask godoc
+// @Summary Start a run containing a single task
+// @Description Accepts the run and returns at once; the task executes in the background. Read the outcome from GET /api/projects/{name}/runs/{runID}.
+// @Tags runs
+// @Produce json
+// @Param name path string true "Project name"
+// @Param task path string true "Task name"
+// @Success 200 {object} map[string]interface{} "run_id, project, task, and accepted status (running or queued)"
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/projects/{name}/tasks/{task}/run [post]
 func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	taskName := chi.URLParam(r, "task")
@@ -150,7 +161,12 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tr, err := runService.RunTask(r.Context(), runID, name, &proj, taskName, domain.RunnerOptions{
+	// Return as soon as the run is accepted: StartTask records it queued or
+	// running synchronously and executes the task in the background, so a
+	// re-run started while every slot is busy never holds this request
+	// open - see ui-single-task-rerun design.md D1/D3. The outcome is read
+	// from GET /api/projects/{name}/runs/{runID} afterwards.
+	queued, err := runService.StartTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
 		WorkDir:              primary.Root,
 		Variables:            varStore,
 		CredentialResolver:   s.credentialResolver(),
@@ -162,41 +178,25 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		Actor:                actor,
 		ResolvedSecretValues: resolvedSecrets,
 	})
-	status := "passed"
-	errMsg := ""
 	if err != nil {
-		status = "failed"
-		errMsg = err.Error()
-	}
-	if tr.Status == "failed" {
-		status = "failed"
-		if errMsg == "" {
-			errMsg = tr.Error
+		primary.Cleanup()
+		if finishErr := s.runStore.FinishRun(runID, "failed", "", err.Error(), nil); finishErr != nil {
+			slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(finishErr, s.knownSecrets()))
 		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	// RunTask's own runTaskInternal already recorded this run's terminal
-	// metric (from ApplyTaskResult's returned status) before returning here,
-	// including the canceled case - see REVIEW.md R1. This handler only
-	// normalizes the stored record/response and must never record the
-	// metric itself, or it would double-count.
-	if run, _ := s.runStore.GetRun(runID); run != nil && run.Status == "canceled" {
-		slog.Info("run: task finished after cancel, keeping canceled status", "run_id", runID)
-		status, errMsg = "canceled", "canceled"
-	} else if err := s.runStore.FinishRun(runID, status, tr.Output, errMsg, []domain.TaskResult{tr}); err != nil {
-		slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(err, s.knownSecrets()))
+	status := "running"
+	if queued {
+		status = "queued"
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"run_id":  runID,
 		"project": proj.Name,
 		"task":    taskName,
 		"status":  status,
-		"output":  tr.Output,
-	}
-	if errMsg != "" {
-		response["error"] = errMsg
-	}
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
 // ─── Run Handlers ───────────────────────────────────────────────

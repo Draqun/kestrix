@@ -388,6 +388,44 @@ if [[ "${status}" != "401" ]]; then
 fi
 echo "Deleted account's token correctly rejected with 401."
 
+# run_single_task starts a single-task run of the docker-remote project and
+# waits for it to finish, leaving the finished run record in $2, its id in
+# SINGLE_TASK_RUN_ID, and the POST response's path in SINGLE_TASK_ACCEPT_FILE.
+# The route answers with the accepted run_id at once and executes in the
+# background - see ui-single-task-rerun design.md D3 - so the task's output
+# is read from the run record, not the POST response.
+run_single_task() {
+  local task="$1"
+  local run_file="$2"
+  SINGLE_TASK_ACCEPT_FILE="${TEMP_DIR}/${task}-accept.json"
+  local accept_file="${SINGLE_TASK_ACCEPT_FILE}"
+  local status
+  status="$(curl -sS -o "${accept_file}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" \
+    -X POST "${API_BASE}/api/projects/docker-remote/tasks/${task}/run" \
+    -H 'Content-Type: application/json' -d '{}')"
+  if [[ "${status}" != "200" ]]; then
+    echo "${task} task run returned HTTP ${status}:" >&2
+    sed -n '1,200p' "${accept_file}" >&2
+    exit 1
+  fi
+  SINGLE_TASK_RUN_ID="$(sed -n 's/.*"run_id":\([0-9]*\).*/\1/p' "${accept_file}")"
+  if [[ -z "${SINGLE_TASK_RUN_ID}" ]]; then
+    echo "${task} task run response did not contain a run_id:" >&2
+    sed -n '1,200p' "${accept_file}" >&2
+    exit 1
+  fi
+  local deadline=$((SECONDS + 60))
+  until curl -sS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs/${SINGLE_TASK_RUN_ID}" -o "${run_file}" \
+    && grep -Eq '"project_name":"docker-remote","status":"(passed|failed|canceled)"' "${run_file}"; do
+    if (( SECONDS >= deadline )); then
+      echo "${task} run ${SINGLE_TASK_RUN_ID} did not finish within timeout:" >&2
+      sed -n '1,200p' "${run_file}" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
 assert_json_endpoint() {
   local path="$1"
   local expected_field="$2"
@@ -582,28 +620,21 @@ echo "/webhook: secondary source resolved docker-remote (source_name=shared)"
 # _test). print_env's own output is the task's complete view of its
 # environment - see design.md D1/D2.
 echo "Verifying a task process cannot see control-plane secrets..."
-ENV_TASK_RESPONSE="${TEMP_DIR}/env-task.json"
-status="$(curl -sS -o "${ENV_TASK_RESPONSE}" -w '%{http_code}' --max-time 60 "${AUTH_HEADER[@]}" \
-  -X POST "${API_BASE}/api/projects/docker-remote/tasks/print_env/run" \
-  -H 'Content-Type: application/json' -d '{}')"
-if [[ "${status}" != "200" ]]; then
-  echo "print_env task run returned HTTP ${status}:" >&2
-  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
-  exit 1
-fi
-if grep -Eq '(^|\\n)DATABASE_URL=|KESTRIX_MASTER_KEY_PATH=|KESTRIX_JWT_SIGNING_KEY_PATH=|KESTRIX_GITLAB_TOKEN=|KESTRIX_WEBHOOK_SECRET=' "${ENV_TASK_RESPONSE}"; then
+ENV_TASK_RUN_RESPONSE="${TEMP_DIR}/env-task.json"
+run_single_task print_env "${ENV_TASK_RUN_RESPONSE}"
+if grep -Eq '(^|\\n)DATABASE_URL=|KESTRIX_MASTER_KEY_PATH=|KESTRIX_JWT_SIGNING_KEY_PATH=|KESTRIX_GITLAB_TOKEN=|KESTRIX_WEBHOOK_SECRET=' "${ENV_TASK_RUN_RESPONSE}"; then
   echo "Task process leaked a control-plane secret variable:" >&2
-  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  sed -n '1,200p' "${ENV_TASK_RUN_RESPONSE}" >&2
   exit 1
 fi
-if ! grep -q 'PATH=' "${ENV_TASK_RESPONSE}"; then
+if ! grep -q 'PATH=' "${ENV_TASK_RUN_RESPONSE}"; then
   echo "Task process is missing the base allowlist (PATH):" >&2
-  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  sed -n '1,200p' "${ENV_TASK_RUN_RESPONSE}" >&2
   exit 1
 fi
-if ! grep -q 'KESTRIX_TEST_DATABASE_URL=' "${ENV_TASK_RESPONSE}"; then
+if ! grep -q 'KESTRIX_TEST_DATABASE_URL=' "${ENV_TASK_RUN_RESPONSE}"; then
   echo "Task process is missing the expected KESTRIX_RUNNER_ENV_PASSTHROUGH entry (KESTRIX_TEST_DATABASE_URL):" >&2
-  sed -n '1,200p' "${ENV_TASK_RESPONSE}" >&2
+  sed -n '1,200p' "${ENV_TASK_RUN_RESPONSE}" >&2
   exit 1
 fi
 echo "Task environment allowlist verified: no control-plane secret leaked."
@@ -678,40 +709,11 @@ git -C "${REMOTE_WORK}" add ci/pipeline.tf
 git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m 'add runtime secret task'
 git -C "${REMOTE_WORK}" push --quiet origin main
 
-ECHO_SECRET_RESPONSE="${TEMP_DIR}/echo-secret.json"
-status="$(curl -sS -o "${ECHO_SECRET_RESPONSE}" -w '%{http_code}' --max-time 30 "${AUTH_HEADER[@]}" \
-  -X POST "${API_BASE}/api/projects/docker-remote/tasks/echo_secret/run" \
-  -H 'Content-Type: application/json' -d '{}')"
-if [[ "${status}" != "200" ]]; then
-  echo "echo_secret task run returned HTTP ${status}:" >&2
-  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
-  exit 1
-fi
-if grep -q "${RUNTIME_SECRET_VALUE}" "${ECHO_SECRET_RESPONSE}"; then
-  echo "Task run response (run output via API) leaked the runtime secret value:" >&2
-  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
-  exit 1
-fi
-if ! grep -q '\*\*\*' "${ECHO_SECRET_RESPONSE}"; then
-  echo "Task run response did not contain the redaction marker:" >&2
-  sed -n '1,200p' "${ECHO_SECRET_RESPONSE}" >&2
-  exit 1
-fi
-
-RUN_LIST_RESPONSE="${TEMP_DIR}/echo-secret-run-list.json"
-curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs?limit=10" > "${RUN_LIST_RESPONSE}"
-# Runs are ordered newest-first and "id" is domain.Run's first JSON field, so
-# it is also the first field of the first (newest) array element - anchor on
-# that exact literal rather than a bare `.*"id":`, which a greedy match would
-# otherwise satisfy at the *last* "id" in the array (the oldest run).
-ECHO_SECRET_RUN_ID="$(sed -n 's/.*"items":\[{"id":\([0-9]*\).*/\1/p' "${RUN_LIST_RESPONSE}")"
-if [[ -z "${ECHO_SECRET_RUN_ID}" ]]; then
-  echo "Could not determine the echo_secret run's id:" >&2
-  sed -n '1,200p' "${RUN_LIST_RESPONSE}" >&2
-  exit 1
-fi
+# The POST response carries only the accepted run, so the redaction checks
+# below read the persisted run record, which holds the task result output.
 ECHO_SECRET_RUN_RESPONSE="${TEMP_DIR}/echo-secret-run.json"
-curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs/${ECHO_SECRET_RUN_ID}" > "${ECHO_SECRET_RUN_RESPONSE}"
+run_single_task echo_secret "${ECHO_SECRET_RUN_RESPONSE}"
+ECHO_SECRET_ACCEPT_FILE="${SINGLE_TASK_ACCEPT_FILE}"
 if grep -q "${RUNTIME_SECRET_VALUE}" "${ECHO_SECRET_RUN_RESPONSE}"; then
   echo "Persisted run record (task result output) leaked the runtime secret value:" >&2
   sed -n '1,200p' "${ECHO_SECRET_RUN_RESPONSE}" >&2
@@ -838,7 +840,7 @@ if grep -R -q "${ADMIN_PASSWORD}" "${TEMP_DIR}/compose.log"; then
   echo "Administrator password was found in the deployment log." >&2
   exit 1
 fi
-if grep -R -q "${RUNTIME_SECRET_VALUE}" "${RUNTIME_SECRET_RESPONSE}" "${ECHO_SECRET_RESPONSE}" "${ECHO_SECRET_RUN_RESPONSE}" "${TEMP_DIR}/compose.log"; then
+if grep -R -q "${RUNTIME_SECRET_VALUE}" "${RUNTIME_SECRET_RESPONSE}" "${ECHO_SECRET_ACCEPT_FILE}" "${ECHO_SECRET_RUN_RESPONSE}" "${TEMP_DIR}/compose.log"; then
   echo "Runtime secret value was found in an API response or the deployment/container log." >&2
   exit 1
 fi

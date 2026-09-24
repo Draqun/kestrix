@@ -19,6 +19,7 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
+	"kestrix/internal/model"
 	"kestrix/internal/service"
 
 	"github.com/go-chi/chi/v5"
@@ -443,17 +444,19 @@ func TestHandleRunTask_InvalidJSON(t *testing.T) {
 		PipelineDir:  "ci",
 		PipelineFile: "pipeline.tf",
 	}
-	srv := runTaskServer(t, cfg, &mocks.MockRunStore{CreateRunID: 1})
+	runs := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: make(chan struct{})}
+	srv := runTaskServer(t, cfg, runs)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader("not json"))
 	r = runCtx(r, "name", "demo", "task", "test")
 	srv.handleRunTask(w, r)
 
 	// handleRunTask does not decode a request body, so invalid JSON is
-	// ignored and the task runs successfully.
+	// ignored and the task is accepted.
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
+	runs.WaitFinish()
 }
 
 func TestHandleRunTask_Happy(t *testing.T) {
@@ -477,7 +480,7 @@ func TestHandleRunTask_Happy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mock := &mocks.MockRunStore{CreateRunID: 1}
+	mock := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: make(chan struct{})}
 	cfg := &domain.ProjectConfig{
 		Name:         "demo",
 		RepoURL:      "file://" + tempDir,
@@ -506,23 +509,36 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	// ui-single-task-rerun design.md D3: the response is the accepted run,
+	// never a finished verdict or the task output.
+	if resp["run_id"] != float64(1) {
+		t.Errorf("run_id = %v, want 1", resp["run_id"])
+	}
 	if resp["project"] != "demo" {
 		t.Errorf("project = %v, want demo", resp["project"])
 	}
 	if resp["task"] != "test" {
 		t.Errorf("task = %v, want test", resp["task"])
 	}
-	if resp["status"] != "passed" {
-		t.Errorf("status = %v, want passed", resp["status"])
+	if resp["status"] != "running" {
+		t.Errorf("status = %v, want running", resp["status"])
+	}
+	if _, ok := resp["output"]; ok {
+		t.Errorf("response carries output %v, want none", resp["output"])
 	}
 	if len(mock.CreateRunCalls) != 1 || mock.CreateRunCalls[0].StartedBy != "user:dave" {
 		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:dave", mock.CreateRunCalls)
 	}
-	// handleRunTask shares RunService.RunTask with the manual-approval path
-	// (design.md D4), so re-running a task directly by name stamps the same
-	// approver fields on its result - see REVIEW.md R1/R2.
+	mock.WaitFinish()
+	// handleRunTask shares runTaskInternal with the manual-approval path
+	// (run-actor-attribution design.md D4), so a task re-run by name carries
+	// the acting account as approved_by/approved_at on its result entry, the
+	// same as an approved manual task.
 	if len(mock.FinishRunCalls) != 1 || len(mock.FinishRunCalls[0].TaskResults) != 1 {
 		t.Fatalf("FinishRunCalls = %+v, want 1 call with 1 task result", mock.FinishRunCalls)
+	}
+	if mock.FinishRunCalls[0].Status != "passed" {
+		t.Errorf("finish status = %q, want passed", mock.FinishRunCalls[0].Status)
 	}
 	tr := mock.FinishRunCalls[0].TaskResults[0]
 	if tr.ApprovedBy != "user:dave" {
@@ -602,15 +618,14 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 		sourceSessions: &testSourceSessions{},
 	}
 
-	handlerDone := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
-		r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
-		r = runCtx(r, "name", "demo", "task", "test")
-		srv.handleRunTask(w, r)
-		handlerDone <- w
-	}()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{}`))
+	r = r.WithContext(contextWithClaims(r.Context(), domain.Claims{UserName: "dave", Role: domain.RoleOperator}))
+	r = runCtx(r, "name", "demo", "task", "test")
+	srv.handleRunTask(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handler status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
 
 	select {
 	case <-runner.startedCh:
@@ -625,6 +640,8 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // let Cancel reach its wait on done
 	close(runner.releaseCh)
 
+	// Cancel returns only once the background half has finished, so the
+	// FinishRun decision below has already been made.
 	select {
 	case err := <-cancelErrCh:
 		if err != nil {
@@ -633,32 +650,109 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for Cancel to return")
 	}
-	select {
-	case w := <-handlerDone:
-		if w.Code != http.StatusOK {
-			t.Fatalf("handler status = %d, want 200 (body=%s)", w.Code, w.Body.String())
-		}
-		var resp map[string]interface{}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		// The stored run is canceled, so the response must agree with it
-		// instead of reporting the locally computed kill failure.
-		if resp["status"] != "canceled" {
-			t.Errorf("response status = %v, want canceled", resp["status"])
-		}
-		if resp["error"] != "canceled" {
-			t.Errorf("response error = %v, want canceled", resp["error"])
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout waiting for handler to return")
-	}
 
 	if len(mock.CancelRunCalls) != 1 {
 		t.Fatalf("CancelRunCalls = %+v, want exactly 1", mock.CancelRunCalls)
 	}
 	if len(mock.FinishRunCalls) != 0 {
 		t.Fatalf("FinishRunCalls = %+v, want none (run already canceled)", mock.FinishRunCalls)
+	}
+}
+
+// TestHandleRunTask_QueuedRespondsImmediately pins ui-single-task-rerun
+// design.md D1: with every slot busy the handler answers with the queued
+// run while the task has not started, instead of holding the request open.
+func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo hello-from-task"
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mocks.MockRunStore{CreateRunID: 2, StartQueuedRunResult: true}
+	runner := &blockingRunTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
+	cfg := &domain.ProjectConfig{
+		Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main",
+		PipelineDir: "ci", PipelineFile: "pipeline.tf",
+	}
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
+		projectStore:   &mocks.MockProjectStore{GetResult: cfg},
+		runStore:       mock,
+		pipelineRunner: runner,
+		taskRunner:     runner,
+		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
+		runService:     service.NewRunService(mock, runner, runner),
+		sourceSessions: &testSourceSessions{},
+	}
+	srv.runService.SetMaxConcurrentRuns(1)
+
+	// Occupy the only slot with another run whose task blocks.
+	if _, err := srv.runService.StartTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "test", domain.RunnerOptions{SourcesPrepared: true}); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	select {
+	case <-runner.startedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for the first run to occupy the slot")
+	}
+
+	handlerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", nil), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		handlerDone <- w
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-handlerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler blocked while the run was queued")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["run_id"] != float64(2) || resp["status"] != "queued" {
+		t.Fatalf("response = %v, want run_id 2 queued", resp)
+	}
+	if mock.SetRunQueuedCallCount() != 1 {
+		t.Fatalf("SetRunQueued calls = %d, want 1", mock.SetRunQueuedCallCount())
+	}
+
+	// Free the slot and let both runs drain before the test's temp dirs go.
+	close(runner.releaseCh)
+	waitNoActiveRuns(t, srv.runService, "demo")
+}
+
+// waitNoActiveRuns waits until RunService tracks no run for project.
+func waitNoActiveRuns(t *testing.T, svc *service.RunService, project string) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for len(svc.ActiveRunIDsForProject(project)) > 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("runs still active: %v", svc.ActiveRunIDsForProject(project))
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 
