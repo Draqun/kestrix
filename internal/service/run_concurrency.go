@@ -126,12 +126,13 @@ func (s *RunService) waitAndStart(ctx context.Context, runID int) bool {
 
 // acquireSlot blocks the caller until a concurrency slot is free or ctx is
 // done, marking runID "queued" in the store meanwhile and "running" once
-// acquired - see design.md D1/D2. Used by RunTask and ApproveManualTask,
-// which execute synchronously in the caller's goroutine, so there is no
-// separate phase to split the decision across; Start (asynchronous) uses
-// markQueuedIfBusy/waitAndStart directly instead - see REVIEW.md R10. It
-// returns false only when ctx is done before a slot frees, or the run was
-// canceled while queued (in which case the caller must not execute it).
+// acquired - see design.md D1/D2. Used by RunTask (and ApproveManualTask
+// through it), which executes synchronously in the caller's goroutine, so
+// there is no separate phase to split the decision across; Start and
+// StartTask, which return before executing, call markQueuedIfBusy and
+// waitAndStart themselves. It returns false only when ctx is done before a
+// slot frees, or the run was canceled while queued (in which case the
+// caller must not execute it).
 func (s *RunService) acquireSlot(ctx context.Context, runID int) bool {
 	if s.markQueuedIfBusy(runID) {
 		return true

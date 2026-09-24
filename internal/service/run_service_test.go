@@ -168,7 +168,18 @@ func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for FinishRun")
 	}
+	// finishRun records the metric just after FinishRun returns, and
+	// FinishRunCh closes inside FinishRun, so wait for the record itself.
+	deadline := time.After(3 * time.Second)
 	runs := rec.snapshot()
+	for len(runs) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the run to be recorded")
+		case <-time.After(time.Millisecond):
+		}
+		runs = rec.snapshot()
+	}
 	if len(runs) != 1 {
 		t.Fatalf("expected 1 recorded run, got %d: %+v", len(runs), runs)
 	}

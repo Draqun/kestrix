@@ -143,25 +143,21 @@ func TestRunHandlersSuccessAndServiceErrors(t *testing.T) {
 		t.Fatalf("start error status=%d", w.Code)
 	}
 
-	store, project = runHandlerProject(t, true)
-	trRunner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "task", Status: "failed", Error: "bad", Output: "out"}}, RunErr: errors.New("runner")}
-	srv = setupRunServer(t, store, &mocks.MockRunStore{CreateRunID: 4})
-	srv.taskRunner = trRunner
-	srv.runService = service.NewRunService(srv.runStore, trRunner, trRunner)
-	w = httptest.NewRecorder()
-	srv.handleRunTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "task", "task"))
-	if w.Code != http.StatusOK {
-		t.Fatalf("run task status=%d body=%s", w.Code, w.Body.String())
-	}
-	// A failed task result without a runner error uses the task's own message.
-	trRunner = &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "task", Status: "failed", Error: "task error"}}}
-	srv = setupRunServer(t, store, &mocks.MockRunStore{CreateRunID: 8})
-	srv.taskRunner = trRunner
-	srv.runService = service.NewRunService(srv.runStore, trRunner, trRunner)
-	w = httptest.NewRecorder()
-	srv.handleRunTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "task", "task"))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "task error") {
-		t.Fatalf("failed result body=%s", w.Body.String())
+	// A StartTask failure answers 500 and leaves the created run failed,
+	// whether or not recording that verdict itself succeeds.
+	for _, finishErr := range []error{nil, errors.New("finish")} {
+		store, project = runHandlerProject(t, true)
+		runs := &mocks.MockRunStore{CreateRunID: 4, FinishRunErr: finishErr}
+		srv = setupRunServer(t, store, runs)
+		srv.runService = service.NewRunService(runs, nil, nil)
+		w = httptest.NewRecorder()
+		srv.handleRunTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "task", "task"))
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("start task error status=%d body=%s", w.Code, w.Body.String())
+		}
+		if len(runs.FinishRunCalls) != 1 || runs.FinishRunCalls[0].ID != 4 || runs.FinishRunCalls[0].Status != "failed" {
+			t.Fatalf("FinishRunCalls = %+v, want run 4 failed", runs.FinishRunCalls)
+		}
 	}
 }
 
@@ -322,14 +318,16 @@ func TestRemainingRunAndConfigBranches(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("create error=%d", w.Code)
 	}
-	// FinishRun errors are logged but do not change the successful response.
-	runs := &mocks.MockRunStore{CreateRunID: 2, FinishRunErr: errors.New("finish")}
+	// FinishRun errors are logged in the background and do not change the
+	// accepted response.
+	runs := &mocks.MockRunStore{CreateRunID: 2, FinishRunErr: errors.New("finish"), FinishRunCh: make(chan struct{})}
 	srv = setupRunServer(t, store, runs)
 	w = httptest.NewRecorder()
 	srv.handleRunTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "task", "task"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("finish error status=%d", w.Code)
 	}
+	runs.WaitFinish()
 
 	// CancelRun backend failure.
 	runs = &mocks.MockRunStore{CancelRunErr: errors.New("cancel"), GetRunResult: &domain.Run{ID: 3, ProjectName: "demo"}}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   useNodesState, useEdgesState
@@ -21,13 +21,14 @@ import {
   History as HistoryIcon,
   Visibility as ViewIcon,
   Add as AddIcon,
+  Replay as RerunIcon,
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import DAGViewer from '../components/DAGViewer';
 import CopyButton from '../components/CopyButton';
 import { layoutFromProject } from '../lib/dagLayout';
-import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask } from '../api/client';
+import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 import { useAuth } from '../context/AuthContext';
@@ -71,13 +72,37 @@ function isManualWaiting(job, pipelineDef, allJobs) {
   return deps.every(d => statusMap[d] === 'passed');
 }
 
+const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];
+
+// canRerun reports whether a task of a run may be re-run on its own: the run
+// and the task must both have finished (passed, failed, or canceled). A task
+// waiting for manual approval is `manual` or `skipped`, never one of those,
+// so it keeps its approval action and never gets this one; a task skipped
+// because a dependency failed or was canceled never ran and is not offered
+// either - see ui-single-task-rerun design.md D5.
+function canRerun(job, run) {
+  return TERMINAL_RUN_STATUSES.includes(run?.status) && TERMINAL_RUN_STATUSES.includes(job?.status);
+}
+
+// RerunButton is the Re-run action for one task, shown in the job list and
+// the selected-job header. rerunning names the task whose re-run is in
+// flight, if any; every Re-run button is disabled while one is.
+function RerunButton({ task, rerunning, onRerun, sx }) {
+  return (
+    <Button size="small" variant="outlined" startIcon={<RerunIcon />} sx={sx}
+      disabled={!!rerunning} onClick={() => onRerun(task)}>
+      {rerunning === task ? 'Starting…' : 'Re-run'}
+    </Button>
+  );
+}
+
 function formatDuration(ms) {
   if (!ms) return '';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function RunDetail({ projectName, runId, onBack }) {
+export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
   const { roleAtLeast } = useAuth();
   const canOperate = roleAtLeast('operator');
   const [detail, setDetail] = useState(null);
@@ -89,24 +114,43 @@ export function RunDetail({ projectName, runId, onBack }) {
   const [canceling, setCanceling] = useState(false);
   const [approving, setApproving] = useState(null);
   const [approveErr, setApproveErr] = useState(null);
+  const [rerunning, setRerunning] = useState(null);
+  const [rerunErr, setRerunErr] = useState(null);
+  // The run this view is routed to - set as soon as runId changes, before
+  // that run has loaded - or null once it unmounts. A load or re-run
+  // response for any other run arrived after the user moved on and must
+  // not act on the view.
+  const routedRunIdRef = useRef(runId);
+  useEffect(() => {
+    routedRunIdRef.current = runId;
+    return () => { routedRunIdRef.current = null; };
+  }, [runId]);
 
+  // A load for a run the view has since left - a poll, or the reload after
+  // cancel/approve, still in flight - is discarded rather than applied.
   const load = useCallback(async () => {
     try {
       const d = await getRun(projectName, runId);
+      if (routedRunIdRef.current !== runId) return null;
       setDetail(d);
       setError(null);
       return d;
     } catch (e) {
-      setError(e.message);
+      if (routedRunIdRef.current === runId) setError(e.message);
       return null;
     }
   }, [projectName, runId]);
 
   useEffect(() => {
+    setDetail(null);
     setLoading(true);
     setSelectedJob(null);
-    load().finally(() => setLoading(false));
-  }, [load]);
+    setRerunning(null);
+    setRerunErr(null);
+    load().finally(() => {
+      if (routedRunIdRef.current === runId) setLoading(false);
+    });
+  }, [load, runId]);
 
   // Poll while running or a job is running after manual approve.
   useEffect(() => {
@@ -177,7 +221,33 @@ export function RunDetail({ projectName, runId, onBack }) {
     setApproving(null);
   };
 
-  const r = detail;
+  // A re-run is a new run: follow it rather than staying on this one, which
+  // it leaves unchanged. On rejection, stay here and show why. Either way,
+  // do nothing if the user has left this run before the response arrives.
+  const handleRerun = async (taskName) => {
+    const startedOn = runId;
+    setRerunning(taskName);
+    setRerunErr(null);
+    try {
+      const result = await runTask(projectName, taskName);
+      if (routedRunIdRef.current !== startedOn) return;
+      if (!result.run_id) {
+        setRerunErr('Re-run started but no run_id returned');
+      } else {
+        onRerunStarted?.(result.run_id);
+      }
+    } catch (e) {
+      if (routedRunIdRef.current === startedOn) setRerunErr(e.message);
+    } finally {
+      // Leaving the run already reset rerunning; clearing it here would
+      // cut short a re-run started since on the run the user moved to.
+      if (routedRunIdRef.current === startedOn) setRerunning(null);
+    }
+  };
+
+  // Until the new run loads, detail may still hold the previous run: never
+  // render its jobs, or their Re-run buttons, under this run's id.
+  const r = detail?.id === runId ? detail : null;
   const st = r ? formatStatus(r.status) : null;
   const jobs = (() => {
     const map = {};
@@ -207,6 +277,7 @@ export function RunDetail({ projectName, runId, onBack }) {
       {loading && !r && <LinearProgress sx={{ mb: 2 }} />}
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {approveErr && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setApproveErr(null)}>{approveErr}</Alert>}
+      {rerunErr && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setRerunErr(null)}>{rerunErr}</Alert>}
 
       {r && (
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
@@ -260,6 +331,9 @@ export function RunDetail({ projectName, runId, onBack }) {
                           {approving === job.name ? 'Starting…' : 'Run'}
                         </Button>
                       )}
+                      {canOperate && canRerun(job, r) && (
+                        <RerunButton task={job.name} rerunning={rerunning} onRerun={handleRerun} sx={{ mt: 0.5, mx: 1 }} />
+                      )}
                     </ListItem>
                   );
                 })}
@@ -288,6 +362,9 @@ export function RunDetail({ projectName, runId, onBack }) {
                       onClick={() => handleApprove(activeJob.name)}>
                       {approving === activeJob.name ? 'Starting…' : 'Run manual job'}
                     </Button>
+                  )}
+                  {canOperate && canRerun(activeJob, r) && (
+                    <RerunButton task={activeJob.name} rerunning={rerunning} onRerun={handleRerun} />
                   )}
                 </Box>
                 {activeJob.approved_by && (

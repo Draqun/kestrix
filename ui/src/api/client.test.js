@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   completeSetup, createAccount, createCredential, createProject, deleteAccount, getWebhookLogs,
   listAccounts, listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
-  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus,
+  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus, runTask,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
@@ -425,4 +425,36 @@ test('completeSetup throws the server-provided error on 409', async (t) => {
   });
 
   await assert.rejects(completeSetup('admin', 's3cret-pass'), /setup already completed/);
+});
+
+test('UI API starts a single-task re-run and returns the accepted run', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options };
+    return new Response(
+      JSON.stringify({ run_id: 42, project: 'my demo', task: 'build/x', status: 'queued' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const run = await runTask('my demo', 'build/x');
+
+  assert.equal(captured.url, '/api/projects/my%20demo/tasks/build%2Fx/run');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(run, { run_id: 42, project: 'my demo', task: 'build/x', status: 'queued' });
+});
+
+test('UI API surfaces a rejected single-task re-run', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: 'task "gone" not found' }),
+    { status: 404, headers: { 'Content-Type': 'application/json' } },
+  );
+  await assert.rejects(runTask('demo', 'gone'), /task "gone" not found/);
+
+  globalThis.fetch = async () => new Response('not json', { status: 500, statusText: 'Internal Server Error' });
+  await assert.rejects(runTask('demo', 'build'), /Re-run failed: Internal Server Error/);
 });
