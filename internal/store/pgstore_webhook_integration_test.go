@@ -204,7 +204,7 @@ func TestWebhookEventsMigrationIsIdempotent(t *testing.T) {
 	recordAt(t, pg, time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC), domain.WebhookEvent{
 		ProjectName: "web", Repo: "org/web", Status: domain.WebhookStatusTriggered})
 
-	if err := migrate(pg.db); err != nil {
+	if err := migrate(pg.db, "local"); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
 	total, err := pg.CountWebhookEvents(domain.WebhookEventFilter{})

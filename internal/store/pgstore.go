@@ -18,10 +18,20 @@ type PGStore struct {
 	masterKeys          credentials.MasterKeyProvider
 	webhookHistoryLimit int
 	runHistoryLimit     int
+	// defaultMode is the value a project's Mode column backfills to when
+	// left unset - the instance-wide config.RunnerConfig.Mode at the moment
+	// this store connected, per remote-runner-registration design.md D2. It
+	// never overwrites a Mode a caller (or a prior migration) already set.
+	defaultMode string
 }
 
-// NewPG creates a PGStore, connects to the database, and ensures the schema exists.
-func NewPG(databaseURL string) (*PGStore, error) {
+// NewPG creates a PGStore, connects to the database, and ensures the schema
+// exists. defaultMode backfills any project row with no Mode set yet - see
+// migrate and design.md D2; an empty value falls back to "local".
+func NewPG(databaseURL, defaultMode string) (*PGStore, error) {
+	if defaultMode == "" {
+		defaultMode = "local"
+	}
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -37,12 +47,12 @@ func NewPG(databaseURL string) (*PGStore, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	if err := migrate(db); err != nil {
+	if err := migrate(db, defaultMode); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit, runHistoryLimit: DefaultRunHistoryLimit}, nil
+	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit, runHistoryLimit: DefaultRunHistoryLimit, defaultMode: defaultMode}, nil
 }
 
 // SetWebhookHistoryLimit bounds how many webhook events are retained. A
@@ -64,7 +74,7 @@ func (s *PGStore) SetRunHistoryLimit(limit int) {
 	s.runHistoryLimit = limit
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB, defaultMode string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin schema migration: %w", err)
@@ -160,6 +170,40 @@ func migrate(db *sql.DB) error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_project_sources_key ON project_sources(match_key);
+
+		CREATE TABLE IF NOT EXISTS runners (
+			id              SERIAL PRIMARY KEY,
+			name            TEXT NOT NULL,
+			token_hash      TEXT NOT NULL UNIQUE,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+			revoked_at      TIMESTAMPTZ
+		);
+
+		CREATE TABLE IF NOT EXISTS remote_jobs (
+			id              SERIAL PRIMARY KEY,
+			run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+			task_name       TEXT NOT NULL,
+			status          TEXT NOT NULL DEFAULT 'pending',
+			runner_id       INTEGER REFERENCES runners(id),
+			payload         JSONB NOT NULL DEFAULT '{}',
+			claim_epoch     INTEGER NOT NULL DEFAULT 0,
+			claimed_at      TIMESTAMPTZ,
+			updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_remote_jobs_status ON remote_jobs(status, id);
+		CREATE INDEX IF NOT EXISTS idx_remote_jobs_run ON remote_jobs(run_id);
+		ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS trace_offset INTEGER NOT NULL DEFAULT 0;
+
+		-- Backstop against resumeRemoteRun dispatching one task twice for the
+		-- same run (REVIEW.md R4): RunService.resumeLocks already serializes
+		-- that in-process, but this catches it at the database layer too -
+		-- only non-terminal jobs are constrained, so a single-task re-run
+		-- dispatching a fresh job for a task whose earlier job already went
+		-- terminal is unaffected.
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_jobs_run_task_active
+			ON remote_jobs(run_id, task_name)
+			WHERE status NOT IN ('passed', 'failed', 'canceled');
 	`); err != nil {
 		return fmt.Errorf("create base schema: %w", err)
 	}
@@ -183,11 +227,32 @@ func migrate(db *sql.DB) error {
 		// idx_runs_status alone (status only) leaves that ORDER BY an unindexed
 		// sort over every terminal row - see REVIEW.md R4.
 		{"add runs status/started_at index", `CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at DESC, id DESC)`},
+		// mode makes the execution backend a genuine per-project setting
+		// instead of the single instance-wide config.RunnerConfig.Mode - see
+		// remote-runner-registration design.md D2. Starts '' so the backfill
+		// below (not this DEFAULT) decides every existing row's value.
+		{"add project mode", `ALTER TABLE projects ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`},
+		// remote_snapshot holds the one archive and per-task resolved
+		// variables a remote-mode run's initial dispatch computed, so the
+		// dependency-resumption walker (tasks.md 3.6) can dispatch a
+		// dependent task later without re-acquiring source or re-resolving
+		// secrets - see design.md D6/D7 and the "not reuse" note on
+		// resumption.
+		{"add run remote snapshot", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS remote_snapshot JSONB`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {
 			return fmt.Errorf("%s: %w", statement.name, err)
 		}
+	}
+
+	// Backfill every project that has no Mode of its own yet to the
+	// instance's current mode, so behavior after this migration is
+	// identical to before it for every existing project - design.md
+	// Migration Plan. Idempotent: a row a caller (or a previous run of this
+	// migration) already set is never touched again.
+	if _, err := tx.Exec(`UPDATE projects SET mode = $1 WHERE mode = ''`, defaultMode); err != nil {
+		return fmt.Errorf("backfill project mode: %w", err)
 	}
 
 	rows, err := tx.Query(`SELECT name FROM projects WHERE btrim(repo_url) = '' OR btrim(repo_ref) = '' ORDER BY name`)

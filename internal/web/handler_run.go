@@ -63,7 +63,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
-		WorkDir: primary.Root, IncludeManual: req.IncludeManual, Variables: varStore,
+		WorkDir: primary.Root, IncludeManual: req.IncludeManual, Variables: varStore, Mode: p.Mode,
 		CredentialResolver:   s.credentialResolver(),
 		SourceSessions:       s.sourceSessions,
 		InitialSources:       []domain.AcquiredSource{primary.Source},
@@ -168,6 +168,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	// from GET /api/projects/{name}/runs/{runID} afterwards.
 	queued, err := runService.StartTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
 		WorkDir:              primary.Root,
+		Mode:                 p.Mode,
 		Variables:            varStore,
 		CredentialResolver:   s.credentialResolver(),
 		SourceSessions:       s.sourceSessions,
@@ -282,6 +283,14 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
+	// Best-effort only: approval uses the run's own stored pipeline snapshot
+	// and does not otherwise require the live project, so a lookup failure
+	// here just leaves Mode unset (the executor falls back to the
+	// instance-wide default) rather than blocking the approval.
+	var mode string
+	if p, err := s.projectStore.Get(name); err == nil && p != nil {
+		mode = p.Mode
+	}
 	latest := make(map[string]domain.TaskResult)
 	for _, tr := range run.TaskResults {
 		latest[tr.Name] = tr
@@ -323,7 +332,7 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 	}
 
 	if _, err := runService.ApproveManualTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
-		WorkDir: workDir, RepoPaths: repoPaths, SourcesPrepared: true,
+		WorkDir: workDir, RepoPaths: repoPaths, SourcesPrepared: true, Mode: mode,
 		Variables: varStore, CredentialResolver: s.credentialResolver(),
 		SourceSessions: s.sourceSessions, WorkspaceCleanup: cleanup,
 		Actor: actorFrom(r), ResolvedSecretValues: resolvedSecrets,

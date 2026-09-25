@@ -747,10 +747,10 @@ func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
 func waitNoActiveRuns(t *testing.T, svc *service.RunService, project string) {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
-	for len(svc.ActiveRunIDsForProject(project)) > 0 {
+	for len(activeRunIDs(t, svc, project)) > 0 {
 		select {
 		case <-deadline:
-			t.Fatalf("runs still active: %v", svc.ActiveRunIDsForProject(project))
+			t.Fatalf("runs still active: %v", activeRunIDs(t, svc, project))
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

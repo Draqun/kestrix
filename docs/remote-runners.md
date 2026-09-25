@@ -1,0 +1,172 @@
+# Remote runners
+
+A `remote`-mode project dispatches every task as a job for a registered
+runner to claim and execute, instead of running it on the Kestrix host. This
+is how you host the Kestrix control plane on a small, cheap instance and
+execute tasks on your own separate machines - including using Kestrix to
+build and test itself.
+
+This guide is scoped to registering a runner and running `kestrix runner`.
+For installing Kestrix itself, see [`deployment.md`](deployment.md), which
+covers a single-host Compose install and doesn't fit a multi-machine
+workflow like this one.
+
+## How it works
+
+A runner is a poll-loop, not a listener: it only ever makes outbound HTTPS
+requests to the Kestrix server, so it works from behind NAT with no inbound
+port, no public address, and no firewall hole.
+
+```
+Kestrix host                              Runner (your own machine)
+─────────────                             ──────────────────────────
+remote_jobs table                         kestrix runner --token T
+     │                                          │
+     │  pending ─────────────────────────> GET /api/runner-jobs/next
+     │                                          │  (long-poll)
+     │                                    200 + payload (script,
+     │                                    resolved variables, source
+     │                                    archive, claim epoch)
+     │                                          │
+     │                                    unpacks archive, executes
+     │                                    with the runner's own
+     │                                    configured engine
+     │                                    (docker or local)
+     │                                          │
+     │  <───────────────────────────  PATCH .../trace (periodic)
+     │  <───────────────────────────  PUT .../complete
+```
+
+The job payload never contains a container image or engine selection -
+your runner's own `--mode` decides whether it runs tasks in Docker or as
+bare shell subprocesses, the same choice `local`/`docker` mode makes on the
+Kestrix host itself (see [`ci-tools.md`](ci-tools.md#runner)). It also never
+contains a repository credential: Kestrix acquires the source once, on the
+host, the same way every other mode does, and ships the resulting checkout
+to the runner as an archive.
+
+## 1. Register a runner
+
+Registering a runner requires the admin role.
+
+```bash
+curl -X POST http://localhost:8080/api/runners \
+  -H 'Authorization: Bearer <admin session token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "build-box-1"}'
+```
+
+The response includes a bearer token:
+
+```json
+{"id": 3, "name": "build-box-1", "token": "b7f2c1..."}
+```
+
+**This token is shown once.** Store it somewhere your runner machine can
+read it (a secrets manager, an `.env` file with restrictive permissions);
+Kestrix stores only its hash and cannot show it again. If you lose it,
+revoke the runner and register a new one.
+
+To revoke a runner (also admin-only):
+
+```bash
+curl -X DELETE http://localhost:8080/api/runners/3 \
+  -H 'Authorization: Bearer <admin session token>'
+```
+
+A revoked runner's token stops authenticating immediately; any job it had
+claimed is recovered by silent-runner recovery (see below) once it goes
+quiet.
+
+The runner-job endpoints (`/api/runner-jobs/*`) sit outside the `/api`
+route group your session token authenticates: a runner's own bearer token
+authenticates nothing there, and a session token does not authenticate the
+runner-job endpoints either. The two credential spaces are entirely
+separate.
+
+## 2. Run `kestrix runner` on the remote machine
+
+Copy the same `kestrix` binary you run the server with to the remote
+machine - there is no separate runner binary; `runner` is a subcommand of
+the same single binary (see the project's Impact notes for why: it's the
+same convention every other command follows).
+
+```bash
+kestrix runner --server https://kestrix.example.com --token b7f2c1...
+```
+
+Or via environment variables (useful for a systemd unit or a container):
+
+```bash
+export KESTRIX_RUNNER_SERVER=https://kestrix.example.com
+export KESTRIX_RUNNER_TOKEN=b7f2c1...
+kestrix runner
+```
+
+By default the runner executes tasks as bare shell subprocesses on its own
+host (`local` mode, matching the Kestrix host's own `local` mode). To run
+tasks in Docker containers instead, the runner machine needs a working
+Docker installation:
+
+```bash
+kestrix runner --server https://kestrix.example.com --token b7f2c1... --mode docker
+```
+
+or `KESTRIX_RUNNER_MODE=docker`. Docker-mode hardening (PID/memory/CPU
+limits, dropped capabilities) applies exactly as it does for an in-process
+`docker`-mode project - see
+[`ci-tools.md`'s Docker mode hardening](ci-tools.md#docker-mode-hardening);
+the same `KESTRIX_RUNNER_DOCKER_*` settings on the runner machine's own
+environment control it, since the job payload names no image or engine.
+
+The runner keeps polling until you stop it (Ctrl-C, or your process
+supervisor's stop signal). It logs each claimed job and its outcome to
+stderr.
+
+## 3. Switch a project to `remote` mode
+
+```bash
+curl -X PUT http://localhost:8080/api/projects/my-app \
+  -H 'Authorization: Bearer <admin session token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"mode": "remote", ...}'
+```
+
+Every task of a `remote`-mode project now dispatches as a job instead of
+running on the Kestrix host - including a single-task re-run and an
+approved manual gate (see [`ci-tools.md`](ci-tools.md#runner) for how those
+two differ from every other mode once a project is on `remote`).
+
+## Settings
+
+| Setting | Env var | Default |
+|---------|---------|---------|
+| Runner-job request body bound | `KESTRIX_RUNNER_JOB_MAX_BODY_BYTES` | 20971520 (20 MiB) |
+| Concurrent long-polls per runner token | `KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS` | 2 |
+| Silent-runner timeout | `KESTRIX_RUNNER_JOB_TIMEOUT` | 120s |
+| Max reclaim attempts before failing a job | `KESTRIX_RUNNER_JOB_MAX_RECLAIMS` | 3 |
+| `kestrix runner`'s server URL (flag: `--server`) | `KESTRIX_RUNNER_SERVER` | none |
+| `kestrix runner`'s bearer token (flag: `--token`) | `KESTRIX_RUNNER_TOKEN` | none |
+| `kestrix runner`'s execution backend (flag: `--mode`) | `KESTRIX_RUNNER_MODE` | `local` |
+
+All seven are also documented in `.env.template`.
+
+## Silent-runner recovery
+
+If a runner goes quiet mid-job (crashed, network partition, `kestrix
+runner` killed) without reporting completion, Kestrix notices once the job
+has been silent longer than `KESTRIX_RUNNER_JOB_TIMEOUT`: it returns the
+job to `pending` for another runner to claim, up to
+`KESTRIX_RUNNER_JOB_MAX_RECLAIMS` times, after which it fails the job
+naming the reason. The original runner's own eventual, late report (if it
+comes back) is fenced out by the job's claim epoch and rejected - see
+[`ci-tools.md`'s Cancellation section](ci-tools.md#cancellation) for the
+same fencing idea applied to cancellation.
+
+## Non-goals
+
+This guide covers registering and running a single-tenant fleet of runners
+you already trust - see the project's own Non-goals for the full list
+(multi-tenant/untrusted runners, per-task mode mixing, autoscaling, a
+Settings UI for managing runners, and migrating existing GitLab-CI-hosted
+projects onto remote runners are all out of scope for this feature).

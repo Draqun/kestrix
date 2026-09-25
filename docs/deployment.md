@@ -253,4 +253,5 @@ docker compose -f docker-compose.prod.yml logs -f kestrix | jq -R 'fromjson? // 
 This guide covers a single-host Compose install. Kubernetes/Helm, managed
 databases beyond "set `DATABASE_URL` yourself", and automated backup
 scheduling are out of scope; the commands above are what you would put in
-your own scheduler.
+your own scheduler. Executing tasks on machines other than this host is a
+separate topic - see [`remote-runners.md`](remote-runners.md).

@@ -7,6 +7,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,17 @@ import (
 	"kestrix/internal/mocks"
 	"kestrix/internal/service"
 )
+
+// activeRunIDs wraps RunService.ActiveRunIDsForProject for tests that never
+// expect its store-backed remote-job check to fail.
+func activeRunIDs(t *testing.T, svc *service.RunService, name string) []int {
+	t.Helper()
+	ids, err := svc.ActiveRunIDsForProject(name)
+	if err != nil {
+		t.Fatalf("ActiveRunIDsForProject(%q): %v", name, err)
+	}
+	return ids
+}
 
 func TestHandleCreateProject_InvalidJSON(t *testing.T) {
 	srv := systemHandlerServer(t)
@@ -975,9 +987,9 @@ func TestHandleDeleteProject_AfterRunFinishes_Deletes(t *testing.T) {
 
 	close(runner.releaseCh)
 	deadline := time.Now().Add(3 * time.Second)
-	for len(runSvc.ActiveRunIDsForProject("demo")) != 0 {
+	for len(activeRunIDs(t, runSvc, "demo")) != 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("run did not leave active set, ids=%v", runSvc.ActiveRunIDsForProject("demo"))
+			t.Fatalf("run did not leave active set, ids=%v", activeRunIDs(t, runSvc, "demo"))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1013,6 +1025,38 @@ func TestHandleDeleteProject_NilRunService_InternalError(t *testing.T) {
 	}
 	if len(projectStore.DeleteCalls) != 0 {
 		t.Fatalf("Delete should not be called without a run service, got %v", projectStore.DeleteCalls)
+	}
+}
+
+// TestHandleDeleteProject_RemoteJobStoreErrorFailsClosed pins
+// remote-runner-registration tasks.md 2.4: a store error checking for
+// outstanding remote jobs must refuse the delete (fail closed), not fall
+// through as if no jobs were outstanding (fail open).
+func TestHandleDeleteProject_RemoteJobStoreErrorFailsClosed(t *testing.T) {
+	projectStore := &mocks.MockProjectStore{Projects: map[string]*domain.ProjectConfig{
+		"demo": {Name: "demo", RepoURL: "https://git.example/demo.git", RepoRef: "main"},
+	}}
+	runStore := &mocks.MockRunStore{}
+	runSvc := service.NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	runSvc.SetRemoteJobStore(&mocks.MockRemoteJobStore{OutstandingJobRunIDsErr: errors.New("database unavailable")})
+	srv := &Server{
+		cfg:            Config{ListenAddr: ":0"},
+		projectStore:   projectStore,
+		runStore:       runStore,
+		projectService: service.NewProjectService(projectStore),
+		runService:     runSvc,
+		sourceSessions: &testSourceSessions{},
+	}
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("DELETE", "/api/projects/demo", nil), "name", "demo")
+	srv.handleDeleteProject(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body=%s)", w.Code, w.Body.String())
+	}
+	if len(projectStore.DeleteCalls) != 0 {
+		t.Fatalf("Delete must not be called when the outstanding-jobs check fails, got %v", projectStore.DeleteCalls)
 	}
 }
 
@@ -1127,7 +1171,7 @@ func TestHandleDeleteProject_AfterRunCanceled_Deletes(t *testing.T) {
 	if err := runSvc.Cancel(context.Background(), 7, "tester"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if ids := runSvc.ActiveRunIDsForProject("demo"); len(ids) != 0 {
+	if ids := activeRunIDs(t, runSvc, "demo"); len(ids) != 0 {
 		t.Fatalf("after Cancel, ActiveRunIDsForProject(demo) = %v, want empty", ids)
 	}
 

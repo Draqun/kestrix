@@ -9,7 +9,7 @@ import (
 )
 
 func (s *PGStore) Load() (map[string]*ProjectConfig, error) {
-	rows, err := s.db.Query(`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at FROM projects`)
+	rows, err := s.db.Query(`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, mode, created_at FROM projects`)
 	if err != nil {
 		return nil, fmt.Errorf("query projects: %w", err)
 	}
@@ -19,7 +19,7 @@ func (s *PGStore) Load() (map[string]*ProjectConfig, error) {
 	for rows.Next() {
 		var p ProjectConfig
 		var createdAt time.Time
-		if err := rows.Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &createdAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &p.Mode, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		p.CreatedAt = createdAt.Format(time.RFC3339)
@@ -40,10 +40,14 @@ func (s *PGStore) Save(projects map[string]*ProjectConfig) error {
 	}
 
 	for _, p := range projects {
+		mode := p.Mode
+		if mode == "" {
+			mode = s.defaultMode
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO projects (name, repo_url, repo_ref, repo_credential_ref, pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			p.Name, p.RepoURL, p.RepoRef, nullIfEmpty(p.RepoCredentialRef), p.PipelineDir, p.PipelineFile, p.GitLabProjectID, p.DefaultBranch, p.WebhookSecret, p.CreatedAt,
+			`INSERT INTO projects (name, repo_url, repo_ref, repo_credential_ref, pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, mode, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			p.Name, p.RepoURL, p.RepoRef, nullIfEmpty(p.RepoCredentialRef), p.PipelineDir, p.PipelineFile, p.GitLabProjectID, p.DefaultBranch, p.WebhookSecret, mode, p.CreatedAt,
 		); err != nil {
 			return fmt.Errorf("insert %s: %w", p.Name, err)
 		}
@@ -55,8 +59,8 @@ func (s *PGStore) Get(name string) (*ProjectConfig, error) {
 	var p ProjectConfig
 	var createdAt time.Time
 	err := s.db.QueryRow(
-		`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at FROM projects WHERE name = $1`, name,
-	).Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &createdAt)
+		`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, mode, created_at FROM projects WHERE name = $1`, name,
+	).Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &p.Mode, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -128,7 +132,7 @@ func (s *PGStore) FindBySourceKey(keys []string) ([]*ProjectConfig, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`SELECT DISTINCT p.name, p.repo_url, p.repo_ref, COALESCE(p.repo_credential_ref,''), p.pipeline_dir, p.pipeline_file, p.gitlab_project_id, p.default_branch, p.webhook_secret, p.created_at
+	rows, err := s.db.Query(`SELECT DISTINCT p.name, p.repo_url, p.repo_ref, COALESCE(p.repo_credential_ref,''), p.pipeline_dir, p.pipeline_file, p.gitlab_project_id, p.default_branch, p.webhook_secret, p.mode, p.created_at
 		FROM projects p JOIN project_sources s ON s.project_name = p.name WHERE s.match_key = ANY($1) ORDER BY p.name`, keys)
 	if err != nil {
 		return nil, fmt.Errorf("find by source key: %w", err)
@@ -138,7 +142,7 @@ func (s *PGStore) FindBySourceKey(keys []string) ([]*ProjectConfig, error) {
 	for rows.Next() {
 		var p ProjectConfig
 		var createdAt time.Time
-		if err := rows.Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &createdAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &p.Mode, &createdAt); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan matched project: %w", err)
 		}
@@ -163,8 +167,8 @@ func (s *PGStore) FindByGitLabID(id int) (*ProjectConfig, error) {
 	var p ProjectConfig
 	var createdAt time.Time
 	err := s.db.QueryRow(
-		`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at FROM projects WHERE gitlab_project_id = $1`, id,
-	).Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &createdAt)
+		`SELECT name, repo_url, repo_ref, COALESCE(repo_credential_ref,''), pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, mode, created_at FROM projects WHERE gitlab_project_id = $1`, id,
+	).Scan(&p.Name, &p.RepoURL, &p.RepoRef, &p.RepoCredentialRef, &p.PipelineDir, &p.PipelineFile, &p.GitLabProjectID, &p.DefaultBranch, &p.WebhookSecret, &p.Mode, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -200,8 +204,11 @@ func (s *PGStore) inTx(what string, fn func(*sql.Tx) error) error {
 }
 
 // projectDefaults fills the fields the store supplies when a caller leaves
-// them empty.
-func projectDefaults(cfg *ProjectConfig) {
+// them empty. Mode defaults to this store's instance-wide default (see
+// design.md D2) - the same fallback the schema migration backfills existing
+// rows with, so a project created without an explicit Mode behaves exactly
+// like one that predates this field.
+func (s *PGStore) projectDefaults(cfg *ProjectConfig) {
 	if cfg.CreatedAt == "" {
 		cfg.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -211,14 +218,17 @@ func projectDefaults(cfg *ProjectConfig) {
 	if cfg.PipelineFile == "" {
 		cfg.PipelineFile = "pipeline.tf"
 	}
+	if cfg.Mode == "" {
+		cfg.Mode = s.defaultMode
+	}
 }
 
 func upsertProjectTx(tx *sql.Tx, cfg *ProjectConfig) error {
 	if _, err := tx.Exec(
-		`INSERT INTO projects (name, repo_url, repo_ref, repo_credential_ref, pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (name) DO UPDATE SET repo_url = EXCLUDED.repo_url, repo_ref = EXCLUDED.repo_ref, repo_credential_ref = EXCLUDED.repo_credential_ref, pipeline_dir = EXCLUDED.pipeline_dir, pipeline_file = EXCLUDED.pipeline_file, gitlab_project_id = EXCLUDED.gitlab_project_id, default_branch = EXCLUDED.default_branch, webhook_secret = EXCLUDED.webhook_secret`,
-		cfg.Name, cfg.RepoURL, cfg.RepoRef, nullIfEmpty(cfg.RepoCredentialRef), cfg.PipelineDir, cfg.PipelineFile, cfg.GitLabProjectID, cfg.DefaultBranch, cfg.WebhookSecret, cfg.CreatedAt,
+		`INSERT INTO projects (name, repo_url, repo_ref, repo_credential_ref, pipeline_dir, pipeline_file, gitlab_project_id, default_branch, webhook_secret, mode, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 ON CONFLICT (name) DO UPDATE SET repo_url = EXCLUDED.repo_url, repo_ref = EXCLUDED.repo_ref, repo_credential_ref = EXCLUDED.repo_credential_ref, pipeline_dir = EXCLUDED.pipeline_dir, pipeline_file = EXCLUDED.pipeline_file, gitlab_project_id = EXCLUDED.gitlab_project_id, default_branch = EXCLUDED.default_branch, webhook_secret = EXCLUDED.webhook_secret, mode = EXCLUDED.mode`,
+		cfg.Name, cfg.RepoURL, cfg.RepoRef, nullIfEmpty(cfg.RepoCredentialRef), cfg.PipelineDir, cfg.PipelineFile, cfg.GitLabProjectID, cfg.DefaultBranch, cfg.WebhookSecret, cfg.Mode, cfg.CreatedAt,
 	); err != nil {
 		return fmt.Errorf("upsert %s: %w", cfg.Name, err)
 	}
@@ -266,7 +276,7 @@ func replaceSourcesTx(tx *sql.Tx, name string, sources []ProjectSource) error {
 // source row in step with repo_url, so a project seeded without a derived set
 // still routes. Secondary rows are owned by ReplaceSources.
 func (s *PGStore) Upsert(cfg *ProjectConfig) error {
-	projectDefaults(cfg)
+	s.projectDefaults(cfg)
 	return s.inTx("upsert "+cfg.Name, func(tx *sql.Tx) error {
 		if err := upsertProjectTx(tx, cfg); err != nil {
 			return err
@@ -280,7 +290,7 @@ func (s *PGStore) Upsert(cfg *ProjectConfig) error {
 // leaves the registration exactly as it was: an error response never leaves a
 // new project, or a new repo_url, secret or ref, behind.
 func (s *PGStore) UpsertWithSources(cfg *ProjectConfig, sources []ProjectSource) error {
-	projectDefaults(cfg)
+	s.projectDefaults(cfg)
 	return s.inTx("upsert "+cfg.Name+" with sources", func(tx *sql.Tx) error {
 		if err := upsertProjectTx(tx, cfg); err != nil {
 			return err

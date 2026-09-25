@@ -15,7 +15,6 @@ import (
 	"kestrix/internal/domain"
 	"kestrix/internal/metrics"
 	"kestrix/internal/redact"
-	"kestrix/internal/runner"
 	"kestrix/internal/service"
 	"kestrix/internal/source"
 
@@ -93,7 +92,14 @@ type Config struct {
 	// design.md D5. Zero means the operator-facing default (1 MiB / 8 MiB).
 	MaxBodyBytes        int64
 	WebhookMaxBodyBytes int64
-	Metrics             MetricsConfig
+	// RunnerJobMaxBodyBytes bounds a runner-job request body; zero means the
+	// operator-facing default (20 MiB). RunnerJobMaxConcurrentPolls caps how
+	// many concurrent GET /api/runner-jobs/next long-polls one runner token
+	// may hold open; zero means the default (2). See
+	// remote-runner-registration design.md D4.
+	RunnerJobMaxBodyBytes       int64
+	RunnerJobMaxConcurrentPolls int
+	Metrics                     MetricsConfig
 }
 
 // MetricsConfig controls the GET /metrics endpoint; see observability
@@ -120,6 +126,11 @@ type RunnerConfig struct {
 	// the RunService default (unlimited concurrency, unbounded output).
 	MaxConcurrentRuns int
 	MaxOutputBytes    int
+	// RemoteJobTimeout and RemoteJobMaxReclaims bound silent-runner
+	// recovery (tasks.md 4.1/4.2). Zero in either selects the RunService
+	// default (120s, 3 reclaims).
+	RemoteJobTimeout     time.Duration
+	RemoteJobMaxReclaims int
 }
 
 // Server is the HTTP server.
@@ -157,6 +168,18 @@ type Server struct {
 	// memory - see observability spec.md "Metrics disabled by default" and
 	// design.md D2.
 	metrics metrics.Recorder
+	// runnerStore backs runner registration/authentication and the
+	// runner-job route group; nil unless the configured RunStore also
+	// implements domain.RunnerStore (PGStore does). See
+	// remote-runner-registration.
+	runnerStore domain.RunnerStore
+	// remoteJobStore backs the runner-job endpoints' claim/trace/complete
+	// calls; nil unless the configured RunStore also implements
+	// domain.RemoteJobStore (PGStore does).
+	remoteJobStore domain.RemoteJobStore
+	// runnerPollLimiter bounds concurrent GET /api/runner-jobs/next
+	// long-polls per authenticated runner token (design.md D4).
+	runnerPollLimiter *runnerPollLimiter
 }
 
 // knownSecrets returns the control-plane secret values that could plausibly
@@ -186,11 +209,15 @@ const loginThrottleMaxEntries = 10000
 // populating Config in production wiring, so this fallback mainly serves
 // tests and other direct Config construction.
 const (
-	defaultHTTPReadTimeout  = 30 * time.Second
-	defaultHTTPWriteTimeout = 120 * time.Second
-	defaultHTTPIdleTimeout  = 120 * time.Second
-	defaultMaxBodyBytes     = 1 << 20 // 1 MiB
-	defaultWebhookMaxBytes  = 8 << 20 // 8 MiB
+	defaultHTTPReadTimeout             = 30 * time.Second
+	defaultHTTPWriteTimeout            = 120 * time.Second
+	defaultHTTPIdleTimeout             = 120 * time.Second
+	defaultMaxBodyBytes                = 1 << 20  // 1 MiB
+	defaultWebhookMaxBytes             = 8 << 20  // 8 MiB
+	defaultRunnerJobMaxBytes           = 20 << 20 // 20 MiB
+	defaultRunnerJobMaxConcurrentPolls = 2
+	defaultRemoteJobTimeout            = 120 * time.Second
+	defaultRemoteJobMaxReclaims        = 3
 )
 
 // serveHTTP is a seam over (*http.Server).ListenAndServe so tests can inject
@@ -236,6 +263,20 @@ func (s *Server) webhookMaxBodyBytes() int64 {
 		return s.cfg.WebhookMaxBodyBytes
 	}
 	return defaultWebhookMaxBytes
+}
+
+func (s *Server) runnerJobMaxBodyBytes() int64 {
+	if s.cfg.RunnerJobMaxBodyBytes > 0 {
+		return s.cfg.RunnerJobMaxBodyBytes
+	}
+	return defaultRunnerJobMaxBytes
+}
+
+func (s *Server) runnerJobMaxConcurrentPolls() int {
+	if s.cfg.RunnerJobMaxConcurrentPolls > 0 {
+		return s.cfg.RunnerJobMaxConcurrentPolls
+	}
+	return defaultRunnerJobMaxConcurrentPolls
 }
 
 // maxBody returns middleware that bounds the request body to n bytes via
@@ -298,11 +339,15 @@ func NewServerE(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	projectService := service.NewProjectService(projectStore)
-	pipelineRunner := &runner.PipelineExecutor{Mode: cfg.Runner.Mode, GenerateYAML: GenerateGitLabCI}
-	taskRunner := pipelineRunner
+	executor := modeSelectingExecutor{defaultMode: cfg.Runner.Mode}
+	pipelineRunner := domain.PipelineRunner(executor)
+	taskRunner := domain.TaskRunner(executor)
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
 	runService.SetMaxConcurrentRuns(cfg.Runner.MaxConcurrentRuns)
 	runService.MaxOutputBytes = cfg.Runner.MaxOutputBytes
+	if remoteJobs, ok := runStore.(domain.RemoteJobStore); ok {
+		runService.SetRemoteJobStore(remoteJobs)
+	}
 	webhookSink, _ := projectStore.(domain.WebhookLogSink)
 	webhookService := service.NewWebhookService(webhookSink)
 	s := NewServerWithDeps(cfg, projectStore, runStore, projectService, pipelineRunner, taskRunner, runService, webhookService)
@@ -379,6 +424,13 @@ func NewServerWithDeps(
 	if s.webhookService == nil {
 		s.webhookService = service.NewWebhookService(nil)
 	}
+	if runners, ok := runStore.(domain.RunnerStore); ok {
+		s.runnerStore = runners
+	}
+	if remoteJobs, ok := runStore.(domain.RemoteJobStore); ok {
+		s.remoteJobStore = remoteJobs
+	}
+	s.runnerPollLimiter = newRunnerPollLimiter()
 	if cfg.Metrics.Enabled {
 		s.metrics = metrics.NewRegistry()
 	} else {
@@ -416,7 +468,7 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 	if _, _, err := provider.Current(); err != nil {
 		return nil, nil, fmt.Errorf("validate KESTRIX_MASTER_KEY_PATH: %w", err)
 	}
-	projectStore, runStore, err := newPGStores(cfg.DatabaseURL)
+	projectStore, runStore, err := newPGStores(cfg.DatabaseURL, cfg.Runner.Mode)
 	if err != nil {
 		message := strings.ReplaceAll(err.Error(), cfg.DatabaseURL, "[redacted database URL]")
 		return nil, nil, fmt.Errorf("initialize PostgreSQL: %s", message)
@@ -508,12 +560,26 @@ func (s *Server) buildRouter() chi.Router {
 				r.Put("/users/{user}/role", s.handleUpdateUserRole)
 				r.Put("/users/{user}/grants", s.handleSetUserGrants)
 				r.Delete("/users/{user}", s.handleDeleteUser)
+				r.Post("/runners", s.handleCreateRunner)
+				r.Delete("/runners/{id}", s.handleRevokeRunner)
 			})
 		})
 	})
 
 	// Webhook
 	r.With(maxBody(s.webhookMaxBodyBytes())).Post("/webhook", s.handleWebhook)
+
+	// Runner-job endpoints - outside /api, their own bearer-token auth
+	// (requireRunnerAuth) and body-size bound, the same shape /webhook uses
+	// for its own independent auth; see remote-runner-registration
+	// design.md D4 and tasks.md 3.1.
+	r.Route("/api/runner-jobs", func(r chi.Router) {
+		r.Use(maxBody(s.runnerJobMaxBodyBytes()))
+		r.Use(s.requireRunnerAuth)
+		r.Get("/next", s.handleRunnerJobNext)
+		r.Patch("/{id}/trace", s.handleRunnerJobTrace)
+		r.Put("/{id}/complete", s.handleRunnerJobComplete)
+	})
 
 	// Metrics - registered only when enabled, so a disabled instance
 	// answers /metrics with the router's ordinary 404 and no handler exists
@@ -575,6 +641,62 @@ func (s *Server) Router() http.Handler {
 // the HTTP listener never serves a request that can observe a ghost run.
 func (s *Server) FailInterruptedRuns(reason string) (int, error) {
 	return s.runStore.FailInterruptedRuns(reason)
+}
+
+// remoteJobTimeout and remoteJobMaxReclaims resolve cfg's silent-runner
+// recovery bounds, falling back to the package defaults when unset - see
+// remote-runner-registration tasks.md 4.1.
+func (s *Server) remoteJobTimeout() time.Duration {
+	if s.cfg.Runner.RemoteJobTimeout > 0 {
+		return s.cfg.Runner.RemoteJobTimeout
+	}
+	return defaultRemoteJobTimeout
+}
+
+func (s *Server) remoteJobMaxReclaims() int {
+	if s.cfg.Runner.RemoteJobMaxReclaims > 0 {
+		return s.cfg.Runner.RemoteJobMaxReclaims
+	}
+	return defaultRemoteJobMaxReclaims
+}
+
+// remoteJobReclaimInterval is how often StartRemoteJobReclaimLoop checks for
+// stale jobs - independent of, and shorter than, the timeout that decides
+// whether a job counts as stale, so a job crosses its timeout within one
+// interval of it actually happening. A package variable, not a constant, so
+// a unit test isn't forced to wait the real interval.
+var remoteJobReclaimInterval = 15 * time.Second
+
+// StartRemoteJobReclaimLoop runs silent-runner recovery (tasks.md 4.2) on a
+// fixed interval until ctx is done. It is a no-op loop (ticks but does
+// nothing) when no remoteJobStore is configured, so a caller can start it
+// unconditionally at server startup without checking first - the same
+// pattern reconcileInterruptedRuns's caller uses for FailInterruptedRuns.
+func (s *Server) StartRemoteJobReclaimLoop(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(remoteJobReclaimInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if s.runService == nil {
+					continue
+				}
+				reclaimed, failed, err := s.runService.ReclaimStaleRemoteJobs(
+					s.remoteJobTimeout(), s.remoteJobMaxReclaims(), "runner went silent",
+				)
+				if err != nil {
+					slog.Warn("silent-runner recovery check failed", "err", redact.Err(err, s.knownSecrets()))
+					continue
+				}
+				if reclaimed > 0 || failed > 0 {
+					slog.Info("silent-runner recovery", "reclaimed", reclaimed, "failed", failed)
+				}
+			}
+		}
+	}()
 }
 
 // ListenAndServe starts the server.

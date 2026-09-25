@@ -214,6 +214,154 @@ type RunStore interface {
 	CountRunsByStatus() (map[string]int, error)
 }
 
+// Remote job and job-task statuses; see remote-runner-execution spec.md.
+const (
+	RemoteJobStatusPending  = "pending"
+	RemoteJobStatusClaimed  = "claimed"
+	RemoteJobStatusRunning  = "running"
+	RemoteJobStatusPassed   = "passed"
+	RemoteJobStatusFailed   = "failed"
+	RemoteJobStatusCanceled = "canceled"
+)
+
+// RemoteJobPayload is what a runner receives from GET /api/runner-jobs/next:
+// the task to execute, its fully-resolved variables (flattened - no
+// control-plane variable is ever included, per task-execution-isolation),
+// and a tar.gz archive of the source checkout Kestrix already acquired
+// server-side - see design.md D6/D7. It names no execution engine or image
+// (design.md D3).
+type RemoteJobPayload struct {
+	Task Task `json:"task"`
+	// Repos carries the project's declared repositories - Name, Path, and
+	// Kind only (never URL/CredentialRef, which name a live source the
+	// runner never touches: D6 already shipped the checkout as Archive).
+	// The runner needs this to resolve task.Execute.Repo's working
+	// directory within the extracted archive the same way internal/runner's
+	// repoDir does in-process.
+	Repos []Repo `json:"repos"`
+	// DefaultImage is the project's own default, for a docker-mode runner
+	// resolving an image when the task names none - the same fallback
+	// RunOne applies in-process. It is data already public in the pipeline
+	// definition, not an engine selector Kestrix is choosing on the
+	// runner's behalf (design.md D3): the runner's own configuration alone
+	// decides whether it runs docker or local at all.
+	DefaultImage string            `json:"default_image,omitempty"`
+	Variables    map[string]string `json:"variables"`
+	Archive      []byte            `json:"archive"`
+}
+
+// RemoteJob is one task dispatched to a remote runner instead of executed
+// in-process; see remote-runner-execution spec.md.
+type RemoteJob struct {
+	ID         int              `json:"id"`
+	RunID      int              `json:"run_id"`
+	TaskName   string           `json:"task_name"`
+	Status     string           `json:"status"`
+	RunnerID   *int             `json:"runner_id,omitempty"`
+	Payload    RemoteJobPayload `json:"payload"`
+	ClaimEpoch int              `json:"claim_epoch"`
+	ClaimedAt  *time.Time       `json:"claimed_at,omitempty"`
+	UpdatedAt  time.Time        `json:"updated_at"`
+}
+
+// RemoteJobStore is the port for dispatching, claiming, and completing
+// remote-runner jobs; see remote-runner-execution spec.md and design.md D1/D9.
+type RemoteJobStore interface {
+	// CreateRemoteJob dispatches one task of runID as a pending job.
+	CreateRemoteJob(runID int, taskName string, payload RemoteJobPayload) (int, error)
+	// ClaimNextJob atomically claims the oldest pending job for any runner
+	// (Phase 1 has no tags - design.md Risks) via SELECT ... FOR UPDATE SKIP
+	// LOCKED, incrementing claim_epoch. Returns a nil job and no error when
+	// nothing is pending.
+	ClaimNextJob(runnerID int) (*RemoteJob, error)
+	// GetRemoteJob returns a job by ID, or nil if it does not exist.
+	GetRemoteJob(jobID int) (*RemoteJob, error)
+	// AppendJobTrace appends chunk to the job's run's output (a database-side
+	// append, never FlushRunOutput's whole-column overwrite - D9), bounded by
+	// maxOutputBytes the same way the in-process boundedWriter is. offset is
+	// the byte position, in the job's own trace stream, chunk begins at: it
+	// must equal the job's current stored trace_offset to be applied. A
+	// lower offset is a runner's own safe retry (for example after a
+	// dropped HTTP response) - a no-op reported as ok=true, since the
+	// content was already accepted. A higher offset is a gap - a real
+	// protocol violation - reported as a non-nil error rather than silently
+	// misplacing content. ok is false, with no error, only when epoch no
+	// longer matches the job's stored claim_epoch (D1), the job is
+	// already terminal, or callerRunnerID is non-nil and does not match the
+	// job's stored runner_id - a caller may only trace a job it holds the
+	// current claim on, not any job by numeric ID (the epoch check alone is
+	// not enough: a never-claimed job's claim_epoch defaults to 0, which a
+	// caller could simply guess). callerRunnerID is nil only for
+	// system-initiated calls that are not attributed to an authenticated
+	// runner; every HTTP-driven call passes the authenticated runner's ID.
+	AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (ok bool, err error)
+	// CompleteJob records a job's terminal report. The epoch check, the
+	// ownership check, and the parent run's terminal-status check happen in
+	// the same transaction as the task-result write (task 1.2/3.4): ok is
+	// false when epoch is stale, the job is already terminal, callerRunnerID
+	// is non-nil and does not match the job's stored runner_id (see
+	// AppendJobTrace), or the run went terminal - by something else
+	// entirely, such as FailInterruptedRuns - between the epoch check and
+	// this call, since that run's dependency graph must never be revived.
+	// When the job is fenced out this way but its run is already terminal,
+	// its trailing output is still appended (D9's append shape) even though
+	// ok is false and no task result is recorded. callerRunnerID is nil only
+	// for system-initiated calls (ReclaimStaleJobs's own fail-a-stale-job
+	// path); every HTTP-driven call passes the authenticated runner's ID.
+	// output is bounded by maxOutputBytes the same way AppendJobTrace's
+	// chunk is - a non-positive value means unbounded.
+	CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
+	// PendingOrClaimedJobIDsForRun returns the IDs of runID's jobs not yet
+	// terminal, for CancelRun's remote-mode carve-out (task 4.3).
+	PendingOrClaimedJobIDsForRun(runID int) ([]int, error)
+	// CancelJobsForRun marks runID's non-terminal jobs unclaimable: a
+	// "pending" job is marked "canceled" outright; a "claimed"/"running" job
+	// is left for its runner to finish (no stop signal exists - D8) but its
+	// eventual completion report will find the run already terminal and be
+	// fenced by CompleteJob as documented above.
+	CancelJobsForRun(runID int) error
+	// ReclaimStaleJobs returns every "claimed"/"running" job last updated
+	// before the cutoff to "pending" (bumping claim_epoch, D5), except a job
+	// whose run is already terminal, which is instead finalized in place as
+	// "failed" with reason - a stale job of a terminal run is neither
+	// reclaimed nor left claimable. A job already reclaimed maxReclaims times
+	// is finalized "failed" with reason instead of being returned to
+	// "pending" again. Returns the counts reclaimed and finalized-failed.
+	ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (reclaimed, finalizedFailed int, err error)
+	// OutstandingJobRunIDsForProject returns the IDs of projectName's runs
+	// that have a job in pending/claimed/running status - the store-backed
+	// half of ActiveRunIDsForProject's remote-mode carve-out (design.md
+	// D10), unioned with the in-memory active set there. A query error is
+	// returned rather than swallowed so the caller can fail closed (refuse
+	// a project delete) instead of failing open.
+	OutstandingJobRunIDsForProject(projectName string) ([]int, error)
+	// SetRemoteRunSnapshot persists the one source archive and every
+	// pipeline task's resolved variables a remote-mode run's initial
+	// dispatch computed - the data tasks.md 3.6's resumption walker needs
+	// to dispatch a dependent task later without re-acquiring source or
+	// re-resolving secrets (design.md D6/D7). Called once, at run creation.
+	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string) error
+	// GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a
+	// nil archive and empty map if none was ever set (a non-remote run, or
+	// one that dispatched no eligible task at all - see startRemote).
+	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, err error)
+}
+
+// RunnerStore is the port for registering and authenticating remote
+// runners; see remote-runner-execution spec.md and design.md D4.
+type RunnerStore interface {
+	// CreateRunner registers a new runner and returns its ID and a
+	// newly-generated bearer token. The token is returned once, in plain
+	// text, and never again - only its hash is stored.
+	CreateRunner(name string) (id int, token string, err error)
+	// AuthenticateRunner resolves token to a runner ID in constant time. ok
+	// is false for an unknown or revoked token.
+	AuthenticateRunner(token string) (runnerID int, ok bool, err error)
+	// RevokeRunner marks a runner revoked; a revoked runner's token no
+	// longer authenticates.
+	RevokeRunner(id int) error
+}
+
 // RunSourceStore persists non-secret source metadata after acquisition.
 // It is optional so lightweight test stores and alternative backends remain
 // compatible with the core run lifecycle port.
@@ -264,6 +412,13 @@ type RunnerOptions struct {
 	// "user:<name>". Set by the handler from authenticated claims, never
 	// from client input - see run-attribution D2, D5. The runner ignores it.
 	Actor string
+	// Mode is the project's own execution backend ("local", "docker",
+	// "gitlab-runner", or "remote"), set by the handler from the project's
+	// stored domain.ProjectConfig.Mode - see remote-runner-registration
+	// design.md D2. RunService branches on it directly (D10); a non-remote
+	// PipelineRunner/TaskRunner implementation uses it to select its own
+	// per-call backend instead of one instance-wide mode.
+	Mode string
 	// ResolvedSecretValues holds every runtime-secret value BuildVarStore
 	// resolved for this run or task, in resolution order. The service layer
 	// uses it to redact these values from output before persisting or
@@ -400,8 +555,13 @@ type ProjectConfig struct {
 	RepoCredentialRef string `json:"repo_credential_ref,omitempty"`
 	PipelineDir       string `json:"pipeline_dir,omitempty"`
 	PipelineFile      string `json:"pipeline_file"`
-	GitLabProjectID   int    `json:"gitlab_project_id,omitempty"`
-	DefaultBranch     string `json:"default_branch,omitempty"`
+	// Mode selects this project's execution backend: "local", "docker",
+	// "gitlab-runner", or "remote" - see remote-runner-registration
+	// design.md D2. Empty on input defaults to the instance's configured
+	// mode (ProjectService.DefaultMode); always populated on output.
+	Mode            string `json:"mode,omitempty"`
+	GitLabProjectID int    `json:"gitlab_project_id,omitempty"`
+	DefaultBranch   string `json:"default_branch,omitempty"`
 	// WebhookSecret is write-only: it is accepted on create and update but
 	// SHALL NOT appear in any response - see webhook-ingress-hardening D4.
 	// Responses carry HasWebhookSecret instead; callers encoding a

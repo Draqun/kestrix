@@ -102,6 +102,18 @@ func (s *ProjectService) checkCIRepoCredentials(proj model.Project) error {
 // ErrValidation identifies invalid project configuration supplied by a client.
 var ErrValidation = errors.New("project validation failed")
 
+// validProjectModes are the execution backends a project's Mode may name;
+// see remote-runner-registration design.md D2. An empty Mode is also valid
+// here - it defers to the store's instance-wide default (projectDefaults) -
+// so only a genuinely unrecognized value is rejected.
+var validProjectModes = map[string]bool{
+	"":              true,
+	"local":         true,
+	"docker":        true,
+	"gitlab-runner": true,
+	"remote":        true,
+}
+
 func validateProject(cfg *domain.ProjectConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("%w: project name is required", ErrValidation)
@@ -113,6 +125,9 @@ func validateProject(cfg *domain.ProjectConfig) error {
 	}
 	if ref == "" {
 		return fmt.Errorf("%w: repo_ref is required", ErrValidation)
+	}
+	if !validProjectModes[cfg.Mode] {
+		return fmt.Errorf("%w: mode %q is not a recognized execution backend", ErrValidation, cfg.Mode)
 	}
 	return validateRepoURL(raw)
 }
@@ -466,6 +481,18 @@ type RunService struct {
 	runStore   domain.RunStore
 	pipeline   domain.PipelineRunner
 	taskRunner domain.TaskRunner
+	// remoteJobStore dispatches jobs for a "remote"-mode project instead of
+	// executing in-process; see remote-runner-registration design.md D10.
+	// Nil (the default, until SetRemoteJobStore is called) means Start,
+	// RunTask, and ApproveManualTask never branch into that path.
+	remoteJobStore domain.RemoteJobStore
+	// resumeLocks serializes resumeRemoteRun per run ID (remote-runner-
+	// registration REVIEW.md R3/R4): two jobs of one run completing at
+	// nearly the same time both trigger resumption, and without this a
+	// dependent both racers agree has become eligible could be dispatched
+	// twice. See remote_dispatch.go's runLocker doc for why an in-process
+	// mutex is enough here rather than a DB-level lock.
+	resumeLocks *runLocker
 
 	// CancelGrace bounds how long Cancel waits, beyond an extra 5s, for an
 	// active run's executeRun goroutine to return after its context is
@@ -496,11 +523,12 @@ type RunService struct {
 // NewRunService creates a RunService.
 func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, taskRunner domain.TaskRunner) *RunService {
 	return &RunService{
-		runStore:   runStore,
-		pipeline:   pipeline,
-		taskRunner: taskRunner,
-		active:     make(map[int]activeRun),
-		done:       make(map[int]chan struct{}),
+		runStore:    runStore,
+		pipeline:    pipeline,
+		taskRunner:  taskRunner,
+		active:      make(map[int]activeRun),
+		done:        make(map[int]chan struct{}),
+		resumeLocks: newRunLocker(),
 	}
 }
 
@@ -508,22 +536,50 @@ func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, tas
 // in active that belong to projectName. Project deletion must be refused
 // (409) while the result is non-empty rather than cascading those runs'
 // rows from under them.
-func (s *RunService) ActiveRunIDsForProject(projectName string) []int {
+// ActiveRunIDsForProject's error return covers only the store-backed
+// remote-job check added by remote-runner-registration design.md D10: the
+// in-memory half above never fails. Callers - handleDeleteProject in
+// particular - MUST fail closed (refuse the delete) on a non-nil error
+// rather than treating it as "no active runs", which the archived
+// project-delete-run-guard change's invariant ("never fail open into
+// deletion") already established for the in-memory-only check this extends.
+func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	var ids []int
+	ids := make(map[int]struct{})
 	for id, entry := range s.active {
 		if entry.project == projectName {
-			ids = append(ids, id)
+			ids[id] = struct{}{}
 		}
 	}
-	sort.Ints(ids)
-	return ids
+	s.mu.Unlock()
+
+	if s.remoteJobStore != nil {
+		remoteIDs, err := s.remoteJobStore.OutstandingJobRunIDsForProject(projectName)
+		if err != nil {
+			return nil, fmt.Errorf("check outstanding remote jobs for %q: %w", projectName, err)
+		}
+		for _, id := range remoteIDs {
+			ids[id] = struct{}{}
+		}
+	}
+
+	out := make([]int, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Ints(out)
+	return out, nil
 }
 
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+	if opts.Mode == "remote" && s.remoteJobStore != nil {
+		// No in-process execution at all for a remote-mode project: no
+		// goroutine, no active/done entry, no concurrency slot - see
+		// design.md D10 and tasks.md 2.3/2.4.
+		return s.startRemote(projectName, proj, changed, opts)
+	}
 	if s.pipeline == nil {
 		return 0, fmt.Errorf("pipeline runner not configured")
 	}
@@ -637,6 +693,17 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 	if !hasEntry || !hasDone {
 		if s.runStore == nil {
 			return fmt.Errorf("runs not supported")
+		}
+		// A remote-mode run never registers an active/done entry (design.md
+		// D10), so it always takes this branch - no mode-conditional is
+		// added here. Marking its remaining pending jobs unclaimable is
+		// harmless (a no-op) for a run with no remote_jobs rows at all;
+		// this call never waits for a claimed/running job, since no stop
+		// signal exists (D8) - see tasks.md 4.3.
+		if s.remoteJobStore != nil {
+			if err := s.remoteJobStore.CancelJobsForRun(runID); err != nil {
+				return fmt.Errorf("cancel remote jobs for run %d: %w", runID, err)
+			}
 		}
 		changed, err := s.runStore.CancelRun(runID, actor)
 		if err != nil {
@@ -896,20 +963,31 @@ func (s *RunService) trackActive(ctx context.Context, runID int, projectName str
 // task's process (via the runner's process-group wiring) instead of only
 // rewriting the run's status in the store; see cancel-kills-task-process
 // design.md D1/D2. The single-task re-run route uses StartTask instead.
-func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+//
+// dispatched is true when opts.Mode is "remote" and this call handed
+// taskName to a runner instead of executing it - see design.md D10. A
+// caller that finalizes the run from this method's return (as
+// finishStartedTask does for StartTask's path) MUST NOT do so when
+// dispatched is true: the run stays open for the runner's own completion
+// report to finalize instead.
+func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (tr domain.TaskResult, dispatched bool, err error) {
 	if proj == nil {
-		return domain.TaskResult{}, fmt.Errorf("project not loaded")
+		return domain.TaskResult{}, false, fmt.Errorf("project not loaded")
+	}
+	if opts.Mode == "remote" && s.remoteJobStore != nil {
+		return s.dispatchSingleTask(runID, proj, taskName, opts)
 	}
 	if s.taskRunner == nil {
-		return domain.TaskResult{}, fmt.Errorf("task runner not configured")
+		return domain.TaskResult{}, false, fmt.Errorf("task runner not configured")
 	}
 	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	defer untrack()
 	if !s.acquireSlot(runCtx, runID) {
-		return domain.TaskResult{}, fmt.Errorf("run %d canceled while queued", runID)
+		return domain.TaskResult{}, false, fmt.Errorf("run %d canceled while queued", runID)
 	}
 	defer s.releaseSlot()
-	return s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+	tr, err = s.runTaskInternal(runCtx, runID, projectName, proj, taskName, opts)
+	return tr, false, err
 }
 
 // StartTask is RunTask's asynchronous counterpart, used by the single-task
@@ -921,6 +999,13 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 func (s *RunService) StartTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (queued bool, err error) {
 	if proj == nil {
 		return false, fmt.Errorf("project not loaded")
+	}
+	if opts.Mode == "remote" && s.remoteJobStore != nil {
+		// Dispatched synchronously, like Start's own remote branch
+		// (design.md D10): no active/done entry, no concurrency slot, no
+		// goroutine - there is nothing here for executeStartedTask to do.
+		_, _, err := s.dispatchSingleTask(runID, proj, taskName, opts)
+		return false, err
 	}
 	if s.taskRunner == nil {
 		return false, fmt.Errorf("task runner not configured")
@@ -1127,7 +1212,8 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	}
 
 	slog.Info("manual task approved", "run_id", runID, "project", projectName, "account", opts.Actor, "task", taskName)
-	return s.RunTask(ctx, runID, projectName, proj, taskName, opts)
+	tr, _, err := s.RunTask(ctx, runID, projectName, proj, taskName, opts)
+	return tr, err
 }
 
 // WebhookService handles webhook event processing.

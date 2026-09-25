@@ -57,7 +57,11 @@ func resolveUserDBURL(flagValue string) string {
 // connection is not explicitly closed: the process exits immediately after
 // its one command runs, and the OS reclaims it.
 func openUserStore(dbURL string) *store.PGStore {
-	pg, err := store.NewPG(dbURL)
+	// This CLI never creates or reads a project, so the schema's mode
+	// backfill default is moot here - it only ever touches existing project
+	// rows, and none exist yet on the fresh databases this command's own
+	// callers (first-admin setup) run against.
+	pg, err := store.NewPG(dbURL, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect to database: %v\n", err)
 		os.Exit(1)
