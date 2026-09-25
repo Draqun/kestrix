@@ -415,22 +415,17 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 	return count, nil
 }
 
-// ApplyTaskResult appends a task result and recomputes overall run status,
-// returning that status so the caller can detect a terminal outcome
-// (passed/failed/canceled) without a separate GetRun call - see REVIEW.md R1.
-func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (string, error) {
-	run, err := s.GetRun(id)
-	if err != nil || run == nil {
-		return "", fmt.Errorf("run not found")
-	}
-	results := append(run.TaskResults, tr)
-	// Latest status per task name.
+// computeRunStatus derives an overall run status from the latest result per
+// task name in results (last entry for a name wins), the same rule
+// ApplyTaskResult and CompleteJob both need applied to their own snapshot of
+// a run's task_results. It never returns "running" unless at least one task
+// is still manual/pending/running.
+func computeRunStatus(results []TaskResult) (status, errMsg string) {
 	latest := make(map[string]TaskResult)
 	for _, r := range results {
 		latest[r.Name] = r
 	}
-	status := "passed"
-	errMsg := ""
+	status = "passed"
 	canExecute := false
 	failed := false
 	canceled := false
@@ -461,6 +456,19 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (st
 	if failed && errMsg == "" {
 		errMsg = "task failed"
 	}
+	return status, errMsg
+}
+
+// ApplyTaskResult appends a task result and recomputes overall run status,
+// returning that status so the caller can detect a terminal outcome
+// (passed/failed/canceled) without a separate GetRun call - see REVIEW.md R1.
+func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (string, error) {
+	run, err := s.GetRun(id)
+	if err != nil || run == nil {
+		return "", fmt.Errorf("run not found")
+	}
+	results := append(run.TaskResults, tr)
+	status, errMsg := computeRunStatus(results)
 	out := run.Output
 	if outputExtra != "" {
 		if out != "" && !strings.HasSuffix(out, "\n") {

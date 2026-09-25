@@ -176,6 +176,13 @@ func (m *MockProjectStore) List() ([]string, error) {
 
 // MockRunStore records calls for RunService tests.
 type MockRunStore struct {
+	// MockRemoteJobStore and MockRunnerStore are embedded so MockRunStore
+	// satisfies domain.RemoteJobStore and domain.RunnerStore too, mirroring
+	// PGStore's real shape (one adapter implementing every port over the
+	// same database) - see remote-runner-registration.
+	MockRemoteJobStore
+	MockRunnerStore
+
 	mu              sync.Mutex
 	CreateRunCalls  []createRunCall
 	CreateRunID     int
@@ -561,3 +568,203 @@ func (m *MockWebhookLogSink) CountWebhookEvents(filter domain.WebhookEventFilter
 	}
 	return len(m.matching(filter)), nil
 }
+
+// MockRemoteJobStore records calls and returns configurable values for
+// domain.RemoteJobStore; see remote-runner-registration.
+type MockRemoteJobStore struct {
+	mu sync.Mutex
+
+	CreateRemoteJobCalls []CreateRemoteJobCall
+	CreateRemoteJobErr   error
+	nextJobID            int
+
+	ClaimNextJobResult *domain.RemoteJob
+	ClaimNextJobErr    error
+
+	Jobs            map[int]*domain.RemoteJob
+	GetRemoteJobErr error
+
+	AppendJobTraceOK  bool
+	AppendJobTraceErr error
+
+	CompleteJobOK    bool
+	CompleteJobErr   error
+	CompleteJobCalls []CompleteJobCall
+
+	PendingOrClaimedIDs        []int
+	PendingOrClaimedErr        error
+	CancelJobsForRunErr        error
+	CancelJobsForRunCalls      []int
+	ReclaimedCount             int
+	ReclaimedFailed            int
+	ReclaimErr                 error
+	reclaimCalls               int
+	OutstandingJobRunIDsResult []int
+	OutstandingJobRunIDsErr    error
+
+	snapshots                 map[int]remoteRunSnapshotMock
+	SetRemoteRunSnapshotErr   error
+	SetRemoteRunSnapshotCalls int
+	GetRemoteRunSnapshotErr   error
+}
+
+// CreateRemoteJobCall records one CreateRemoteJob invocation.
+type CreateRemoteJobCall struct {
+	RunID    int
+	TaskName string
+	Payload  domain.RemoteJobPayload
+}
+
+// CompleteJobCall records one CompleteJob invocation.
+type CompleteJobCall struct {
+	JobID          int
+	Epoch          int
+	Status         string
+	Output         string
+	CallerRunnerID *int
+	MaxOutputBytes int
+}
+
+func (m *MockRemoteJobStore) CreateRemoteJob(runID int, taskName string, payload domain.RemoteJobPayload) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CreateRemoteJobCalls = append(m.CreateRemoteJobCalls, CreateRemoteJobCall{RunID: runID, TaskName: taskName, Payload: payload})
+	if m.CreateRemoteJobErr != nil {
+		return 0, m.CreateRemoteJobErr
+	}
+	m.nextJobID++
+	return m.nextJobID, nil
+}
+
+func (m *MockRemoteJobStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
+	return m.ClaimNextJobResult, m.ClaimNextJobErr
+}
+
+func (m *MockRemoteJobStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) {
+	if m.GetRemoteJobErr != nil {
+		return nil, m.GetRemoteJobErr
+	}
+	if m.Jobs == nil {
+		return nil, nil
+	}
+	return m.Jobs[jobID], nil
+}
+
+func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
+	return m.AppendJobTraceOK, m.AppendJobTraceErr
+}
+
+func (m *MockRemoteJobStore) CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CompleteJobCalls = append(m.CompleteJobCalls, CompleteJobCall{JobID: jobID, Epoch: epoch, Status: status, Output: output, CallerRunnerID: callerRunnerID, MaxOutputBytes: maxOutputBytes})
+	return m.CompleteJobOK, m.CompleteJobErr
+}
+
+func (m *MockRemoteJobStore) PendingOrClaimedJobIDsForRun(runID int) ([]int, error) {
+	return m.PendingOrClaimedIDs, m.PendingOrClaimedErr
+}
+
+func (m *MockRemoteJobStore) CancelJobsForRun(runID int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CancelJobsForRunCalls = append(m.CancelJobsForRunCalls, runID)
+	return m.CancelJobsForRunErr
+}
+
+func (m *MockRemoteJobStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, error) {
+	m.mu.Lock()
+	m.reclaimCalls++
+	m.mu.Unlock()
+	return m.ReclaimedCount, m.ReclaimedFailed, m.ReclaimErr
+}
+
+// ReclaimCallCount returns the number of recorded ReclaimStaleJobs calls,
+// synchronized so a test can poll it from another goroutine (a background
+// reclaim loop).
+func (m *MockRemoteJobStore) ReclaimCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reclaimCalls
+}
+
+// CompleteJobCallCount returns the number of recorded CompleteJob calls,
+// synchronized so a test can poll it from another goroutine (for example a
+// background runPollLoop) without racing CompleteJob's own append to
+// CompleteJobCalls.
+func (m *MockRemoteJobStore) CompleteJobCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.CompleteJobCalls)
+}
+
+func (m *MockRemoteJobStore) OutstandingJobRunIDsForProject(projectName string) ([]int, error) {
+	return m.OutstandingJobRunIDsResult, m.OutstandingJobRunIDsErr
+}
+
+func (m *MockRemoteJobStore) SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.snapshots == nil {
+		m.snapshots = make(map[int]remoteRunSnapshotMock)
+	}
+	m.snapshots[runID] = remoteRunSnapshotMock{archive: archive, variables: variables}
+	m.SetRemoteRunSnapshotCalls++
+	return m.SetRemoteRunSnapshotErr
+}
+
+func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.GetRemoteRunSnapshotErr != nil {
+		return nil, nil, m.GetRemoteRunSnapshotErr
+	}
+	snap, ok := m.snapshots[runID]
+	if !ok {
+		return nil, nil, nil
+	}
+	return snap.archive, snap.variables, nil
+}
+
+// remoteRunSnapshotMock is MockRemoteJobStore's in-memory stand-in for the
+// runs.remote_snapshot column.
+type remoteRunSnapshotMock struct {
+	archive   []byte
+	variables map[string]map[string]string
+}
+
+var _ domain.RemoteJobStore = (*MockRemoteJobStore)(nil)
+
+// MockRunnerStore records calls and returns configurable values for
+// domain.RunnerStore; see remote-runner-registration.
+type MockRunnerStore struct {
+	mu sync.Mutex
+
+	CreateRunnerID    int
+	CreateRunnerToken string
+	CreateRunnerErr   error
+
+	AuthenticateRunnerID  int
+	AuthenticateRunnerOK  bool
+	AuthenticateRunnerErr error
+
+	RevokeRunnerErr   error
+	RevokeRunnerCalls []int
+}
+
+func (m *MockRunnerStore) CreateRunner(name string) (int, string, error) {
+	return m.CreateRunnerID, m.CreateRunnerToken, m.CreateRunnerErr
+}
+
+func (m *MockRunnerStore) AuthenticateRunner(token string) (int, bool, error) {
+	return m.AuthenticateRunnerID, m.AuthenticateRunnerOK, m.AuthenticateRunnerErr
+}
+
+func (m *MockRunnerStore) RevokeRunner(id int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.RevokeRunnerCalls = append(m.RevokeRunnerCalls, id)
+	return m.RevokeRunnerErr
+}
+
+var _ domain.RunnerStore = (*MockRunnerStore)(nil)

@@ -16,13 +16,14 @@ Triggers GitLab pipelines from the command line or from within a Kestrix task ex
 
 ## Runner
 
-Executes pipeline tasks in one of three modes:
+Executes pipeline tasks in one of four modes, set per project:
 
 | Mode | Description |
 |------|-------------|
 | `local` (default) | Runs tasks as bash subprocesses on the host |
 | `docker` | Executes each task in a Docker container |
 | `gitlab-runner` | Delegates execution to a GitLab Runner |
+| `remote` | Dispatches each task as a job for a registered runner to claim and execute on a separate machine - see [`remote-runners.md`](remote-runners.md) |
 
 Pipeline definitions are untrusted input, trusted only as far as the least
 trusted committer of the repository they are read from - anyone who can push
@@ -61,6 +62,21 @@ escalation disabled, and bounded resources by default:
 Kestrix never mounts the Docker socket or passes `--privileged` into a task
 container.
 
+### Remote mode
+
+On a `remote`-mode project, a single-task re-run and an approved manual gate
+dispatch a job to a runner rather than executing on the Kestrix host -
+asynchronous, no local process. An approval does not mean the task has
+started: it means a job now exists for a runner to claim, which may not
+happen until a runner next polls.
+
+A `remote`-mode run's trace may interleave two tasks' lines unpredictably.
+Every other mode has one sequential writer owning a run's output, so its
+lines stay in execution order; `remote` mode can have two jobs of one run
+streaming from two different runners at the same time, and only that no
+output is lost is guaranteed - not the order two concurrent tasks' lines
+appear in.
+
 ### Cancellation
 
 Cancelling a run terminates its executing task before the run is recorded as
@@ -70,6 +86,20 @@ process group SIGTERM, then SIGKILL after `KESTRIX_RUNNER_CANCEL_GRACE`
 grace period. A run whose task cannot be confirmed terminated within grace
 plus 5s stays `running` and the cancel request fails, rather than reporting
 `canceled` while the task keeps executing.
+
+`remote` mode cancels differently: Kestrix has no inbound channel to a
+runner (it only ever polls outbound - the whole point of working from
+behind NAT), so there is no way to send a stop signal. Cancelling a
+`remote`-mode run marks it `canceled` immediately, without waiting on any
+`claimed`/`running` job the way the grace-period wait above does - but a
+task already running on a runner keeps running to completion there. That
+process's late output still arrives over the runner-job protocol and is
+still stored, but it does not reopen the run, change its `canceled` status,
+or supersede the `canceled` task result already recorded. This is a
+deliberate carve-out on the `task-execution-isolation` capability's
+"Cancellation terminates task processes" requirement (see that spec's
+MODIFIED delta) and is specified in full under `remote-runner-execution`'s
+"Cancelling a remote-mode run".
 
 `local` mode still runs task scripts as the Kestrix service account; the
 allowlist removes the obvious secrets from its environment, but it does not

@@ -76,7 +76,7 @@ func TestNewServerERequiresExplicitJWTSigningKeyPath(t *testing.T) {
 func TestNewServerERejectsInvalidJWTSigningKeyBeforeDatabase(t *testing.T) {
 	called := false
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		called = true
 		return nil, nil, errors.New("should not connect")
 	}
@@ -100,7 +100,7 @@ func TestNewServerETokensSurviveRestart(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -133,7 +133,7 @@ func TestNewServerETokensSurviveRestart(t *testing.T) {
 func TestNewServerERejectsInvalidMasterKeyBeforeDatabase(t *testing.T) {
 	called := false
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		called = true
 		return nil, nil, errors.New("should not connect")
 	}
@@ -155,7 +155,7 @@ func TestNewServerERejectsInvalidMasterKeyBeforeDatabase(t *testing.T) {
 
 func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return nil, nil, errors.New("ping database postgres://user:secret@example.invalid/db?sslmode=disable failed")
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -173,7 +173,7 @@ func TestNewServerERejectsDatabaseFailureBeforeServing(t *testing.T) {
 }
 
 func TestNewPGStoresRedactsUnavailableDatabase(t *testing.T) {
-	if _, _, err := newPGStores("postgres://127.0.0.1:1/nope?connect_timeout=1"); err == nil {
+	if _, _, err := newPGStores("postgres://127.0.0.1:1/nope?connect_timeout=1", "local"); err == nil {
 		t.Fatal("expected database connection error")
 	}
 }
@@ -182,7 +182,7 @@ func TestNewServerEWiresPostgreSQLStores(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -209,7 +209,7 @@ func TestNewServerEWiresRunConcurrencyAndOutputBound(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -241,7 +241,7 @@ func TestServer_FailInterruptedRuns_MatchesProductionSequence(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{FailInterruptedResult: 3}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -267,7 +267,7 @@ func TestNewServerEWiresLoginThrottleWhenConfigured(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -297,7 +297,7 @@ func TestNewServerELeavesLoginThrottleNilWhenUnconfigured(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -337,7 +337,7 @@ func TestNewServerEWiresUserAndGrantStoresWhenSupported(t *testing.T) {
 		errGrantStore:    newErrGrantStore(),
 	}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
 	t.Cleanup(func() { newPGStores = old })
 
 	s, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
@@ -359,7 +359,7 @@ func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &mocks.MockRunStore{}
 	oldStores, oldSource := newPGStores, newSourceSessionManager
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return projectStore, runStore, nil }
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) { return projectStore, runStore, nil }
 	t.Cleanup(func() {
 		newPGStores, newSourceSessionManager = oldStores, oldSource
 	})

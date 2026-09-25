@@ -303,7 +303,7 @@ func TestNewServerEWiresWebhookHistory(t *testing.T) {
 	}
 	runStore := &mocks.MockRunStore{}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })
@@ -345,7 +345,7 @@ func TestNewServerEWiresRunHistoryLimit(t *testing.T) {
 	projectStore := &mocks.MockProjectStore{}
 	runStore := &runHistoryAwareStore{MockRunStore: &mocks.MockRunStore{}}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) {
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
 		return projectStore, runStore, nil
 	}
 	t.Cleanup(func() { newPGStores = old })

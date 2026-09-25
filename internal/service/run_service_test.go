@@ -366,7 +366,18 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 	// The panic-recovery path records its own metric directly (it returns
 	// before executeRun's normal finishRun call), so this is a separate
 	// assertion from the metric recorded on the ordinary completion path.
+	// finishRun records the metric just after FinishRun returns, and
+	// FinishRunCh closes inside FinishRun, so wait for the record itself.
+	deadline := time.After(3 * time.Second)
 	runs := rec.snapshot()
+	for len(runs) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for the run to be recorded")
+		case <-time.After(time.Millisecond):
+		}
+		runs = rec.snapshot()
+	}
 	if len(runs) != 1 || runs[0].status != "failed" || runs[0].project != "proj" {
 		t.Fatalf("recorded runs = %+v, want exactly one failed/proj entry", runs)
 	}
@@ -434,7 +445,7 @@ func TestRunService_Start_RejectsNilProject(t *testing.T) {
 
 func TestRunService_RunTask_RejectsNilTaskRunner(t *testing.T) {
 	svc := NewRunService(nil, &emptyTaskRunner{}, nil)
-	_, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
+	_, _, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error for nil task runner")
 	}
@@ -458,7 +469,7 @@ func TestRunService_RunTask_Success(t *testing.T) {
 	}
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
 
-	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
+	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -474,7 +485,7 @@ func TestRunService_RunTask_ErrorWithoutStatus(t *testing.T) {
 	mockRun := &mocks.MockRunStore{}
 	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
 
-	tr, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
+	tr, _, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -497,7 +508,7 @@ func TestRunService_RunTask_TruncatesOversizedTaskOutput(t *testing.T) {
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
 	svc.MaxOutputBytes = 10
 
-	tr, err := svc.RunTask(context.Background(), 1, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{})
+	tr, _, err := svc.RunTask(context.Background(), 1, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -522,7 +533,7 @@ func TestRunService_RunTask_StampsApproverOnTerminalEntry(t *testing.T) {
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
 
 	before := time.Now()
-	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{Actor: "user:alice"})
+	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{Actor: "user:alice"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -552,7 +563,7 @@ func TestRunService_RunTask_EmptyActorLeavesApprovalUnset(t *testing.T) {
 	}
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
 
-	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
+	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -796,7 +807,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("workspace cleanup", func(t *testing.T) {
 		cleaned := 0
 		runner := &mocks.MockPipelineRunner{}
-		_, err := NewRunService(nil, runner, runner).RunTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := NewRunService(nil, runner, runner).RunTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			SourcesPrepared: true, WorkspaceCleanup: func() { cleaned++ },
 		})
 		if err != nil || cleaned != 1 {
@@ -807,7 +818,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("persist source failure", func(t *testing.T) {
 		store := &runSourceMock{MockRunStore: &mocks.MockRunStore{}, sourceErr: errors.New("persist failed")}
 		runner := &mocks.MockPipelineRunner{}
-		_, err := NewRunService(store, runner, runner).RunTask(context.Background(), 2, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{})
+		_, _, err := NewRunService(store, runner, runner).RunTask(context.Background(), 2, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{})
 		if err == nil || !strings.Contains(err.Error(), "persist run sources") {
 			t.Fatalf("error = %v", err)
 		}
@@ -816,7 +827,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("pin failure rolls back", func(t *testing.T) {
 		manager := &sourceSessionTracker{pinErr: errors.New("pin failed")}
 		runner := &mocks.MockPipelineRunner{}
-		_, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 3, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{SourceSessions: manager})
+		_, _, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 3, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{SourceSessions: manager})
 		if err == nil || !strings.Contains(err.Error(), "pin run sources") || len(manager.releases) != 1 {
 			t.Fatalf("error=%v releases=%v", err, manager.releases)
 		}
@@ -825,7 +836,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("previous callback failure", func(t *testing.T) {
 		previousErr := errors.New("callback failed")
 		runner := &mocks.MockPipelineRunner{}
-		_, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 4, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 4, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			OnSourcesAcquired: func([]domain.AcquiredSource) error { return previousErr },
 		})
 		if err == nil || !strings.Contains(err.Error(), previousErr.Error()) {
@@ -837,7 +848,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 		store := &mocks.MockRunStore{GetRunResult: &domain.Run{TaskResults: []domain.TaskResult{{Name: "task", Status: "passed"}}}}
 		manager := &sourceSessionTracker{}
 		runner := &mocks.MockPipelineRunner{}
-		_, err := NewRunService(store, runner, runner).RunTask(context.Background(), 5, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := NewRunService(store, runner, runner).RunTask(context.Background(), 5, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			SourcesPrepared: true, SourceSessions: manager,
 		})
 		if err != nil || len(manager.releases) != 1 || manager.releases[0] != 5 {
@@ -848,7 +859,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 
 func TestRunService_RunTask_NilProject(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	if _, err := svc.RunTask(context.Background(), 0, "proj", nil, "manual", domain.RunnerOptions{}); err == nil {
+	if _, _, err := svc.RunTask(context.Background(), 0, "proj", nil, "manual", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -994,7 +1005,7 @@ func TestRunService_RunTask_RegistersActiveRunAndRemovesItOnCompletion(t *testin
 	const runID = 71
 	retCh := make(chan error, 1)
 	go func() {
-		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		_, _, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
 		retCh <- err
 	}()
 
@@ -1173,7 +1184,7 @@ func TestRunService_Cancel_TerminatesActiveRunTask(t *testing.T) {
 
 	runTaskErrCh := make(chan error, 1)
 	go func() {
-		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		_, _, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
 		runTaskErrCh <- err
 	}()
 
@@ -1238,7 +1249,7 @@ func TestRunService_Cancel_PersistsCanceledByWhenRunTaskLosesTheRace(t *testing.
 
 	runTaskErrCh := make(chan error, 1)
 	go func() {
-		_, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
+		_, _, err := svc.RunTask(context.Background(), runID, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{SourcesPrepared: true})
 		runTaskErrCh <- err
 	}()
 
@@ -1704,6 +1715,17 @@ func (r *twoSlotBlockRunner) RunTask(context.Context, domain.Project, string, do
 	return domain.TaskResult{}, nil
 }
 
+// activeRunIDs wraps ActiveRunIDsForProject for tests that never expect its
+// store-backed remote-job check to fail.
+func activeRunIDs(t *testing.T, svc *RunService, name string) []int {
+	t.Helper()
+	ids, err := svc.ActiveRunIDsForProject(name)
+	if err != nil {
+		t.Fatalf("ActiveRunIDsForProject(%q): %v", name, err)
+	}
+	return ids
+}
+
 func TestRunService_ActiveRunIDsForProject_TracksConcurrentRuns(t *testing.T) {
 	store := &seqRunStore{}
 	runner := &twoSlotBlockRunner{
@@ -1734,21 +1756,21 @@ func TestRunService_ActiveRunIDsForProject_TracksConcurrentRuns(t *testing.T) {
 		}
 	}
 
-	got := svc.ActiveRunIDsForProject("proj")
+	got := activeRunIDs(t, svc, "proj")
 	if len(got) != 2 {
 		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want 2 entries", got)
 	}
 	if got[0] != min(id1, id2) || got[1] != max(id1, id2) {
 		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want %d and %d in ascending order", got, id1, id2)
 	}
-	if forOther := svc.ActiveRunIDsForProject("other"); len(forOther) != 0 {
+	if forOther := activeRunIDs(t, svc, "other"); len(forOther) != 0 {
 		t.Fatalf("ActiveRunIDsForProject(other) = %v, want empty", forOther)
 	}
 
 	close(runner.release1)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		got = svc.ActiveRunIDsForProject("proj")
+		got = activeRunIDs(t, svc, "proj")
 		if len(got) == 1 && (got[0] == id1 || got[0] == id2) {
 			break
 		}
@@ -1761,11 +1783,11 @@ func TestRunService_ActiveRunIDsForProject_TracksConcurrentRuns(t *testing.T) {
 	close(runner.release2)
 	deadline = time.Now().Add(3 * time.Second)
 	for {
-		if len(svc.ActiveRunIDsForProject("proj")) == 0 {
+		if len(activeRunIDs(t, svc, "proj")) == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after completing both runs, ActiveRunIDsForProject(proj) = %v, want empty", svc.ActiveRunIDsForProject("proj"))
+			t.Fatalf("after completing both runs, ActiveRunIDsForProject(proj) = %v, want empty", activeRunIDs(t, svc, "proj"))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1797,10 +1819,10 @@ func TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun(t *testing.T) {
 		t.Fatal("timeout waiting for the task to start")
 	}
 
-	if got := svc.ActiveRunIDsForProject("proj"); len(got) != 1 || got[0] != 7 {
+	if got := activeRunIDs(t, svc, "proj"); len(got) != 1 || got[0] != 7 {
 		t.Fatalf("ActiveRunIDsForProject(proj) = %v, want [7]", got)
 	}
-	if got := svc.ActiveRunIDsForProject("other"); len(got) != 0 {
+	if got := activeRunIDs(t, svc, "other"); len(got) != 0 {
 		t.Fatalf("ActiveRunIDsForProject(other) = %v, want empty", got)
 	}
 
@@ -1810,7 +1832,7 @@ func TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout waiting for RunTask to return")
 	}
-	if got := svc.ActiveRunIDsForProject("proj"); len(got) != 0 {
+	if got := activeRunIDs(t, svc, "proj"); len(got) != 0 {
 		t.Fatalf("after the task returned, ActiveRunIDsForProject(proj) = %v, want empty", got)
 	}
 }
@@ -2095,7 +2117,7 @@ func TestRunService_RunTask_CanceledWhileQueued(t *testing.T) {
 	const runID = 55
 	runTaskErrCh := make(chan error, 1)
 	go func() {
-		_, err := svc.RunTask(context.Background(), runID, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
+		_, _, err := svc.RunTask(context.Background(), runID, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
 		runTaskErrCh <- err
 	}()
 
@@ -2182,7 +2204,7 @@ func TestRunService_RunTask_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
 
 	runTaskErrCh := make(chan error, 1)
 	go func() {
-		_, err := svc.RunTask(context.Background(), 56, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
+		_, _, err := svc.RunTask(context.Background(), 56, "p", &model.Project{Name: "p"}, "single", domain.RunnerOptions{SourcesPrepared: true})
 		runTaskErrCh <- err
 	}()
 

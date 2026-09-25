@@ -482,7 +482,7 @@ func TestStaticRouterAndStoreFallback(t *testing.T) {
 	_ = NewServer(Config{DatabaseURL: "postgres://127.0.0.1:1/nope?sslmode=disable", StorePath: filepath.Join(t.TempDir(), "projects.json")})
 	ps, rs := &mocks.MockProjectStore{}, &mocks.MockRunStore{}
 	oldPG := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return ps, rs, nil }
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) { return ps, rs, nil }
 	t.Cleanup(func() { newPGStores = oldPG })
 	gotPS, gotRS, err := initStores(Config{DatabaseURL: "fake", MasterKeyPath: validMasterKeyPath(t)})
 	if err != nil {

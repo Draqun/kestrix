@@ -34,6 +34,33 @@ func TestProjectService_Create_MissingRepo(t *testing.T) {
 	}
 }
 
+// TestProjectService_Create_RejectsUnrecognizedMode pins
+// remote-runner-registration tasks.md 2.1: only local/docker/gitlab-runner/
+// remote (or empty, deferred to the store's default) are accepted.
+func TestProjectService_Create_RejectsUnrecognizedMode(t *testing.T) {
+	mock := &mocks.MockProjectStore{}
+	svc := NewProjectService(mock)
+
+	err := svc.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: "banana"})
+	if err == nil || !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for an unrecognized mode, got %v", err)
+	}
+	if len(mock.UpsertCalls) != 0 {
+		t.Fatalf("expected Upsert not called, got %d calls", len(mock.UpsertCalls))
+	}
+}
+
+func TestProjectService_Create_AcceptsEveryRecognizedMode(t *testing.T) {
+	for _, mode := range []string{"", "local", "docker", "gitlab-runner", "remote"} {
+		mock := &mocks.MockProjectStore{}
+		svc := NewProjectService(mock)
+		err := svc.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: mode})
+		if err != nil {
+			t.Fatalf("mode %q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
 func TestProjectService_CreateRejectsInvalidRemoteForms(t *testing.T) {
 	for _, cfg := range []*domain.ProjectConfig{
 		{Name: "x", RepoURL: "https://git.example/x.git"},

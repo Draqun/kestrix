@@ -43,14 +43,16 @@ func testPG(t *testing.T) *PGStore {
 		}
 	}
 
-	pg, err := NewPG(dbURL)
+	pg, err := NewPG(dbURL, "local")
 	if err != nil {
 		t.Skipf("PostgreSQL not available: %v", err)
 	}
 	pg.db.Exec(`DELETE FROM webhook_events`)
 	t.Cleanup(func() {
 		pg.db.Exec(`DELETE FROM webhook_events`)
+		pg.db.Exec(`DELETE FROM remote_jobs`)
 		pg.db.Exec(`DELETE FROM runs`)
+		pg.db.Exec(`DELETE FROM runners`)
 		pg.db.Exec(`DELETE FROM project_members`)
 		pg.db.Exec(`DELETE FROM users`)
 		pg.db.Exec(`DELETE FROM credentials`)
@@ -149,12 +151,12 @@ func TestPG_MigrationPreflightNamesLegacyLocalProjects(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = pg.db.Exec(`DELETE FROM projects WHERE name = 'legacy-local-project'`)
-		if err := migrate(pg.db); err != nil {
+		if err := migrate(pg.db, "local"); err != nil {
 			t.Errorf("restore remote schema: %v", err)
 		}
 	})
 
-	err = migrate(pg.db)
+	err = migrate(pg.db, "local")
 	if err == nil {
 		t.Fatal("expected migration preflight failure")
 	}
@@ -1554,14 +1556,14 @@ func TestPG_PruneRuns_NonPositiveLimitFallsBackToDefault(t *testing.T) {
 // ── NewPG error paths ──────────────────────────────────────────────
 
 func TestPG_NewPG_BadURL(t *testing.T) {
-	_, err := NewPG("not-a-valid-url")
+	_, err := NewPG("not-a-valid-url", "local")
 	if err == nil {
 		t.Fatal("expected error for invalid database URL")
 	}
 }
 
 func TestPG_NewPG_ConnectionFailed(t *testing.T) {
-	_, err := NewPG("postgres://kestrix:kestrix@localhost:54309/nonexistent?sslmode=disable&connect_timeout=2")
+	_, err := NewPG("postgres://kestrix:kestrix@localhost:54309/nonexistent?sslmode=disable&connect_timeout=2", "local")
 	if err == nil {
 		t.Fatal("expected error for unreachable database")
 	}

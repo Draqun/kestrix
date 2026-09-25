@@ -220,10 +220,17 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
-	// ActiveRunIDsForProject reads the projects recorded in the
-	// in-memory active set, so the guard needs no store lookup and cannot
-	// fail open into a delete.
-	if blocking := s.runService.ActiveRunIDsForProject(name); len(blocking) > 0 {
+	// ActiveRunIDsForProject unions the in-memory active set with a
+	// store-backed check for outstanding remote-mode jobs (design.md D10),
+	// which by design have no in-memory entry to catch them. A query error
+	// fails closed - refusing the delete - rather than open, the same
+	// invariant the in-memory-only version of this guard established.
+	blocking, err := s.runService.ActiveRunIDsForProject(name)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "could not verify the project has no runs in flight; try again")
+		return
+	}
+	if len(blocking) > 0 {
 		writeError(w, http.StatusConflict, fmt.Sprintf("project %q has active run(s) %v; cancel the run(s) first", name, blocking))
 		return
 	}

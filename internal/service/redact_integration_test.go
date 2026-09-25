@@ -118,7 +118,7 @@ func TestRunService_RunTask_RedactsApplyTaskResultOutputExtra(t *testing.T) {
 	}
 	svc := NewRunService(mockRun, mockRunner, mockRunner)
 
-	tr, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual",
+	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual",
 		domain.RunnerOptions{ResolvedSecretValues: []string{secret}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

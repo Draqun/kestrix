@@ -245,7 +245,7 @@ func (c *combinedCredentialStore) SetCredentialMasterKeyProvider(provider creden
 func TestServerWiresCredentialStoreAndMasterKeyPath(t *testing.T) {
 	combined := &combinedCredentialStore{MockProjectStore: &mocks.MockProjectStore{}, MockRunStore: &mocks.MockRunStore{}, fakeCredentialStore: &fakeCredentialStore{items: map[string]domain.CredentialMetadata{}}}
 	old := newPGStores
-	newPGStores = func(string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) { return combined, combined, nil }
 	t.Cleanup(func() { newPGStores = old })
 	s, err := NewServerE(Config{DatabaseURL: "postgres://test", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)})
 	if err != nil {

@@ -31,7 +31,7 @@ func sourceNames(sources []domain.ProjectSource) []string {
 func TestMigrateSourcesSchemaIsIdempotent(t *testing.T) {
 	pg := testPG(t)
 	for i := 0; i < 2; i++ {
-		if err := migrate(pg.db); err != nil {
+		if err := migrate(pg.db, "local"); err != nil {
 			t.Fatalf("migrate #%d: %v", i+2, err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestMigrateBackfillsPrimarySources(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		if err := migrate(pg.db); err != nil {
+		if err := migrate(pg.db, "local"); err != nil {
 			t.Fatalf("migrate: %v", err)
 		}
 		legacy, _ := pg.Get("legacy")
@@ -260,7 +260,7 @@ func TestMigrateUpgradesSchemaFromPreviousRelease(t *testing.T) {
 		}
 	}
 
-	if err := migrate(pg.db); err != nil {
+	if err := migrate(pg.db, "local"); err != nil {
 		t.Fatalf("migrate from previous schema: %v", err)
 	}
 

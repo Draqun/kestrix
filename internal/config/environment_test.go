@@ -493,6 +493,7 @@ func TestLoadEnvironmentHTTPDurationSettings(t *testing.T) {
 		{"KESTRIX_HTTP_READ_TIMEOUT", 30 * time.Second, func(e *Environment) time.Duration { return e.HTTPReadTimeout }, 30 * time.Second},
 		{"KESTRIX_HTTP_WRITE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPWriteTimeout }, 120 * time.Second},
 		{"KESTRIX_HTTP_IDLE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPIdleTimeout }, 120 * time.Second},
+		{"KESTRIX_RUNNER_JOB_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.RunnerJobTimeout }, 120 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/default", func(t *testing.T) {
@@ -537,6 +538,7 @@ func TestLoadEnvironmentHTTPBodyByteSettings(t *testing.T) {
 	}{
 		{"KESTRIX_HTTP_MAX_BODY_BYTES", func(e *Environment) int64 { return e.HTTPMaxBodyBytes }, 1048576},
 		{"KESTRIX_WEBHOOK_MAX_BODY_BYTES", func(e *Environment) int64 { return e.WebhookMaxBodyBytes }, 8388608},
+		{"KESTRIX_RUNNER_JOB_MAX_BODY_BYTES", func(e *Environment) int64 { return e.RunnerJobMaxBodyBytes }, 20971520},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/default", func(t *testing.T) {
@@ -567,5 +569,75 @@ func TestLoadEnvironmentHTTPBodyByteSettings(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestLoadEnvironmentRunnerJobMaxConcurrentPolls covers
+// KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS: default, explicit value, and
+// invalid values - see remote-runner-registration design.md D4.
+func TestLoadEnvironmentRunnerJobMaxConcurrentPolls(t *testing.T) {
+	const name = "KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS"
+	t.Run("default", func(t *testing.T) {
+		env := LoadEnvironment(nil)
+		if err := env.ValidationError(); err != nil {
+			t.Fatal(err)
+		}
+		if env.RunnerJobMaxConcurrentPolls != 2 {
+			t.Fatalf("default = %d, want 2", env.RunnerJobMaxConcurrentPolls)
+		}
+	})
+	t.Run("explicit", func(t *testing.T) {
+		env := LoadEnvironment([]string{name + "=5"})
+		if err := env.ValidationError(); err != nil {
+			t.Fatal(err)
+		}
+		if env.RunnerJobMaxConcurrentPolls != 5 {
+			t.Fatalf("= %d, want 5", env.RunnerJobMaxConcurrentPolls)
+		}
+	})
+	for _, bad := range []string{"0", "-1", "garbage"} {
+		t.Run(bad, func(t *testing.T) {
+			env := LoadEnvironment([]string{name + "=" + bad})
+			if err := env.ValidationError(); err == nil {
+				t.Fatalf("%s=%q: ValidationError() = nil, want error naming the setting", name, bad)
+			} else if !strings.Contains(err.Error(), name) {
+				t.Fatalf("%s=%q: error = %v, want it to name %s", name, bad, err, name)
+			}
+		})
+	}
+}
+
+// TestLoadEnvironmentRunnerJobMaxReclaims covers
+// KESTRIX_RUNNER_JOB_MAX_RECLAIMS: default, explicit value, and invalid
+// values - see remote-runner-registration tasks.md 4.1.
+func TestLoadEnvironmentRunnerJobMaxReclaims(t *testing.T) {
+	const name = "KESTRIX_RUNNER_JOB_MAX_RECLAIMS"
+	t.Run("default", func(t *testing.T) {
+		env := LoadEnvironment(nil)
+		if err := env.ValidationError(); err != nil {
+			t.Fatal(err)
+		}
+		if env.RunnerJobMaxReclaims != 3 {
+			t.Fatalf("default = %d, want 3", env.RunnerJobMaxReclaims)
+		}
+	})
+	t.Run("explicit", func(t *testing.T) {
+		env := LoadEnvironment([]string{name + "=7"})
+		if err := env.ValidationError(); err != nil {
+			t.Fatal(err)
+		}
+		if env.RunnerJobMaxReclaims != 7 {
+			t.Fatalf("= %d, want 7", env.RunnerJobMaxReclaims)
+		}
+	})
+	for _, bad := range []string{"0", "-1", "garbage"} {
+		t.Run(bad, func(t *testing.T) {
+			env := LoadEnvironment([]string{name + "=" + bad})
+			if err := env.ValidationError(); err == nil {
+				t.Fatalf("%s=%q: ValidationError() = nil, want error naming the setting", name, bad)
+			} else if !strings.Contains(err.Error(), name) {
+				t.Fatalf("%s=%q: error = %v, want it to name %s", name, bad, err, name)
+			}
+		})
 	}
 }

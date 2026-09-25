@@ -315,12 +315,12 @@ func TestPG_TokenVersionColumn_AddedToPreexistingSchema(t *testing.T) {
 		t.Fatalf("simulate pre-migration schema: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := migrate(pg.db); err != nil {
+		if err := migrate(pg.db, "local"); err != nil {
 			t.Errorf("restore schema: %v", err)
 		}
 	})
 
-	if err := migrate(pg.db); err != nil {
+	if err := migrate(pg.db, "local"); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 

@@ -34,6 +34,13 @@ type Environment struct {
 	DatabaseURL         string
 	MasterKeyPath       string
 	JWTSigningKeyPath   string
+	// RunnerServer, RunnerToken, and RunnerMode back `kestrix runner`
+	// (tasks.md 5.1): the Kestrix server base URL to poll, the runner's own
+	// bearer token, and its execution backend ("local" or "docker"). All
+	// three also take a --flag on that subcommand, which wins when set.
+	RunnerServer string
+	RunnerToken  string
+	RunnerMode   string
 	// IdentityCacheTTL bounds how long RequireAuth may serve an account's
 	// role and token version from cache before resolving it from the store
 	// again; see design.md D4. Zero disables the cache. Defaults to 5s.
@@ -95,6 +102,21 @@ type Environment struct {
 	// 8388608 (8 MiB).
 	HTTPMaxBodyBytes    int64
 	WebhookMaxBodyBytes int64
+	// RunnerJobMaxBodyBytes bounds a runner-job request body (the payload a
+	// runner PUTs to /complete, or PATCHes to /trace) independently of both
+	// bounds above, since a job payload carries a source archive; see
+	// remote-runner-registration design.md D4. RunnerJobMaxConcurrentPolls
+	// caps how many GET /api/runner-jobs/next long-polls one runner token
+	// may hold open at once. Defaults to 20971520 (20 MiB) and 2.
+	RunnerJobMaxBodyBytes       int64
+	RunnerJobMaxConcurrentPolls int
+	// RunnerJobTimeout and RunnerJobMaxReclaims bound silent-runner
+	// recovery (tasks.md 4.1): a "claimed"/"running" job silent for longer
+	// than RunnerJobTimeout is returned to "pending" for another runner, up
+	// to RunnerJobMaxReclaims times, after which it is failed naming the
+	// reason - see design.md D5. Defaults to 120s and 3.
+	RunnerJobTimeout     time.Duration
+	RunnerJobMaxReclaims int
 	// MetricsEnabled, MetricsToken, and LogLevel back the observability
 	// settings; see observability design.md. MetricsEnabled defaults to
 	// false, MetricsToken has no default (empty means unconfigured), and
@@ -396,6 +418,54 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	runnerJobMaxBodyBytes := int64(20971520)
+	if raw := values[Prefix+"RUNNER_JOB_MAX_BODY_BYTES"]; raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_JOB_MAX_BODY_BYTES must be a positive integer")
+			}
+		} else {
+			runnerJobMaxBodyBytes = parsed
+		}
+	}
+
+	runnerJobMaxConcurrentPolls := 2
+	if raw := values[Prefix+"RUNNER_JOB_MAX_CONCURRENT_POLLS"]; raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS must be a positive integer")
+			}
+		} else {
+			runnerJobMaxConcurrentPolls = parsed
+		}
+	}
+
+	runnerJobTimeout := 120 * time.Second
+	if raw := values[Prefix+"RUNNER_JOB_TIMEOUT"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_JOB_TIMEOUT must be a positive duration")
+			}
+		} else {
+			runnerJobTimeout = parsed
+		}
+	}
+
+	runnerJobMaxReclaims := 3
+	if raw := values[Prefix+"RUNNER_JOB_MAX_RECLAIMS"]; raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_JOB_MAX_RECLAIMS must be a positive integer")
+			}
+		} else {
+			runnerJobMaxReclaims = parsed
+		}
+	}
+
 	var metricsEnabled bool
 	if raw := values[Prefix+"METRICS_ENABLED"]; raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -426,6 +496,9 @@ func LoadEnvironment(environ []string) *Environment {
 		DispatchProject:       values[Prefix+"DISPATCH_PROJECT"],
 		GitLabURL:             values[Prefix+"GITLAB_URL"],
 		GitLabToken:           values[Prefix+"GITLAB_TOKEN"],
+		RunnerServer:          values[Prefix+"RUNNER_SERVER"],
+		RunnerToken:           values[Prefix+"RUNNER_TOKEN"],
+		RunnerMode:            values[Prefix+"RUNNER_MODE"],
 		TestDatabaseURL:       values[Prefix+"TEST_DATABASE_URL"],
 		DatabaseURL:           values["DATABASE_URL"],
 		MasterKeyPath:         values[Prefix+"MASTER_KEY_PATH"],
@@ -441,27 +514,31 @@ func LoadEnvironment(environ []string) *Environment {
 			MaxAge:    maxAge,
 			MaxBytes:  maxBytes,
 		},
-		RunnerEnvPassthrough:    runnerEnvPassthrough,
-		RunnerDockerPIDs:        runnerDockerPIDs,
-		RunnerDockerMemory:      runnerDockerMemory,
-		RunnerDockerCPUs:        runnerDockerCPUs,
-		RunnerDockerUser:        values[Prefix+"RUNNER_DOCKER_USER"],
-		RunnerDockerNetwork:     runnerDockerNetwork,
-		RunnerCancelGrace:       runnerCancelGrace,
-		RunnerMaxConcurrentRuns: runnerMaxConcurrentRuns,
-		RunHistoryLimit:         runHistoryLimit,
-		RunnerMaxOutputBytes:    runnerMaxOutputBytes,
-		HTTPReadTimeout:         httpReadTimeout,
-		HTTPWriteTimeout:        httpWriteTimeout,
-		HTTPIdleTimeout:         httpIdleTimeout,
-		HTTPMaxBodyBytes:        httpMaxBodyBytes,
-		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
-		MetricsEnabled:          metricsEnabled,
-		MetricsToken:            values[Prefix+"METRICS_TOKEN"],
-		LogLevel:                logLevel,
-		values:                  values,
-		originalEnvs:            normalized,
-		validationErr:           validationErr,
+		RunnerEnvPassthrough:        runnerEnvPassthrough,
+		RunnerDockerPIDs:            runnerDockerPIDs,
+		RunnerDockerMemory:          runnerDockerMemory,
+		RunnerDockerCPUs:            runnerDockerCPUs,
+		RunnerDockerUser:            values[Prefix+"RUNNER_DOCKER_USER"],
+		RunnerDockerNetwork:         runnerDockerNetwork,
+		RunnerCancelGrace:           runnerCancelGrace,
+		RunnerMaxConcurrentRuns:     runnerMaxConcurrentRuns,
+		RunHistoryLimit:             runHistoryLimit,
+		RunnerMaxOutputBytes:        runnerMaxOutputBytes,
+		HTTPReadTimeout:             httpReadTimeout,
+		HTTPWriteTimeout:            httpWriteTimeout,
+		HTTPIdleTimeout:             httpIdleTimeout,
+		HTTPMaxBodyBytes:            httpMaxBodyBytes,
+		WebhookMaxBodyBytes:         webhookMaxBodyBytes,
+		RunnerJobMaxBodyBytes:       runnerJobMaxBodyBytes,
+		RunnerJobMaxConcurrentPolls: runnerJobMaxConcurrentPolls,
+		RunnerJobTimeout:            runnerJobTimeout,
+		RunnerJobMaxReclaims:        runnerJobMaxReclaims,
+		MetricsEnabled:              metricsEnabled,
+		MetricsToken:                values[Prefix+"METRICS_TOKEN"],
+		LogLevel:                    logLevel,
+		values:                      values,
+		originalEnvs:                normalized,
+		validationErr:               validationErr,
 	}
 }
 

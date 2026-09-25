@@ -55,6 +55,8 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "runner":
+		cmdRunner(os.Args[2:])
 	case "variables":
 		cmdVariables(os.Args[2:])
 	case "user":
@@ -78,6 +80,7 @@ Usage:
   kestrix validate   <file.tf>
   kestrix run        [--changed repo1,repo2] [--workdir .] [--include-manual] <file.tf>
   kestrix serve      [--addr :8080] [--database-url postgres://...] [--static ../ui/dist] [--secret TOKEN] [--dispatch PROJECT_ID]
+  kestrix runner     --server https://kestrix.example.com --token TOKEN [--mode local|docker]
   kestrix variables  <file.tf> [--repo auth_service] [--job deploy] [--env staging]
   kestrix user create [--role viewer|operator|admin] <name>
   kestrix user list
@@ -173,11 +176,13 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			MaxAge:    time.Duration(cfg.SourceCache.MaxAge),
 			MaxBytes:  cfg.SourceCache.MaxBytes,
 		},
-		HTTPReadTimeout:     env.HTTPReadTimeout,
-		HTTPWriteTimeout:    env.HTTPWriteTimeout,
-		HTTPIdleTimeout:     env.HTTPIdleTimeout,
-		MaxBodyBytes:        env.HTTPMaxBodyBytes,
-		WebhookMaxBodyBytes: env.WebhookMaxBodyBytes,
+		HTTPReadTimeout:             env.HTTPReadTimeout,
+		HTTPWriteTimeout:            env.HTTPWriteTimeout,
+		HTTPIdleTimeout:             env.HTTPIdleTimeout,
+		MaxBodyBytes:                env.HTTPMaxBodyBytes,
+		WebhookMaxBodyBytes:         env.WebhookMaxBodyBytes,
+		RunnerJobMaxBodyBytes:       env.RunnerJobMaxBodyBytes,
+		RunnerJobMaxConcurrentPolls: env.RunnerJobMaxConcurrentPolls,
 		Signature: web.SignatureConfig{
 			Secret: cfg.Webhook.Secret,
 			Method: method,
@@ -191,9 +196,11 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			GitLabToken: cfg.Dispatch.GitLabToken,
 		},
 		Runner: web.RunnerConfig{
-			Mode:              cfg.Runner.Mode,
-			MaxConcurrentRuns: cfg.Runner.MaxConcurrentRuns,
-			MaxOutputBytes:    cfg.Runner.MaxOutputBytes,
+			Mode:                 cfg.Runner.Mode,
+			MaxConcurrentRuns:    cfg.Runner.MaxConcurrentRuns,
+			MaxOutputBytes:       cfg.Runner.MaxOutputBytes,
+			RemoteJobTimeout:     env.RunnerJobTimeout,
+			RemoteJobMaxReclaims: env.RunnerJobMaxReclaims,
 		},
 		Metrics: web.MetricsConfig{
 			Enabled: cfg.Metrics.Enabled,
@@ -293,6 +300,7 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
 		os.Exit(1)
 	}
+	server.StartRemoteJobReclaimLoop(context.Background())
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
