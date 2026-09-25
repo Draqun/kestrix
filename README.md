@@ -403,6 +403,10 @@ Each example is a directory holding one `pipeline.tf`:
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow (jj/Git, commit
+format, MR expectations, licensing of contributions) and
+[SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
 ```bash
 # Build
 make build
