@@ -2,9 +2,7 @@
 
 ## Purpose
 Make the application layout responsive across desktop, tablet, and mobile viewports.
-
 ## Requirements
-
 ### Requirement: Responsive Drawer
 The navigation drawer SHALL adapt to different screen sizes:
 - ≥ 900px: Persistent drawer (current behavior, 260px wide)
@@ -44,3 +42,14 @@ The duplicated `CustomNode` and `layoutFromProject` code SHALL be extracted into
 - **WHEN** viewing the pipeline editor without run data
 - **THEN** the DAG SHALL render all tasks as pending (blue/grey)
 - **AND** no status colors SHALL be applied
+
+### Requirement: Unknown route
+
+The UI SHALL render a not-found page with a link back to the dashboard for any
+path it does not define, instead of an empty content area.
+
+#### Scenario: Mistyped URL
+- **WHEN** a signed-in user opens a path the UI does not define
+- **THEN** the page SHALL say the page was not found
+- **AND** SHALL offer a link to the dashboard
+

@@ -5,9 +5,7 @@ Project registration enables storing GitLab project metadata and linking webhook
 
 ## Summary
 Register GitLab projects with Kestrix so the webhook handler knows which pipeline to run, which GitLab project to trigger, and which secret to verify.
-
 ## Requirements
-
 ### Requirement: REQ-1: Project config includes GitLab binding (implemented)
 Each project configuration SHALL include its existing GitLab binding fields and
 MAY include a provider-neutral `repo_url`, `repo_ref`, and
@@ -197,9 +195,13 @@ Deleting a project whose run is currently executing SHALL be refused with
 `409 Conflict` naming the run(s) still active, rather than deleting the
 project and letting the run's underlying process continue against rows that
 no longer exist. "Currently executing" means a run with a live execution
-goroutine; a run waiting for manual approval has none and SHALL NOT block
-the delete. A project with no active run SHALL delete exactly as before,
-cascading its runs and their task results.
+goroutine, or a `remote`-mode run with at least one outstanding
+(`pending`, `claimed` or `running`) job — a remote run has no goroutine by
+design, but a runner is still executing against its rows. A run waiting for
+manual approval has neither and SHALL NOT block the delete. When Kestrix
+cannot determine whether a run has outstanding remote jobs, the delete SHALL
+be refused rather than allowed. A project with no active run SHALL delete
+exactly as before, cascading its runs and their task results.
 
 #### Scenario: Delete refused while a run is active
 
@@ -219,6 +221,16 @@ cascading its runs and their task results.
 - **AND** a client then sends `DELETE /api/projects/{name}`
 - **THEN** the server SHALL delete the project, since no run is active any longer
 
+#### Scenario: Delete refused while a remote job is outstanding
+
+- **WHEN** a client sends `DELETE /api/projects/{name}` and a `remote`-mode run for that project has a job a runner has not yet completed
+- **THEN** the server SHALL respond `409 Conflict` naming that run
+- **AND** the project, its runs, and their task results SHALL remain unchanged
+
+#### Scenario: Delete refused when outstanding jobs cannot be determined
+
+- **WHEN** the lookup for outstanding remote jobs fails
+- **THEN** the server SHALL refuse the delete rather than allowing it
 
 ## Scenarios
 
