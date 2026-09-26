@@ -684,6 +684,9 @@ func (s *Server) StartRemoteJobReclaimLoop(ctx context.Context) {
 				if s.runService == nil {
 					continue
 				}
+				if err := s.runService.DeleteTerminalRemoteSecrets(); err != nil {
+					slog.Warn("deleting finished remote jobs' secrets failed", "err", redact.Err(err, s.knownSecrets()))
+				}
 				reclaimed, failed, err := s.runService.ReclaimStaleRemoteJobs(
 					s.remoteJobTimeout(), s.remoteJobMaxReclaims(), "runner went silent",
 				)

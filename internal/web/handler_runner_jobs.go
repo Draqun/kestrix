@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -167,7 +168,12 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "offset is required")
 		return
 	}
-	chunk := redact.Values(req.Chunk, s.knownSecrets())
+	secrets, err := s.jobSecrets(jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load job secrets")
+		return
+	}
+	chunk := redact.Values(req.Chunk, secrets)
 	maxOutputBytes := 0
 	if s.runService != nil {
 		maxOutputBytes = s.runService.MaxOutputBytes
@@ -184,12 +190,29 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// jobSecrets returns every value text a runner sends back for jobID must
+// have redacted before it is stored: this server's own secrets plus the
+// resolved runtime secrets of the job's run (remote-runner-fixes design.md
+// D1) - knownSecrets alone never covers a pipeline's secret_ref values.
+func (s *Server) jobSecrets(jobID int) ([]string, error) {
+	values, err := s.remoteJobStore.RemoteJobSecretValues(jobID)
+	if err != nil {
+		return nil, err
+	}
+	return append(s.knownSecrets(), values...), nil
+}
+
+// maxRunnerTaskErrorBytes bounds the error a completion report may attach
+// to a task result: it is runner-supplied text, stored per task.
+const maxRunnerTaskErrorBytes = 4096
+
 // runnerCompleteRequest is the body PUT /api/runner-jobs/{id}/complete
-// accepts.
+// accepts. Error is optional; an older runner never sends it.
 type runnerCompleteRequest struct {
 	Epoch  int    `json:"epoch"`
 	Status string `json:"status"`
 	Output string `json:"output"`
+	Error  string `json:"error"`
 }
 
 // handleRunnerJobComplete implements PUT /api/runner-jobs/{id}/complete
@@ -203,7 +226,7 @@ func (s *Server) handleRunnerJobComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	runnerID, ok := runnerIDFromContext(r.Context())
-	if !ok || s.runService == nil {
+	if !ok || s.runService == nil || s.remoteJobStore == nil {
 		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
@@ -211,8 +234,23 @@ func (s *Server) handleRunnerJobComplete(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	output := redact.Values(req.Output, s.knownSecrets())
-	completed, err := s.runService.CompleteRemoteJob(jobID, req.Epoch, req.Status, output, &runnerID)
+	secrets, err := s.jobSecrets(jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load job secrets")
+		return
+	}
+	output := redact.Values(req.Output, secrets)
+	// Redact before cutting, so the cut can never leave part of a secret
+	// that no longer matches its whole value.
+	taskError := redact.Values(req.Error, secrets)
+	if len(taskError) > maxRunnerTaskErrorBytes {
+		cut := maxRunnerTaskErrorBytes
+		for cut > 0 && !utf8.RuneStart(taskError[cut]) {
+			cut-- // never split a multi-byte character
+		}
+		taskError = taskError[:cut]
+	}
+	completed, err := s.runService.CompleteRemoteJob(jobID, req.Epoch, req.Status, output, taskError, &runnerID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

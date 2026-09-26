@@ -129,8 +129,8 @@ type fakeRemoteJobStore struct {
 	runStore *fakeStatefulRunStore
 }
 
-func (f *fakeRemoteJobStore) CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
-	ok, err := f.MockRemoteJobStore.CompleteJob(jobID, epoch, status, output, callerRunnerID, maxOutputBytes)
+func (f *fakeRemoteJobStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+	ok, err := f.MockRemoteJobStore.CompleteJob(jobID, epoch, status, output, taskError, callerRunnerID, maxOutputBytes)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -166,7 +166,7 @@ func TestRunService_CompleteRemoteJob_DependentBecomesEligibleAfterCompletion(t 
 	remoteJobs.Jobs = map[int]*domain.RemoteJob{buildJobID: {ID: buildJobID, RunID: runID, TaskName: "build"}}
 	remoteJobs.CompleteJobOK = true
 
-	ok, err := svc.CompleteRemoteJob(buildJobID, 1, "passed", "build output", nil)
+	ok, err := svc.CompleteRemoteJob(buildJobID, 1, "passed", "build output", "", nil)
 	if err != nil {
 		t.Fatalf("CompleteRemoteJob: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestRunService_CompleteRemoteJob_NotOKIsNoOpNoResumption(t *testing.T) {
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
-	ok, err := svc.CompleteRemoteJob(1, 1, "passed", "x", nil)
+	ok, err := svc.CompleteRemoteJob(1, 1, "passed", "x", "", nil)
 	if err != nil {
 		t.Fatalf("CompleteRemoteJob: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestRunService_CompleteRemoteJob_UnknownJobIsNoOp(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	svc := NewRunService(newFakeStatefulRunStore(), &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	ok, err := svc.CompleteRemoteJob(999, 1, "passed", "x", nil)
+	ok, err := svc.CompleteRemoteJob(999, 1, "passed", "x", "", nil)
 	if err != nil {
 		t.Fatalf("CompleteRemoteJob: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRunService_CompleteRemoteJob_GetRemoteJobErrorPropagates(t *testing.T) 
 	remoteJobs := &mocks.MockRemoteJobStore{GetRemoteJobErr: context.DeadlineExceeded}
 	svc := NewRunService(newFakeStatefulRunStore(), &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "x", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "x", "", nil); err == nil {
 		t.Fatal("expected GetRemoteJob's error to propagate")
 	}
 }
@@ -247,7 +247,7 @@ func TestRunService_CompleteRemoteJob_ResumptionErrorPropagatesButOKStaysTrue(t 
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
-	ok, err := svc.CompleteRemoteJob(1, 1, "passed", "x", nil)
+	ok, err := svc.CompleteRemoteJob(1, 1, "passed", "x", "", nil)
 	if err == nil {
 		t.Fatal("expected resumeRemoteRun's error to propagate")
 	}
@@ -263,7 +263,7 @@ func TestRunService_CompleteRemoteJob_CompleteJobErrorPropagates(t *testing.T) {
 	}
 	svc := NewRunService(newFakeStatefulRunStore(), &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "x", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "x", "", nil); err == nil {
 		t.Fatal("expected CompleteJob's error to propagate")
 	}
 }
@@ -275,6 +275,18 @@ func TestRunService_ReclaimStaleRemoteJobs_NoRemoteJobStoreIsNoOp(t *testing.T) 
 	reclaimed, failed, err := svc.ReclaimStaleRemoteJobs(time.Minute, 3, "silent")
 	if err != nil || reclaimed != 0 || failed != 0 {
 		t.Fatalf("ReclaimStaleRemoteJobs = (%d, %d, %v), want (0, 0, nil)", reclaimed, failed, err)
+	}
+}
+
+func TestRunService_DeleteTerminalRemoteSecrets(t *testing.T) {
+	svc := NewRunService(newFakeStatefulRunStore(), &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	if err := svc.DeleteTerminalRemoteSecrets(); err != nil {
+		t.Fatalf("no store: err = %v, want nil", err)
+	}
+	remoteJobs := &mocks.MockRemoteJobStore{}
+	svc.SetRemoteJobStore(remoteJobs)
+	if err := svc.DeleteTerminalRemoteSecrets(); err != nil || remoteJobs.DeleteSecretsCallCount() != 1 {
+		t.Fatalf("err = %v, calls = %d; want one delegated call", err, remoteJobs.DeleteSecretsCallCount())
 	}
 }
 
@@ -370,7 +382,7 @@ func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
 	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "root"}
 	remoteJobs.CompleteJobOK = true
 
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
 		t.Fatalf("complete root: %v", err)
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 3 {
@@ -391,7 +403,7 @@ func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
 
 	// join must not dispatch until BOTH left and right finish.
 	remoteJobs.Jobs[2] = &domain.RemoteJob{ID: 2, RunID: runID, TaskName: "left"}
-	if _, err := svc.CompleteRemoteJob(2, 1, "passed", "", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(2, 1, "passed", "", "", nil); err != nil {
 		t.Fatalf("complete left: %v", err)
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 3 {
@@ -399,7 +411,7 @@ func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
 	}
 
 	remoteJobs.Jobs[3] = &domain.RemoteJob{ID: 3, RunID: runID, TaskName: "right"}
-	if _, err := svc.CompleteRemoteJob(3, 1, "passed", "", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(3, 1, "passed", "", "", nil); err != nil {
 		t.Fatalf("complete right: %v", err)
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 4 || remoteJobs.CreateRemoteJobCalls[3].TaskName != "join" {
@@ -488,7 +500,7 @@ func TestResumeRemoteRun_FailedDependencyLeavesDependentsUndispatched(t *testing
 	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "build"}
 	remoteJobs.CompleteJobOK = true
 
-	if _, err := svc.CompleteRemoteJob(1, 1, "failed", "build broke", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "failed", "build broke", "", nil); err != nil {
 		t.Fatalf("complete build: %v", err)
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 1 {
@@ -517,7 +529,7 @@ func TestResumeRemoteRun_NoRunOrNoPipelineDefIsNoOp(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: 999, TaskName: "t"}}, CompleteJobOK: true}
 	svc := NewRunService(newFakeStatefulRunStore(), &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
 		t.Fatalf("expected no error for a run that does not exist: %v", err)
 	}
 }
@@ -534,7 +546,7 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "t"}}, CompleteJobOK: true}
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected the pipeline resolve error to propagate")
 	}
 }
@@ -560,7 +572,7 @@ func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
 	svc.SetRemoteJobStore(remoteJobs)
 	runStore.MockRunStore.ApplyTaskErr = fmt.Errorf("write failed")
 
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected ApplyTaskResult's error (recording the skipped dependent) to propagate")
 	}
 }
@@ -582,7 +594,7 @@ func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
 	}
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected GetRemoteRunSnapshot's error to propagate")
 	}
 }
@@ -605,7 +617,7 @@ func TestResumeRemoteRun_CreateRemoteJobErrorPropagates(t *testing.T) {
 	svc.SetRemoteJobStore(remoteJobs)
 	remoteJobs.CreateRemoteJobErr = context.DeadlineExceeded
 
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err == nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected CreateRemoteJob's error (dispatching deploy) to propagate")
 	}
 }
@@ -629,7 +641,7 @@ func TestResumeRemoteRun_ManualTaskNotDispatchedUntilApproved(t *testing.T) {
 	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "build"}
 	remoteJobs.CompleteJobOK = true
 
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", nil); err != nil {
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
 		t.Fatalf("complete build: %v", err)
 	}
 	for _, c := range remoteJobs.CreateRemoteJobCalls {

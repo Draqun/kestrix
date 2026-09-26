@@ -16,7 +16,7 @@ func TestPG_RemoteRunSnapshot_RoundTrips(t *testing.T) {
 	mustUpsert(t, pg, "proj-snapshot", "")
 	runID := mustCreateRun(t, pg, "proj-snapshot", nil)
 
-	archive, vars, err := pg.GetRemoteRunSnapshot(runID)
+	archive, vars, _, err := pg.GetRemoteRunSnapshot(runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,11 +26,11 @@ func TestPG_RemoteRunSnapshot_RoundTrips(t *testing.T) {
 
 	wantArchive := []byte("archive-bytes")
 	wantVars := map[string]map[string]string{"build": {"KEY": "value"}}
-	if err := pg.SetRemoteRunSnapshot(runID, wantArchive, wantVars); err != nil {
+	if err := pg.SetRemoteRunSnapshot(runID, wantArchive, wantVars, nil); err != nil {
 		t.Fatalf("SetRemoteRunSnapshot: %v", err)
 	}
 
-	gotArchive, gotVars, err := pg.GetRemoteRunSnapshot(runID)
+	gotArchive, gotVars, _, err := pg.GetRemoteRunSnapshot(runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPG_RemoteRunSnapshot_RoundTrips(t *testing.T) {
 
 func TestPG_RemoteRunSnapshot_UnknownRun(t *testing.T) {
 	pg := testPG(t)
-	archive, vars, err := pg.GetRemoteRunSnapshot(999999)
+	archive, vars, _, err := pg.GetRemoteRunSnapshot(999999)
 	if err != nil {
 		t.Fatal(err)
 	}
