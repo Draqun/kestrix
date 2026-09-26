@@ -121,7 +121,18 @@ environment control it, since the job payload names no image or engine.
 
 The runner keeps polling until you stop it (Ctrl-C, or your process
 supervisor's stop signal). It logs each claimed job and its outcome to
-stderr.
+stderr. When a task fails before producing any output (for example its
+shell is missing), the runner sends the reason with its completion report
+and the run detail view shows it as the task's error.
+
+**Upgrade runners together with the server.** A resolved runtime secret
+(`secret_ref`) is redacted twice: the runner redacts its streamed output
+before sending it, and Kestrix redacts every trace chunk and completion
+again before storing it. Only the runner's pass catches a secret whose bytes
+happen to be split across two trace chunks, so an older runner binary that
+does not redact leaves that case open. Kestrix stores a job's variables and
+secret values encrypted with the credential master key and deletes them
+once the job or its run is finished.
 
 ## 3. Switch a project to `remote` mode
 
@@ -136,6 +147,38 @@ Every task of a `remote`-mode project now dispatches as a job instead of
 running on the Kestrix host - including a single-task re-run and an
 approved manual gate (see [`ci-tools.md`](ci-tools.md#runner) for how those
 two differ from every other mode once a project is on `remote`).
+
+## Runner-job protocol
+
+For anyone writing their own runner. Every call sends the runner's token as
+`Authorization: Bearer <token>`.
+
+**`GET /api/runner-jobs/next`** long-polls for up to 20s: `204` when nothing
+is pending, otherwise `200` with the claimed job:
+
+| Field | Meaning |
+|-------|---------|
+| `id`, `run_id`, `task_name` | The job, its run, and the task it executes |
+| `claim_epoch` | Fencing token; send it back on every trace and completion |
+| `payload.task` | The task definition (`name`, `execute.repo`, `execute.script`, ...) |
+| `payload.repos` | Declared repositories (`name`, `path`, `kind`) to resolve the task's working directory inside the archive |
+| `payload.default_image` | The project's default image, for a Docker-mode runner |
+| `payload.variables` | The task's resolved variables, including runtime secrets, as a flat map |
+| `payload.secret_values` | Which of those values are secrets: redact them from everything you send back |
+| `payload.archive` | Base64 tar.gz of the source checkout |
+
+**`PATCH /api/runner-jobs/{id}/trace`** with `{"epoch", "offset", "chunk"}`
+appends output; `offset` is the number of bytes already accepted. `204` on
+success, `409` when the epoch is stale or the job is not yours.
+
+**`PUT /api/runner-jobs/{id}/complete`** with `{"epoch", "status", "output",
+"error"}` reports the outcome once. `status` is `passed` or `failed`;
+`output` is any output not already sent as trace; `error` (optional, at most
+4 KiB kept) says why the task failed. `204` on success, `409` when the report
+is fenced out.
+
+Kestrix redacts known secrets from every chunk, `output`, and `error` again
+before storing them.
 
 ## Settings
 
@@ -158,7 +201,10 @@ runner` killed) without reporting completion, Kestrix notices once the job
 has been silent longer than `KESTRIX_RUNNER_JOB_TIMEOUT`: it returns the
 job to `pending` for another runner to claim, up to
 `KESTRIX_RUNNER_JOB_MAX_RECLAIMS` times, after which it fails the job
-naming the reason. The original runner's own eventual, late report (if it
+naming the reason. A returned job that no runner claims within the same
+timeout counts as another attempt, so with every runner gone the job - and
+its run - still fails after `MAX_RECLAIMS + 1` timeouts instead of waiting
+forever. A job that was never claimed at all is left waiting. The original runner's own eventual, late report (if it
 comes back) is fenced out by the job's claim epoch and rejected - see
 [`ci-tools.md`'s Cancellation section](ci-tools.md#cancellation) for the
 same fencing idea applied to cancellation.

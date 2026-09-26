@@ -118,7 +118,7 @@ func TestBuildRemoteJobPayload_ExcludesControlPlaneVariables(t *testing.T) {
 	vs.SetProject("REGISTRY_PASSWORD", "resolved-secret-value")
 	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 
-	payload := buildRemoteJobPayload(task, nil, "", vs, nil)
+	payload := buildRemoteJobPayload(task, nil, "", vs, nil, nil)
 
 	for _, forbidden := range []string{"DATABASE_URL", "KESTRIX_MASTER_KEY_PATH", "KESTRIX_JWT_SIGNING_KEY_PATH", "KESTRIX_WEBHOOK_SECRET", "KESTRIX_GITLAB_TOKEN", "DOCKER_REGISTRY", "DOCKER_PASSWORD", "PATH", "HOME"} {
 		if _, present := payload.Variables[forbidden]; present {
@@ -130,12 +130,20 @@ func TestBuildRemoteJobPayload_ExcludesControlPlaneVariables(t *testing.T) {
 	}
 }
 
+func TestBuildRemoteJobPayload_CarriesSecretValues(t *testing.T) {
+	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	payload := buildRemoteJobPayload(task, nil, "", nil, nil, []string{"resolved-secret-value"})
+	if len(payload.SecretValues) != 1 || payload.SecretValues[0] != "resolved-secret-value" {
+		t.Fatalf("SecretValues = %q, want the argument", payload.SecretValues)
+	}
+}
+
 func TestBuildRemoteJobPayload_ExcludesRepositoryCredentialValue(t *testing.T) {
 	// The payload takes no credential parameter at all - archiveWorkDir
 	// packages only the checkout's file contents, and buildRemoteJobPayload
 	// has no field for a credential, so there is no way for one to appear.
 	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
-	payload := buildRemoteJobPayload(task, nil, "", nil, []byte("archive-bytes"))
+	payload := buildRemoteJobPayload(task, nil, "", nil, []byte("archive-bytes"), nil)
 	if payload.Task.Execute.Repo != "app" {
 		t.Fatalf("unexpected task in payload: %+v", payload.Task)
 	}
@@ -151,7 +159,7 @@ func TestBuildRemoteJobPayload_ExcludesRepositoryCredentialValue(t *testing.T) {
 func TestBuildRemoteJobPayload_CarriesReposForWorkdirResolution(t *testing.T) {
 	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	repos := []domain.Repo{{Name: "app", Path: "services/app"}}
-	payload := buildRemoteJobPayload(task, repos, "golang:1.26", nil, nil)
+	payload := buildRemoteJobPayload(task, repos, "golang:1.26", nil, nil, nil)
 	if len(payload.Repos) != 1 || payload.Repos[0].Path != "services/app" {
 		t.Fatalf("expected the project's repo definitions (with Path) carried through, got %+v", payload.Repos)
 	}
@@ -163,7 +171,7 @@ func TestBuildRemoteJobPayload_CarriesReposForWorkdirResolution(t *testing.T) {
 func TestBuildRemoteJobPayload_SanitizesRepoURLAndCredentialRef(t *testing.T) {
 	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	repos := []domain.Repo{{Name: "app", Path: ".", URL: "https://git.example/app.git", CredentialRef: "cred_secret"}}
-	payload := buildRemoteJobPayload(task, repos, "", nil, nil)
+	payload := buildRemoteJobPayload(task, repos, "", nil, nil, nil)
 	if len(payload.Repos) != 1 {
 		t.Fatalf("expected one repo in payload, got %+v", payload.Repos)
 	}
@@ -184,7 +192,7 @@ func TestBuildRemoteJobPayload_NamesNoEngineOrImageSelector(t *testing.T) {
 			Image:  "golang:1.26", // set on the TASK itself, as ordinary pipeline data
 		},
 	}
-	payload := buildRemoteJobPayload(task, nil, "", nil, nil)
+	payload := buildRemoteJobPayload(task, nil, "", nil, nil, nil)
 	// design.md D3: Kestrix sends the task's script/variables/source and the
 	// project's repo/image data as already declared in the pipeline;
 	// nothing beyond that says "docker" or picks an engine on the runner's
@@ -312,7 +320,7 @@ func TestRunService_RunTask_RemoteMode_DispatchesJobReturnsDispatchedTrue(t *tes
 	cleanedUp := false
 
 	tr, dispatched, err := svc.RunTask(context.Background(), 3, "proj", proj, "deploy", domain.RunnerOptions{
-		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(),
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(), ResolvedSecretValues: []string{"S3cr3t-Remote-Value"},
 		WorkspaceCleanup: func() { cleanedUp = true },
 	})
 	if err != nil {
@@ -329,6 +337,9 @@ func TestRunService_RunTask_RemoteMode_DispatchesJobReturnsDispatchedTrue(t *tes
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 1 || remoteJobs.CreateRemoteJobCalls[0].TaskName != "deploy" {
 		t.Fatalf("expected one CreateRemoteJob call for deploy, got %+v", remoteJobs.CreateRemoteJobCalls)
+	}
+	if got := remoteJobs.CreateRemoteJobCalls[0].Payload.SecretValues; len(got) != 1 || got[0] != "S3cr3t-Remote-Value" {
+		t.Fatalf("single-task job secret values = %q, want the run's resolved secret", got)
 	}
 	if len(pipeline.TaskRunCalls) != 0 {
 		t.Fatalf("expected no in-process TaskRunner.RunTask call, got %d", len(pipeline.TaskRunCalls))
@@ -444,7 +455,7 @@ func TestRunService_ApproveManualTask_RemoteMode_DispatchesInsteadOfExecuting(t 
 	svc.SetRemoteJobStore(remoteJobs)
 
 	tr, err := svc.ApproveManualTask(context.Background(), 5, "proj", proj, "deploy", domain.RunnerOptions{
-		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(), Actor: "user:erin",
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(), Actor: "user:erin", ResolvedSecretValues: []string{"S3cr3t-Remote-Value"},
 	})
 	if err != nil {
 		t.Fatalf("ApproveManualTask: %v", err)
@@ -454,6 +465,9 @@ func TestRunService_ApproveManualTask_RemoteMode_DispatchesInsteadOfExecuting(t 
 	}
 	if len(remoteJobs.CreateRemoteJobCalls) != 1 {
 		t.Fatalf("expected one dispatched job, got %d", len(remoteJobs.CreateRemoteJobCalls))
+	}
+	if got := remoteJobs.CreateRemoteJobCalls[0].Payload.SecretValues; len(got) != 1 || got[0] != "S3cr3t-Remote-Value" {
+		t.Fatalf("approved manual job secret values = %q, want the run's resolved secret", got)
 	}
 	if len(pipeline.TaskRunCalls) != 0 {
 		t.Fatalf("expected no in-process execution, got %d calls", len(pipeline.TaskRunCalls))
@@ -640,5 +654,46 @@ func TestEligibleForDispatch_ManualTaskNeverAutoDispatched(t *testing.T) {
 	eligible, skipped := eligibleForDispatch(nodes, latest)
 	if len(eligible) != 0 || len(skipped) != 0 {
 		t.Fatalf("expected a manual task to be left alone, got eligible=%v skipped=%v", eligible, skipped)
+	}
+}
+
+// remote-runner-fixes D1: every job a remote run dispatches - initial and
+// resumed - carries the run's resolved secret values, so the runner and the
+// server can redact them.
+func TestRunService_RemoteMode_SecretValuesReachEveryJob(t *testing.T) {
+	proj := &model.Project{
+		Name:  "proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo a"}},
+			{Name: "b", Trigger: "repo.app.changed", DependsOn: []string{"a"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo b"}},
+		},
+	}
+	secrets := []string{"S3cr3t-Remote-Value"}
+	runStore := &mocks.MockRunStore{CreateRunID: 42}
+	remoteJobs := &mocks.MockRemoteJobStore{}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(remoteJobs)
+
+	if _, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(), ResolvedSecretValues: secrets,
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := remoteJobs.CreateRemoteJobCalls[0].Payload.SecretValues; len(got) != 1 || got[0] != secrets[0] {
+		t.Fatalf("initial job secret values = %q, want %q", got, secrets)
+	}
+	if _, _, got, _ := remoteJobs.GetRemoteRunSnapshot(42); len(got) != 1 || got[0] != secrets[0] {
+		t.Fatalf("snapshot secret values = %q, want %q", got, secrets)
+	}
+
+	runStore.GetRunResult = &domain.Run{ID: 42, Changed: []string{"app"}, PipelineDef: proj,
+		TaskResults: []domain.TaskResult{{Name: "a", Status: "passed"}}}
+	if err := svc.resumeRemoteRun(42); err != nil {
+		t.Fatalf("resumeRemoteRun: %v", err)
+	}
+	last := remoteJobs.CreateRemoteJobCalls[len(remoteJobs.CreateRemoteJobCalls)-1]
+	if last.TaskName != "b" || len(last.Payload.SecretValues) != 1 || last.Payload.SecretValues[0] != secrets[0] {
+		t.Fatalf("resumed job = %s with secret values %q, want b with %q", last.TaskName, last.Payload.SecretValues, secrets)
 	}
 }

@@ -24,6 +24,7 @@ beforeEach(() => {
         repo_ref: 'main',
         repo_credential_ref: 'cred_active',
         pipeline_dir: 'ci',
+        mode: 'remote',
         sources: [
           { name: 'demo', url: 'https://git.example.test/demo.git', primary: true },
           { name: 'shared', url: 'https://git.example.test/shared.git', primary: false },
@@ -121,4 +122,14 @@ test('project detail renders the sources derived by the definition load', async 
   const configAt = requests.indexOf('/api/projects/demo');
   assert.ok(definitionAt !== -1 && configAt !== -1);
   assert.ok(definitionAt < configAt, 'definition must be requested before the project config');
+});
+
+test('project detail shows the execution mode', async () => {
+  render(
+    <MemoryRouter initialEntries={['/projects/demo']}>
+      <Projects selectedName="demo" onSelect={vi.fn()} onOpenPipeline={vi.fn()} />
+    </MemoryRouter>,
+  );
+
+  assert.equal((await screen.findByTestId('project-mode-chip')).textContent, 'Mode: remote');
 });

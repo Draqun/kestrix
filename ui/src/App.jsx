@@ -9,6 +9,7 @@ import { RunList, NewRun, RunProject, RunDetail } from './pages/Pipelines';
 import Projects from './pages/Projects';
 import Settings from './pages/Settings';
 import WebhookLogs from './pages/WebhookLogs';
+import NotFound from './pages/NotFound';
 
 function ProjectsRoutes() {
   const { name } = useParams();
@@ -79,6 +80,7 @@ function AppRoutes() {
         <Route path="/projects/:name" element={<ProjectsRoutes />} />
         <Route path="/webhooks" element={<WebhookLogs />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>
   );

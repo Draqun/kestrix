@@ -601,6 +601,14 @@ type MockRemoteJobStore struct {
 	reclaimCalls               int
 	OutstandingJobRunIDsResult []int
 	OutstandingJobRunIDsErr    error
+	DeleteSecretsErr           error
+	deleteSecretsCalls         int
+
+	// SecretValues is what RemoteJobSecretValues returns for a job ID.
+	SecretValues    map[int][]string
+	SecretValuesErr error
+	// AppendJobTraceChunks records each AppendJobTrace chunk, as stored.
+	AppendJobTraceChunks []string
 
 	snapshots                 map[int]remoteRunSnapshotMock
 	SetRemoteRunSnapshotErr   error
@@ -621,6 +629,7 @@ type CompleteJobCall struct {
 	Epoch          int
 	Status         string
 	Output         string
+	TaskError      string
 	CallerRunnerID *int
 	MaxOutputBytes int
 }
@@ -651,13 +660,20 @@ func (m *MockRemoteJobStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) 
 }
 
 func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.AppendJobTraceChunks = append(m.AppendJobTraceChunks, chunk)
 	return m.AppendJobTraceOK, m.AppendJobTraceErr
 }
 
-func (m *MockRemoteJobStore) CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+func (m *MockRemoteJobStore) RemoteJobSecretValues(jobID int) ([]string, error) {
+	return m.SecretValues[jobID], m.SecretValuesErr
+}
+
+func (m *MockRemoteJobStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.CompleteJobCalls = append(m.CompleteJobCalls, CompleteJobCall{JobID: jobID, Epoch: epoch, Status: status, Output: output, CallerRunnerID: callerRunnerID, MaxOutputBytes: maxOutputBytes})
+	m.CompleteJobCalls = append(m.CompleteJobCalls, CompleteJobCall{JobID: jobID, Epoch: epoch, Status: status, Output: output, TaskError: taskError, CallerRunnerID: callerRunnerID, MaxOutputBytes: maxOutputBytes})
 	return m.CompleteJobOK, m.CompleteJobErr
 }
 
@@ -677,6 +693,21 @@ func (m *MockRemoteJobStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims i
 	m.reclaimCalls++
 	m.mu.Unlock()
 	return m.ReclaimedCount, m.ReclaimedFailed, m.ReclaimErr
+}
+
+func (m *MockRemoteJobStore) DeleteTerminalRemoteSecrets() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteSecretsCalls++
+	return m.DeleteSecretsErr
+}
+
+// DeleteSecretsCallCount returns the number of DeleteTerminalRemoteSecrets
+// calls, synchronized for polling from another goroutine.
+func (m *MockRemoteJobStore) DeleteSecretsCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deleteSecretsCalls
 }
 
 // ReclaimCallCount returns the number of recorded ReclaimStaleJobs calls,
@@ -702,35 +733,36 @@ func (m *MockRemoteJobStore) OutstandingJobRunIDsForProject(projectName string) 
 	return m.OutstandingJobRunIDsResult, m.OutstandingJobRunIDsErr
 }
 
-func (m *MockRemoteJobStore) SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string) error {
+func (m *MockRemoteJobStore) SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.snapshots == nil {
 		m.snapshots = make(map[int]remoteRunSnapshotMock)
 	}
-	m.snapshots[runID] = remoteRunSnapshotMock{archive: archive, variables: variables}
+	m.snapshots[runID] = remoteRunSnapshotMock{archive: archive, variables: variables, secretValues: secretValues}
 	m.SetRemoteRunSnapshotCalls++
 	return m.SetRemoteRunSnapshotErr
 }
 
-func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, error) {
+func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.GetRemoteRunSnapshotErr != nil {
-		return nil, nil, m.GetRemoteRunSnapshotErr
+		return nil, nil, nil, m.GetRemoteRunSnapshotErr
 	}
 	snap, ok := m.snapshots[runID]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	return snap.archive, snap.variables, nil
+	return snap.archive, snap.variables, snap.secretValues, nil
 }
 
 // remoteRunSnapshotMock is MockRemoteJobStore's in-memory stand-in for the
 // runs.remote_snapshot column.
 type remoteRunSnapshotMock struct {
-	archive   []byte
-	variables map[string]map[string]string
+	archive      []byte
+	variables    map[string]map[string]string
+	secretValues []string
 }
 
 var _ domain.RemoteJobStore = (*MockRemoteJobStore)(nil)

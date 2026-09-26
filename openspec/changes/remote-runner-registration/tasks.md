@@ -37,9 +37,15 @@
 
 - [x] 6.1 Run `make test` and `make test-coverage`; verify green and 100% unit coverage
 - [x] 6.2 Run `make lint` and `glab ci lint`; verify both clean
-- [ ] 6.3 Manual end-to-end: register a runner, set a project to `Mode: remote`, run `kestrix runner` on a separate machine behind NAT (no inbound port opened), trigger a run, confirm the task executes on the remote machine, live output appears in the run detail view, and the run completes
-- [ ] 6.4 Manual silent-runner test: start a run, kill `kestrix runner` mid-task, confirm the job returns to `pending` after the configured timeout and (with no runner restarted) eventually fails naming the reason
-- [ ] 6.5 Manual secret-safety check: confirm a task's resolved secret value appears in the runner's own execution environment (expected) but never in Kestrix's stored run output unredacted, and never as a control-plane variable in the job payload
+- [x] 6.3 Manual end-to-end: register a runner, set a project to `Mode: remote`, run `kestrix runner` on a separate machine behind NAT (no inbound port opened), trigger a run, confirm the task executes on the remote machine, live output appears in the run detail view, and the run completes
+- [x] 6.4 Manual silent-runner test: start a run, kill `kestrix runner` mid-task, confirm the job returns to `pending` after the configured timeout and (with no runner restarted) eventually fails naming the reason
+- [x] 6.5 Manual secret-safety check: confirm a task's resolved secret value appears in the runner's own execution environment (expected) but never in Kestrix's stored run output unredacted, and never as a control-plane variable in the job payload
+
+> 6.3-6.5 were run on 2026-09-26 with Kestrix and the runner in separate
+> containers (the runner publishing no port), not on separate hardware
+> behind NAT. The first attempt failed 6.4 and 6.5; they pass with
+> `remote-runner-fixes` applied, which must be merged before this change is
+> archived.
 
 ## 7. Deferred to a later change (spec already covers; not built here)
 

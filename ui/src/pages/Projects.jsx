@@ -241,6 +241,9 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           </Button>
           <Typography variant="h4" sx={{ ml: 2 }}>{selectedName}</Typography>
           <Chip label={config?.pipeline_dir || 'ci'} size="small" variant="outlined" sx={{ ml: 1 }} />
+          {config?.mode && (
+            <Chip data-testid="project-mode-chip" label={`Mode: ${config.mode}`} size="small" variant="outlined" sx={{ ml: 1 }} />
+          )}
           <Chip
             data-testid="webhook-secret-chip"
             label={config?.has_webhook_secret ? 'Secret set' : 'No per-project secret — uses global secret'}

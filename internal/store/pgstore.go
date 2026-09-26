@@ -239,6 +239,20 @@ func migrate(db *sql.DB, defaultMode string) error {
 		// secrets - see design.md D6/D7 and the "not reuse" note on
 		// resumption.
 		{"add run remote snapshot", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS remote_snapshot JSONB`},
+		// Resolved variables and secret values of a remote job/run live
+		// encrypted here, never in payload/remote_snapshot, and are deleted
+		// once terminal - remote-runner-fixes design.md D2.
+		{"add remote job secrets", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS secrets_enc BYTEA`},
+		{"add run remote secrets", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS remote_secrets_enc BYTEA`},
+		// Earlier versions stored those values in plaintext. Every run they
+		// belong to is failed by the startup interrupted-run sweep before
+		// serving, so nothing still needs them.
+		{"strip plaintext job variables", `UPDATE remote_jobs SET payload = payload - 'variables' - 'secret_values' WHERE payload ? 'variables' OR payload ? 'secret_values'`},
+		{"strip plaintext run variables", `UPDATE runs SET remote_snapshot = remote_snapshot - 'variables' WHERE remote_snapshot ? 'variables'`},
+		// reclaim_count, not claim_epoch (which also moves on every claim),
+		// is what KESTRIX_RUNNER_JOB_MAX_RECLAIMS is checked against -
+		// remote-runner-fixes design.md D3.
+		{"add remote job reclaim count", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS reclaim_count INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {

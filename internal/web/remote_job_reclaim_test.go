@@ -49,7 +49,7 @@ func TestStartRemoteJobReclaimLoop_CallsReclaimOnEachTick(t *testing.T) {
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for {
-		if remoteJobs.ReclaimCallCount() > 0 {
+		if remoteJobs.ReclaimCallCount() > 0 && remoteJobs.DeleteSecretsCallCount() > 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -111,5 +111,29 @@ func TestStartRemoteJobReclaimLoop_StopsOnContextCancel(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if remoteJobs.ReclaimCallCount() != countAfterCancel {
 		t.Fatal("expected no further reclaim attempts after the context was canceled")
+	}
+}
+
+// remote-runner-fixes D2: a failing secret sweep is logged, never blocks
+// silent-runner recovery.
+func TestStartRemoteJobReclaimLoop_SecretSweepErrorStillReclaims(t *testing.T) {
+	old := remoteJobReclaimInterval
+	remoteJobReclaimInterval = 5 * time.Millisecond
+	defer func() { remoteJobReclaimInterval = old }()
+
+	remoteJobs := &mocks.MockRemoteJobStore{DeleteSecretsErr: errGap}
+	runService := service.NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	runService.SetRemoteJobStore(remoteJobs)
+	srv := &Server{cfg: Config{ListenAddr: ":0"}, runService: runService}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv.StartRemoteJobReclaimLoop(ctx)
+	defer cancel()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for remoteJobs.ReclaimCallCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("reclaim never ran after a failing secret sweep")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }

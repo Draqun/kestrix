@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -515,7 +516,7 @@ func TestReportComplete_NonNoContentReturnsError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 1, 1, "passed", "")
+	err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 1, 1, "passed", "", "")
 	if err == nil {
 		t.Fatal("expected an error for a non-204 response")
 	}
@@ -529,7 +530,7 @@ func TestReportComplete_NetworkErrorPropagates(t *testing.T) {
 	badURL := ts.URL
 	ts.Close() // closed before use: every request against it now fails to connect.
 
-	err := reportComplete(context.Background(), http.DefaultClient, badURL, "tok", 1, 1, "passed", "")
+	err := reportComplete(context.Background(), http.DefaultClient, badURL, "tok", 1, 1, "passed", "", "")
 	if err == nil {
 		t.Fatal("expected client.Do's connection error to propagate")
 	}
@@ -538,7 +539,7 @@ func TestReportComplete_NetworkErrorPropagates(t *testing.T) {
 func TestReportComplete_RequestBuildErrorPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := reportComplete(ctx, http.DefaultClient, "http://127.0.0.1:1", "tok", 1, 1, "passed", "")
+	err := reportComplete(ctx, http.DefaultClient, "http://127.0.0.1:1", "tok", 1, 1, "passed", "", "")
 	if err == nil {
 		t.Fatal("expected an error from an already-canceled context")
 	}
@@ -552,7 +553,7 @@ func TestReportComplete_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	if err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 5, 2, "failed", "boom"); err != nil {
+	if err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 5, 2, "failed", "boom", ""); err != nil {
 		t.Fatalf("reportComplete: %v", err)
 	}
 	if gotBody["status"] != "failed" || gotBody["output"] != "boom" {
@@ -700,4 +701,61 @@ func filterEnv(env []string, drop ...string) []string {
 		}
 	}
 	return out
+}
+
+// recordingRunnerServer accepts every trace and completion, recording what
+// the runner sent - no server-side redaction, so a test sees exactly what
+// left the runner.
+func recordingRunnerServer(t *testing.T) (*httptest.Server, *[]string, *map[string]any) {
+	t.Helper()
+	var mu sync.Mutex
+	chunks := &[]string{}
+	complete := &map[string]any{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/trace") {
+			*chunks = append(*chunks, body["chunk"].(string))
+		} else {
+			*complete = body
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, chunks, complete
+}
+
+// remote-runner-fixes D1: a secret the task prints in two separate writes
+// never leaves the runner in either half.
+func TestRunJob_RedactsSecretSplitAcrossWrites(t *testing.T) {
+	ts, chunks, _ := recordingRunnerServer(t)
+	job := &domain.RemoteJob{ID: 1, ClaimEpoch: 1, Payload: domain.RemoteJobPayload{
+		Task:         domain.Task{Name: "leak", Execute: domain.ExecuteSpec{Repo: "app", Script: "printf 'token=S3cr3t-Re'; sleep 0.2; printf 'mote-Value\\n'"}},
+		Repos:        []domain.Repo{{Name: "app", Path: "app"}},
+		Archive:      buildTestArchive(t, map[string]string{"app/.keep": ""}),
+		SecretValues: []string{"S3cr3t-Remote-Value"},
+	}}
+	runJob(context.Background(), ts.Client(), ts.URL, "tok", "local", job)
+	sent := strings.Join(*chunks, "")
+	if strings.Contains(sent, "S3cr3t-Re") || strings.Contains(sent, "mote-Value") || !strings.Contains(sent, "token=***") {
+		t.Fatalf("trace sent %q across %d chunks, want the secret redacted as token=***", sent, len(*chunks))
+	}
+}
+
+// remote-runner-fixes D4: a task that fails before producing any output -
+// here the manual test's own case, no bash on PATH - still reports why.
+func TestRunJob_ReportsTaskErrorWithoutOutput(t *testing.T) {
+	ts, _, complete := recordingRunnerServer(t)
+	t.Setenv("PATH", t.TempDir())
+	job := &domain.RemoteJob{ID: 1, ClaimEpoch: 1, Payload: domain.RemoteJobPayload{
+		Task:    domain.Task{Name: "broken", Execute: domain.ExecuteSpec{Repo: "app", Script: "true"}},
+		Repos:   []domain.Repo{{Name: "app", Path: "app"}},
+		Archive: buildTestArchive(t, map[string]string{"app/.keep": ""}),
+	}}
+	runJob(context.Background(), ts.Client(), ts.URL, "tok", "local", job)
+	if msg, _ := (*complete)["error"].(string); (*complete)["status"] != "failed" || !strings.Contains(msg, "bash") {
+		t.Fatalf("completion = %v, want failed with a non-empty error", *complete)
+	}
 }

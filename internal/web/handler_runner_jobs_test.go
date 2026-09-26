@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
@@ -325,6 +326,29 @@ func TestHandleRunnerJobTrace_RedactsKnownSecretBeforeStorage(t *testing.T) {
 	}
 }
 
+func TestHandleRunnerJobTrace_RedactsRunSecretBeforeStorage(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{AppendJobTraceOK: true, SecretValues: map[int][]string{1: {"S3cr3t-Remote-Value"}}}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobTrace(w, traceReq(`{"epoch":1,"offset":0,"chunk":"token=S3cr3t-Remote-Value\n"}`))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body=%s)", w.Code, w.Body.String())
+	}
+	if got := remoteJobs.AppendJobTraceChunks; len(got) != 1 || got[0] != "token=***\n" {
+		t.Fatalf("stored chunks = %q, want the secret_ref value redacted", got)
+	}
+}
+
+func TestHandleRunnerJobTrace_SecretLookupErrorIs500(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{AppendJobTraceOK: true, SecretValuesErr: errGap}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobTrace(w, traceReq(`{"epoch":1,"offset":0,"chunk":"x"}`))
+	if w.Code != http.StatusInternalServerError || len(remoteJobs.AppendJobTraceChunks) != 0 {
+		t.Fatalf("status = %d, chunks = %q; want 500 and nothing stored unredacted", w.Code, remoteJobs.AppendJobTraceChunks)
+	}
+}
+
 func TestHandleRunnerJobTrace_MalformedOffsetRejected(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
@@ -398,6 +422,69 @@ func TestHandleRunnerJobComplete_OKMapsToNoContent(t *testing.T) {
 	srv.handleRunnerJobComplete(w, r)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+func completeReq(body string) *http.Request {
+	r := httptest.NewRequest("PUT", "/api/runner-jobs/1/complete", strings.NewReader(body))
+	r = runCtx(r, "id", "1")
+	return r.WithContext(contextWithRunnerID(r.Context(), 7))
+}
+
+func TestHandleRunnerJobComplete_RedactsAndBoundsError(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{
+		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: 1, TaskName: "t"}},
+		CompleteJobOK: true,
+		SecretValues:  map[int][]string{1: {"S3cr3t-Remote-Value"}},
+	}
+	runStore := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 1}}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, runStore)
+	longErr := "S3cr3t-Remote-Value " + strings.Repeat("e", 2*maxRunnerTaskErrorBytes)
+	body, _ := json.Marshal(map[string]any{"epoch": 1, "status": "failed", "output": "out S3cr3t-Remote-Value", "error": longErr})
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobComplete(w, completeReq(string(body)))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body=%s)", w.Code, w.Body.String())
+	}
+	call := remoteJobs.CompleteJobCalls[0]
+	if call.Output != "out ***" {
+		t.Fatalf("output = %q, want the secret redacted", call.Output)
+	}
+	if !strings.HasPrefix(call.TaskError, "*** eee") || len(call.TaskError) != maxRunnerTaskErrorBytes {
+		t.Fatalf("task error = %.20q (len %d), want redacted and cut at %d bytes", call.TaskError, len(call.TaskError), maxRunnerTaskErrorBytes)
+	}
+}
+
+func TestHandleRunnerJobComplete_ErrorCutKeepsValidUTF8(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: 1, TaskName: "t"}}, CompleteJobOK: true}
+	runStore := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 1}}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, runStore)
+	// "ż" is two bytes; the odd prefix makes one straddle the 4 KiB cut.
+	body, _ := json.Marshal(map[string]any{"epoch": 1, "status": "failed", "error": "x" + strings.Repeat("ż", maxRunnerTaskErrorBytes)})
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobComplete(w, completeReq(string(body)))
+	got := remoteJobs.CompleteJobCalls[0].TaskError
+	if !utf8.ValidString(got) || len(got) != maxRunnerTaskErrorBytes-1 {
+		t.Fatalf("task error len %d valid=%v, want %d valid UTF-8 bytes", len(got), utf8.ValidString(got), maxRunnerTaskErrorBytes-1)
+	}
+}
+
+func TestHandleRunnerJobComplete_SecretLookupErrorIs500(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{SecretValuesErr: errGap}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobComplete(w, completeReq(`{"epoch":1,"status":"passed"}`))
+	if w.Code != http.StatusInternalServerError || len(remoteJobs.CompleteJobCalls) != 0 {
+		t.Fatalf("status = %d, calls = %d; want 500 and no completion recorded", w.Code, len(remoteJobs.CompleteJobCalls))
+	}
+}
+
+func TestHandleRunnerJobComplete_NilRemoteJobStore(t *testing.T) {
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, nil, nil)
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobComplete(w, completeReq(`{"epoch":1,"status":"passed"}`))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
 	}
 }
 

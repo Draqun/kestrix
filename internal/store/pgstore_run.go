@@ -148,8 +148,16 @@ func (s *PGStore) StartQueuedRun(id int) (bool, error) {
 
 // AppendTaskResult atomically adds a single task result to the run's task_results array.
 func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
+	return appendTaskResult(s.db, runID, tr)
+}
+
+// appendTaskResult is AppendTaskResult against any executor, so a caller
+// already inside a transaction (ClaimNextJob) appends the same way.
+func appendTaskResult(exec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, runID int, tr TaskResult) error {
 	b, _ := json.Marshal(tr)
-	_, err := s.db.Exec(
+	_, err := exec.Exec(
 		`UPDATE runs SET task_results = task_results::jsonb || $1::jsonb WHERE id = $2`,
 		string(b), runID,
 	)

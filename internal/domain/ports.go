@@ -246,8 +246,15 @@ type RemoteJobPayload struct {
 	// runner's behalf (design.md D3): the runner's own configuration alone
 	// decides whether it runs docker or local at all.
 	DefaultImage string            `json:"default_image,omitempty"`
-	Variables    map[string]string `json:"variables"`
-	Archive      []byte            `json:"archive"`
+	Variables    map[string]string `json:"variables,omitempty"`
+	// SecretValues are the resolved runtime-secret values among Variables,
+	// so the runner can redact its own streamed output across chunk
+	// boundaries (remote-runner-fixes design.md D1). The runner already
+	// holds every value as a variable; this only says which ones to hide.
+	// Variables and SecretValues are stored encrypted; the store's payload
+	// column uses its own type that has neither field (D2).
+	SecretValues []string `json:"secret_values,omitempty"`
+	Archive      []byte   `json:"archive"`
 }
 
 // RemoteJob is one task dispatched to a remote runner instead of executed
@@ -309,8 +316,10 @@ type RemoteJobStore interface {
 	// for system-initiated calls (ReclaimStaleJobs's own fail-a-stale-job
 	// path); every HTTP-driven call passes the authenticated runner's ID.
 	// output is bounded by maxOutputBytes the same way AppendJobTrace's
-	// chunk is - a non-positive value means unbounded.
-	CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
+	// chunk is - a non-positive value means unbounded. taskError, when
+	// non-empty, is stored as the task result's Error (remote-runner-fixes
+	// design.md D4).
+	CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
 	// PendingOrClaimedJobIDsForRun returns the IDs of runID's jobs not yet
 	// terminal, for CancelRun's remote-mode carve-out (task 4.3).
 	PendingOrClaimedJobIDsForRun(runID int) ([]int, error)
@@ -324,10 +333,19 @@ type RemoteJobStore interface {
 	// before the cutoff to "pending" (bumping claim_epoch, D5), except a job
 	// whose run is already terminal, which is instead finalized in place as
 	// "failed" with reason - a stale job of a terminal run is neither
-	// reclaimed nor left claimable. A job already reclaimed maxReclaims times
-	// is finalized "failed" with reason instead of being returned to
-	// "pending" again. Returns the counts reclaimed and finalized-failed.
+	// reclaimed nor left claimable. A job returned to "pending" by an
+	// earlier reclaim that no runner claimed before the cutoff counts as
+	// another unanswered attempt. A job whose reclaim count (never its
+	// claim_epoch, which also moves on every claim) already reached
+	// maxReclaims is finalized "failed" with reason instead of being
+	// returned to "pending" again; a never-claimed job is never touched -
+	// remote-runner-fixes design.md D3. Returns the counts reclaimed and
+	// finalized-failed.
 	ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (reclaimed, finalizedFailed int, err error)
+	// DeleteTerminalRemoteSecrets deletes the encrypted variables and secret
+	// values of every terminal job and run (remote-runner-fixes design.md
+	// D2). One sweep covers every way a job or run can end.
+	DeleteTerminalRemoteSecrets() error
 	// OutstandingJobRunIDsForProject returns the IDs of projectName's runs
 	// that have a job in pending/claimed/running status - the store-backed
 	// half of ActiveRunIDsForProject's remote-mode carve-out (design.md
@@ -340,11 +358,16 @@ type RemoteJobStore interface {
 	// dispatch computed - the data tasks.md 3.6's resumption walker needs
 	// to dispatch a dependent task later without re-acquiring source or
 	// re-resolving secrets (design.md D6/D7). Called once, at run creation.
-	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string) error
+	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error
 	// GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a
 	// nil archive and empty map if none was ever set (a non-remote run, or
 	// one that dispatched no eligible task at all - see startRemote).
-	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, err error)
+	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, secretValues []string, err error)
+	// RemoteJobSecretValues returns the resolved runtime-secret values of a
+	// job's run, for redacting what its runner sends back (trace and
+	// completion) - remote-runner-fixes design.md D1. Nil once the job's
+	// values have been deleted, or when the job does not exist.
+	RemoteJobSecretValues(jobID int) ([]string, error)
 }
 
 // RunnerStore is the port for registering and authenticating remote

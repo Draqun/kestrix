@@ -31,7 +31,7 @@ RUN npx vite build
 # Stage 3: Runtime
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata git openssh-client
+RUN apk add --no-cache ca-certificates tzdata git openssh-client bash
 
 COPY --from=backend /kestrix /kestrix
 COPY --from=frontend /app/dist /app/ui/dist

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 )
 
@@ -39,32 +40,112 @@ func callerOwnsJob(callerRunnerID *int, storedRunnerID sql.NullInt64) bool {
 	return storedRunnerID.Valid && int(storedRunnerID.Int64) == *callerRunnerID
 }
 
-// CreateRemoteJob dispatches one task of runID as a pending job.
+// remoteSecrets is what remote_jobs.secrets_enc and runs.remote_secrets_enc
+// hold once decrypted: the resolved variables (per job, or per task for a
+// run's snapshot) and the resolved runtime-secret values among them. Never
+// stored in plaintext - remote-runner-fixes design.md D2.
+type remoteSecrets struct {
+	Variables     map[string]string            `json:"variables,omitempty"`
+	TaskVariables map[string]map[string]string `json:"task_variables,omitempty"`
+	SecretValues  []string                     `json:"secret_values,omitempty"`
+}
+
+// remoteJobAAD binds a job's ciphertext to the job's own ID, which never
+// changes across reclaims and is never shared - unlike run+task, which a
+// single-task re-run repeats once the earlier job is terminal - so a
+// ciphertext copied onto another job's row fails to decrypt.
+func remoteJobAAD(jobID int) []byte {
+	return []byte(fmt.Sprintf("remote_job:%d", jobID))
+}
+
+func remoteRunAAD(runID int) []byte {
+	return []byte(fmt.Sprintf("run:%d", runID))
+}
+
+// sealRemoteSecrets encrypts v with the credential master key, failing
+// closed when none is configured - the same custody the credential store
+// uses.
+func (s *PGStore) sealRemoteSecrets(aad []byte, v remoteSecrets) ([]byte, error) {
+	if s.masterKeys == nil {
+		return nil, credentials.ErrMasterKeyUnavailable
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("marshal remote secrets: %w", err)
+	}
+	return credentials.Encrypt(s.masterKeys, aad, b)
+}
+
+// openRemoteSecrets is sealRemoteSecrets' inverse. An empty ciphertext -
+// never set, or already deleted once its job/run went terminal - opens to
+// the zero value.
+func (s *PGStore) openRemoteSecrets(aad, enc []byte) (remoteSecrets, error) {
+	var v remoteSecrets
+	if len(enc) == 0 {
+		return v, nil
+	}
+	if s.masterKeys == nil {
+		return v, credentials.ErrMasterKeyUnavailable
+	}
+	b, err := credentials.Decrypt(s.masterKeys, aad, enc)
+	if err != nil {
+		return v, fmt.Errorf("decrypt remote secrets: %w", err)
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return v, fmt.Errorf("unmarshal remote secrets: %w", err)
+	}
+	return v, nil
+}
+
+// storedRemoteJobPayload is the shape of the remote_jobs.payload column:
+// domain.RemoteJobPayload without Variables and SecretValues. Keeping it a
+// separate type means a secret-bearing field can never reach the plaintext
+// column by being added to the wire payload - it has to be added here on
+// purpose (remote-runner-fixes design.md D2).
+type storedRemoteJobPayload struct {
+	Task         domain.Task   `json:"task"`
+	Repos        []domain.Repo `json:"repos"`
+	DefaultImage string        `json:"default_image,omitempty"`
+	Archive      []byte        `json:"archive"`
+}
+
+// CreateRemoteJob dispatches one task of runID as a pending job. The
+// payload's Variables and SecretValues go into secrets_enc, encrypted; the
+// payload column holds only storedRemoteJobPayload (design.md D2).
 func (s *PGStore) CreateRemoteJob(runID int, taskName string, payload domain.RemoteJobPayload) (int, error) {
-	b, err := json.Marshal(payload)
+	// Reserve the ID first: the ciphertext's AAD names it.
+	var id int
+	if err := s.db.QueryRow(`SELECT nextval(pg_get_serial_sequence('remote_jobs', 'id'))`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("reserve remote job id: %w", err)
+	}
+	enc, err := s.sealRemoteSecrets(remoteJobAAD(id), remoteSecrets{Variables: payload.Variables, SecretValues: payload.SecretValues})
+	if err != nil {
+		return 0, fmt.Errorf("encrypt remote job secrets: %w", err)
+	}
+	b, err := json.Marshal(storedRemoteJobPayload{Task: payload.Task, Repos: payload.Repos, DefaultImage: payload.DefaultImage, Archive: payload.Archive})
 	if err != nil {
 		return 0, fmt.Errorf("marshal remote job payload: %w", err)
 	}
-	var id int
-	err = s.db.QueryRow(
-		`INSERT INTO remote_jobs (run_id, task_name, status, payload) VALUES ($1, $2, $3, $4) RETURNING id`,
-		runID, taskName, domain.RemoteJobStatusPending, string(b),
-	).Scan(&id)
-	if err != nil {
+	if _, err := s.db.Exec(
+		`INSERT INTO remote_jobs (id, run_id, task_name, status, payload, secrets_enc) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, runID, taskName, domain.RemoteJobStatusPending, string(b), enc,
+	); err != nil {
 		return 0, err
 	}
 	return id, nil
 }
 
-// scanRemoteJob scans one remote_jobs row into a domain.RemoteJob.
-func scanRemoteJob(row interface {
+// scanRemoteJob scans one remote_jobs row into a domain.RemoteJob, merging
+// the decrypted variables and secret values back into its payload.
+func (s *PGStore) scanRemoteJob(row interface {
 	Scan(dest ...any) error
 }) (*domain.RemoteJob, error) {
 	var j domain.RemoteJob
 	var payloadJSON string
 	var runnerID sql.NullInt64
 	var claimedAt sql.NullTime
-	if err := row.Scan(&j.ID, &j.RunID, &j.TaskName, &j.Status, &runnerID, &payloadJSON, &j.ClaimEpoch, &claimedAt, &j.UpdatedAt); err != nil {
+	var enc []byte
+	if err := row.Scan(&j.ID, &j.RunID, &j.TaskName, &j.Status, &runnerID, &payloadJSON, &j.ClaimEpoch, &claimedAt, &j.UpdatedAt, &enc); err != nil {
 		return nil, err
 	}
 	if runnerID.Valid {
@@ -74,18 +155,46 @@ func scanRemoteJob(row interface {
 	if claimedAt.Valid {
 		j.ClaimedAt = &claimedAt.Time
 	}
-	if err := json.Unmarshal([]byte(payloadJSON), &j.Payload); err != nil {
+	var stored storedRemoteJobPayload
+	if err := json.Unmarshal([]byte(payloadJSON), &stored); err != nil {
 		return nil, fmt.Errorf("unmarshal remote job payload: %w", err)
+	}
+	secrets, err := s.openRemoteSecrets(remoteJobAAD(j.ID), enc)
+	if err != nil {
+		return nil, err
+	}
+	j.Payload = domain.RemoteJobPayload{
+		Task: stored.Task, Repos: stored.Repos, DefaultImage: stored.DefaultImage, Archive: stored.Archive,
+		Variables: secrets.Variables, SecretValues: secrets.SecretValues,
 	}
 	return &j, nil
 }
 
-const remoteJobColumns = `id, run_id, task_name, status, runner_id, payload, claim_epoch, claimed_at, updated_at`
+const remoteJobColumns = `id, run_id, task_name, status, runner_id, payload, claim_epoch, claimed_at, updated_at, secrets_enc`
+
+// RemoteJobSecretValues returns the resolved runtime-secret values stored
+// with jobID, without loading its payload (the source archive can be
+// large and trace appends call this per chunk).
+func (s *PGStore) RemoteJobSecretValues(jobID int) ([]string, error) {
+	var enc []byte
+	err := s.db.QueryRow(`SELECT secrets_enc FROM remote_jobs WHERE id = $1`, jobID).Scan(&enc)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := s.openRemoteSecrets(remoteJobAAD(jobID), enc)
+	if err != nil {
+		return nil, err
+	}
+	return secrets.SecretValues, nil
+}
 
 // GetRemoteJob returns a job by ID, or nil if it does not exist.
 func (s *PGStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) {
 	row := s.db.QueryRow(`SELECT `+remoteJobColumns+` FROM remote_jobs WHERE id = $1`, jobID)
-	j, err := scanRemoteJob(row)
+	j, err := s.scanRemoteJob(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -129,9 +238,14 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 		 WHERE id = $3 RETURNING `+remoteJobColumns,
 		domain.RemoteJobStatusClaimed, runnerID, jobID,
 	)
-	j, err := scanRemoteJob(row)
+	j, err := s.scanRemoteJob(row)
 	if err != nil {
 		return nil, fmt.Errorf("claim job %d: %w", jobID, err)
+	}
+	// The claim is where a remote task starts, so record it "running" the
+	// way OnTaskStart does in-process (remote-runner-fixes design.md D5).
+	if err := appendTaskResult(tx, j.RunID, TaskResult{Name: j.TaskName, Status: "running"}); err != nil {
+		return nil, fmt.Errorf("record claimed task running: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit claim: %w", err)
@@ -250,7 +364,7 @@ func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
 // this, one completion report could append up to the runner-job request
 // body's own size bound directly to runs.output, ignoring the operator-
 // configured output budget entirely.
-func (s *PGStore) CompleteJob(jobID, epoch int, status, output string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("begin complete job: %w", err)
@@ -300,7 +414,7 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output string, callerRun
 
 	var results []TaskResult
 	json.Unmarshal([]byte(taskResultsJSON), &results)
-	results = append(results, TaskResult{Name: taskName, Status: status, Output: output})
+	results = append(results, TaskResult{Name: taskName, Status: status, Output: output, Error: taskError})
 	newStatus, errMsg := computeRunStatus(results)
 
 	chunk := output
@@ -372,39 +486,42 @@ func (s *PGStore) CancelJobsForRun(runID int) error {
 	return err
 }
 
-// ReclaimStaleJobs returns to "pending" every "claimed"/"running" job whose
-// run is not already terminal and whose updated_at is older than olderThan,
-// bumping claim_epoch (D5) so a subsequent claim - by another runner, or a
-// re-claim by the same one - is a distinct epoch from whatever the
-// original, merely-slow runner still holds. A job already reclaimed
-// maxReclaims times (tracked via claim_epoch, which increments once per
-// claim including the initial one) is finalized "failed" naming reason
-// instead of being returned to "pending" again, through the same
-// CompleteJob path a runner's own report would use - so it inherits
-// CompleteJob's run-terminal fencing for free. A stale job whose run is
-// already terminal is finalized the same way. Selection uses no row lock:
-// each per-job action is itself race-safe (CompleteJob's epoch fencing, or
-// an epoch-guarded optimistic UPDATE for a plain reclaim), so a job a
-// runner completes concurrently is simply not counted here rather than
-// double-processed - see design.md D5 and tasks.md 4.2/4.3.
+// ReclaimStaleJobs is silent-runner recovery (see domain.RemoteJobStore's
+// doc). It selects every job last updated before olderThan that is either
+// "claimed"/"running" (its runner went silent) or "pending" after an
+// earlier reclaim (nobody picked it up again). Each counts as one
+// unanswered attempt: a job whose reclaim_count already reached
+// maxReclaims, or whose run is terminal, is finalized "failed" naming
+// reason through CompleteJob, inheriting its run-terminal fencing;
+// otherwise it goes (or stays) "pending" with reclaim_count+1. Only a claim
+// or reclaim bumps claim_epoch (D5), so a slow original runner is fenced
+// out; reclaim_count, not claim_epoch, is what the limit is checked
+// against, since claim_epoch also moves on every claim
+// (remote-runner-fixes design.md D3). A never-claimed pending job has
+// reclaim_count 0 and is never selected. Selection uses no row lock: each
+// per-job action is itself race-safe (CompleteJob's epoch fencing, or an
+// epoch-guarded optimistic UPDATE), so a job a runner claims or completes
+// concurrently is simply not counted here rather than double-processed.
 func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, error) {
 	rows, err := s.db.Query(
-		`SELECT rj.id, rj.claim_epoch, r.status FROM remote_jobs rj JOIN runs r ON r.id = rj.run_id
-		 WHERE rj.status IN ($1, $2) AND rj.updated_at < $3`,
-		domain.RemoteJobStatusClaimed, domain.RemoteJobStatusRunning, olderThan,
+		`SELECT rj.id, rj.run_id, rj.task_name, rj.status, rj.claim_epoch, rj.reclaim_count, r.status
+		 FROM remote_jobs rj JOIN runs r ON r.id = rj.run_id
+		 WHERE rj.updated_at < $1 AND (rj.status IN ($2, $3) OR (rj.status = $4 AND rj.reclaim_count > 0))`,
+		olderThan, domain.RemoteJobStatusClaimed, domain.RemoteJobStatusRunning, domain.RemoteJobStatusPending,
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("select stale jobs: %w", err)
 	}
 	type staleJob struct {
-		id         int
-		claimEpoch int
-		runStatus  string
+		id, runID                int
+		taskName, status         string
+		claimEpoch, reclaimCount int
+		runStatus                string
 	}
 	var stale []staleJob
 	for rows.Next() {
 		var j staleJob
-		if err := rows.Scan(&j.id, &j.claimEpoch, &j.runStatus); err != nil {
+		if err := rows.Scan(&j.id, &j.runID, &j.taskName, &j.status, &j.claimEpoch, &j.reclaimCount, &j.runStatus); err != nil {
 			rows.Close()
 			return 0, 0, fmt.Errorf("scan stale job: %w", err)
 		}
@@ -417,10 +534,10 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 
 	reclaimed, failed := 0, 0
 	for _, j := range stale {
-		if isTerminalRunStatus(j.runStatus) || j.claimEpoch >= maxReclaims {
+		if isTerminalRunStatus(j.runStatus) || j.reclaimCount >= maxReclaims {
 			// reason is a short, fixed system string, never runner-controlled
 			// output, so it needs no output-budget bound here.
-			if _, err := s.CompleteJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, nil, 0); err != nil {
+			if _, err := s.CompleteJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, reason, nil, 0); err != nil {
 				return reclaimed, failed, fmt.Errorf("fail stale job %d: %w", j.id, err)
 			}
 			// CompleteJob finalizes the job row to "failed" whenever the
@@ -432,16 +549,30 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 			}
 			continue
 		}
+		// A silent claim gets a new epoch so its runner is fenced out; an
+		// unanswered pending job has no claim to fence and keeps its epoch.
+		epochBump := 1
+		if j.status == domain.RemoteJobStatusPending {
+			epochBump = 0
+		}
 		res, err := s.db.Exec(
-			`UPDATE remote_jobs SET status = $1, runner_id = NULL, claim_epoch = claim_epoch + 1, claimed_at = NULL, updated_at = now()
-			 WHERE id = $2 AND claim_epoch = $3 AND status IN ($4, $5)`,
-			domain.RemoteJobStatusPending, j.id, j.claimEpoch, domain.RemoteJobStatusClaimed, domain.RemoteJobStatusRunning,
+			`UPDATE remote_jobs SET status = $1, runner_id = NULL, claim_epoch = claim_epoch + $2, reclaim_count = reclaim_count + 1, claimed_at = NULL, updated_at = now()
+			 WHERE id = $3 AND claim_epoch = $4 AND status = $5`,
+			domain.RemoteJobStatusPending, epochBump, j.id, j.claimEpoch, j.status,
 		)
 		if err != nil {
 			return reclaimed, failed, fmt.Errorf("reclaim stale job %d: %w", j.id, err)
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			reclaimed++
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		reclaimed++
+		if j.status != domain.RemoteJobStatusPending {
+			// Undo the claim's "running" (design.md D5) so the task reads
+			// pending again while it waits for another runner.
+			if err := s.AppendTaskResult(j.runID, TaskResult{Name: j.taskName, Status: "pending"}); err != nil {
+				return reclaimed, failed, fmt.Errorf("record reclaimed task pending: %w", err)
+			}
 		}
 	}
 
@@ -471,43 +602,72 @@ func (s *PGStore) OutstandingJobRunIDsForProject(projectName string) ([]int, err
 	return ids, rows.Err()
 }
 
-// remoteRunSnapshot is the JSON shape stored in runs.remote_snapshot.
-type remoteRunSnapshot struct {
-	Archive   []byte                       `json:"archive"`
-	Variables map[string]map[string]string `json:"variables"`
+// DeleteTerminalRemoteSecrets deletes the encrypted values of every
+// terminal job and run (design.md D2). A late completion of a canceled run
+// still redacts: its job is not terminal until that completion lands.
+func (s *PGStore) DeleteTerminalRemoteSecrets() error {
+	if _, err := s.db.Exec(
+		`UPDATE remote_jobs SET secrets_enc = NULL WHERE secrets_enc IS NOT NULL AND status IN ($1, $2, $3)`,
+		domain.RemoteJobStatusPassed, domain.RemoteJobStatusFailed, domain.RemoteJobStatusCanceled,
+	); err != nil {
+		return fmt.Errorf("delete terminal job secrets: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE runs SET remote_secrets_enc = NULL WHERE remote_secrets_enc IS NOT NULL AND status IN ('passed', 'failed', 'canceled')`,
+	); err != nil {
+		return fmt.Errorf("delete terminal run secrets: %w", err)
+	}
+	return nil
 }
 
-// SetRemoteRunSnapshot persists the one archive and per-task variables a
-// remote-mode run's initial dispatch computed, for tasks.md 3.6's
-// resumption walker to reuse later without re-acquiring source.
-func (s *PGStore) SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string) error {
-	b, err := json.Marshal(remoteRunSnapshot{Archive: archive, Variables: variables})
+// remoteRunSnapshot is the JSON shape stored in runs.remote_snapshot: only
+// the archive. The per-task variables and the run's secret values live
+// encrypted in runs.remote_secrets_enc (design.md D2).
+type remoteRunSnapshot struct {
+	Archive []byte `json:"archive"`
+}
+
+// SetRemoteRunSnapshot persists the one archive, per-task variables, and
+// resolved secret values a remote-mode run's initial dispatch computed,
+// for tasks.md 3.6's resumption walker to reuse later without re-acquiring
+// source or re-resolving secrets.
+func (s *PGStore) SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error {
+	enc, err := s.sealRemoteSecrets(remoteRunAAD(runID), remoteSecrets{TaskVariables: variables, SecretValues: secretValues})
+	if err != nil {
+		return fmt.Errorf("encrypt remote run secrets: %w", err)
+	}
+	b, err := json.Marshal(remoteRunSnapshot{Archive: archive})
 	if err != nil {
 		return fmt.Errorf("marshal remote run snapshot: %w", err)
 	}
-	_, err = s.db.Exec(`UPDATE runs SET remote_snapshot = $1 WHERE id = $2`, string(b), runID)
+	_, err = s.db.Exec(`UPDATE runs SET remote_snapshot = $1, remote_secrets_enc = $2 WHERE id = $3`, string(b), enc, runID)
 	return err
 }
 
 // GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a nil
-// archive and empty map if none was ever set.
-func (s *PGStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, error) {
+// archive and empty values if none was ever set.
+func (s *PGStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, []string, error) {
 	var snapJSON sql.NullString
-	err := s.db.QueryRow(`SELECT remote_snapshot FROM runs WHERE id = $1`, runID).Scan(&snapJSON)
+	var enc []byte
+	err := s.db.QueryRow(`SELECT remote_snapshot, remote_secrets_enc FROM runs WHERE id = $1`, runID).Scan(&snapJSON, &enc)
 	if err == sql.ErrNoRows {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !snapJSON.Valid {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	var snap remoteRunSnapshot
 	if err := json.Unmarshal([]byte(snapJSON.String), &snap); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal remote run snapshot: %w", err)
+		return nil, nil, nil, fmt.Errorf("unmarshal remote run snapshot: %w", err)
 	}
-	return snap.Archive, snap.Variables, nil
+	secrets, err := s.openRemoteSecrets(remoteRunAAD(runID), enc)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return snap.Archive, secrets.TaskVariables, secrets.SecretValues, nil
 }
 
 var _ domain.RemoteJobStore = (*PGStore)(nil)

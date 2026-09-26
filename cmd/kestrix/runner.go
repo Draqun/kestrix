@@ -20,6 +20,7 @@ import (
 	"kestrix/internal/config"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
+	"kestrix/internal/redact"
 	"kestrix/internal/runner"
 )
 
@@ -139,14 +140,16 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 	workDir, err := os.MkdirTemp("", "kestrix-runner-job-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: create workdir: %v\n", err)
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", "runner: create workdir: "+err.Error())
+		msg := "runner: create workdir: " + err.Error()
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
 		return
 	}
 	defer os.RemoveAll(workDir)
 
 	if err := unpackArchive(job.Payload.Archive, workDir); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: unpack archive: %v\n", err)
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", "runner: unpack archive: "+err.Error())
+		msg := "runner: unpack archive: " + err.Error()
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
 		return
 	}
 
@@ -156,22 +159,33 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 		DefaultImage: job.Payload.DefaultImage,
 	}
 	tw := &traceWriter{client: client, baseURL: baseURL, token: token, jobID: job.ID, epoch: job.ClaimEpoch}
-	opts := buildRunnerOptions(workDir, job.Payload, mode, tw)
+	// Redact here, where the stream is still whole: the server redacts each
+	// trace chunk too, but a secret split across two chunks only matches
+	// on this side (remote-runner-fixes design.md D1).
+	out := redact.NewWriter(tw, job.Payload.SecretValues)
+	opts := buildRunnerOptions(workDir, job.Payload, mode, out)
 
 	tr, runErr := runner.RunOne(ctx, project, job.Payload.Task.Name, opts)
+	_ = out.Flush() // traceWriter never fails a write; see its doc
 	status := tr.Status
 	if status == "" {
 		status = "failed"
 	}
+	taskError := tr.Error
 	if runErr != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: task %q: %v\n", job.Payload.Task.Name, runErr)
+		if taskError == "" {
+			taskError = runErr.Error()
+		}
 	}
 	// output is left empty: every byte of it already streamed via
 	// tw's PATCH .../trace calls during execution (LocalExecutor/
 	// DockerExecutor tee to opts.Stdout as they run) - resending the whole
 	// aggregate here would duplicate it, since CompleteJob appends whatever
 	// this call's own output carries.
-	if err := reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, status, ""); err != nil {
+	// taskError carries why a task failed when it never produced output to
+	// say so itself - e.g. a missing shell (design.md D4).
+	if err := reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, status, "", redact.Values(taskError, job.Payload.SecretValues)); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: report completion for job %d: %v\n", job.ID, err)
 	}
 }
@@ -194,8 +208,9 @@ func buildRunnerOptions(workDir string, payload domain.RemoteJobPayload, mode st
 }
 
 // reportComplete makes one PUT /api/runner-jobs/{id}/complete call.
-func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output string) error {
-	body, _ := json.Marshal(map[string]any{"epoch": epoch, "status": status, "output": output})
+// taskError may be empty.
+func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output, taskError string) error {
+	body, _ := json.Marshal(map[string]any{"epoch": epoch, "status": status, "output": output, "error": taskError})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
 		baseURL+"/api/runner-jobs/"+strconv.Itoa(jobID)+"/complete", bytes.NewReader(body))
 	if err != nil {

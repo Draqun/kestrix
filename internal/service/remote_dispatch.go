@@ -197,13 +197,15 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) 
 // control-plane variable - task-execution-isolation - since
 // domain.VariableResolver only ever surfaces pipeline-declared values, not
 // host environment or KESTRIX_RUNNER_ENV_PASSTHROUGH names), and the source
-// archive. It names no execution engine or image (design.md D3).
-func buildRemoteJobPayload(task model.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte) domain.RemoteJobPayload {
+// archive, plus the run's resolved secret values so the runner can redact
+// its own output (remote-runner-fixes design.md D1). It names no execution
+// engine or image (design.md D3).
+func buildRemoteJobPayload(task model.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte, secretValues []string) domain.RemoteJobPayload {
 	var vars map[string]string
 	if resolver != nil {
 		vars = resolver.Get(task.Execute.Repo, task.Name, "")
 	}
-	return domain.RemoteJobPayload{Task: task, Repos: sanitizeReposForPayload(repos), DefaultImage: defaultImage, Variables: vars, Archive: archive}
+	return domain.RemoteJobPayload{Task: task, Repos: sanitizeReposForPayload(repos), DefaultImage: defaultImage, Variables: vars, SecretValues: secretValues, Archive: archive}
 }
 
 // sanitizeReposForPayload strips URL and CredentialRef from repos, keeping
@@ -271,13 +273,13 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 			}
 			perTaskVars[node.Task.Name] = vars
 		}
-		if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars); err != nil {
+		if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars, opts.ResolvedSecretValues); err != nil {
 			return runID, fmt.Errorf("persist remote run snapshot: %w", err)
 		}
 	}
 	for _, task := range eligible {
 		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
-		payload := buildRemoteJobPayload(task, proj.Repos, proj.DefaultImage, opts.Variables, archive)
+		payload := buildRemoteJobPayload(task, proj.Repos, proj.DefaultImage, opts.Variables, archive, opts.ResolvedSecretValues)
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
 			return runID, fmt.Errorf("dispatch task %q: %w", task.Name, err)
 		}
@@ -292,7 +294,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 // caller may only complete a job it holds the current claim on, per
 // callerRunnerID - and otherwise triggers the dependency-graph resumption
 // walker (tasks.md 3.6) for any task that just became eligible.
-func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output string, callerRunnerID *int) (bool, error) {
+func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int) (bool, error) {
 	job, err := s.remoteJobStore.GetRemoteJob(jobID)
 	if err != nil {
 		return false, fmt.Errorf("get remote job %d: %w", jobID, err)
@@ -300,7 +302,7 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output string, 
 	if job == nil {
 		return false, nil
 	}
-	ok, err := s.remoteJobStore.CompleteJob(jobID, epoch, status, output, callerRunnerID, s.MaxOutputBytes)
+	ok, err := s.remoteJobStore.CompleteJob(jobID, epoch, status, output, taskError, callerRunnerID, s.MaxOutputBytes)
 	if err != nil {
 		return false, fmt.Errorf("complete remote job %d: %w", jobID, err)
 	}
@@ -356,7 +358,7 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 		return nil
 	}
 
-	archive, variables, err := s.remoteJobStore.GetRemoteRunSnapshot(runID)
+	archive, variables, secretValues, err := s.remoteJobStore.GetRemoteRunSnapshot(runID)
 	if err != nil {
 		return fmt.Errorf("load remote run snapshot: %w", err)
 	}
@@ -364,7 +366,7 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
 		payload := domain.RemoteJobPayload{
 			Task: task, Repos: sanitizeReposForPayload(run.PipelineDef.Repos), DefaultImage: run.PipelineDef.DefaultImage,
-			Variables: variables[task.Name], Archive: archive,
+			Variables: variables[task.Name], SecretValues: secretValues, Archive: archive,
 		}
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
 			return fmt.Errorf("dispatch task %q: %w", task.Name, err)
@@ -385,6 +387,16 @@ func (s *RunService) ReclaimStaleRemoteJobs(timeout time.Duration, maxReclaims i
 		return 0, 0, nil
 	}
 	return s.remoteJobStore.ReclaimStaleJobs(time.Now().Add(-timeout), maxReclaims, reason)
+}
+
+// DeleteTerminalRemoteSecrets deletes the encrypted values of finished
+// remote jobs and runs (remote-runner-fixes design.md D2); the reclaim loop
+// calls it on every tick. A no-op without a remoteJobStore.
+func (s *RunService) DeleteTerminalRemoteSecrets() error {
+	if s.remoteJobStore == nil {
+		return nil
+	}
+	return s.remoteJobStore.DeleteTerminalRemoteSecrets()
 }
 
 // dispatchSingleTask is RunTask's and StartTask's shared remote-mode branch
@@ -412,7 +424,7 @@ func (s *RunService) dispatchSingleTask(runID int, proj *model.Project, taskName
 	if err != nil {
 		return domain.TaskResult{}, false, fmt.Errorf("build source archive: %w", err)
 	}
-	payload := buildRemoteJobPayload(*task, proj.Repos, proj.DefaultImage, opts.Variables, archive)
+	payload := buildRemoteJobPayload(*task, proj.Repos, proj.DefaultImage, opts.Variables, archive, opts.ResolvedSecretValues)
 	if _, err := s.remoteJobStore.CreateRemoteJob(runID, taskName, payload); err != nil {
 		return domain.TaskResult{}, false, fmt.Errorf("dispatch task %q: %w", taskName, err)
 	}
