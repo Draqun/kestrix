@@ -6,9 +6,7 @@ executes: which environment a task may observe, what isolation a containerized
 task is guaranteed, and what a cancellation terminates. Pipeline definitions
 are untrusted input, trusted only as far as the least trusted committer of the
 repository they are read from.
-
 ## Requirements
-
 ### Requirement: Task environment is an explicit allowlist
 
 A task process in every runner mode SHALL receive only: a fixed base set of
@@ -21,7 +19,11 @@ Kestrix process SHALL be withheld. The variables `KESTRIX_MASTER_KEY_PATH`,
 `KESTRIX_GITLAB_TOKEN`, and `KESTRIX_WEBHOOK_SECRET` SHALL never reach a task,
 even when listed for passthrough; listing one SHALL be rejected at startup as a
 configuration error. A pipeline variable SHALL override a base or passthrough
-variable of the same name.
+variable of the same name. In `remote` mode, this guarantee is enforced at job
+payload construction rather than environment passthrough — a remote runner has
+no access to the Kestrix host's environment at all, so the same exclusion list
+SHALL be checked against the payload before it is sent, not against the
+runner's own environment.
 
 #### Scenario: Control-plane secrets are withheld
 
@@ -44,6 +46,12 @@ variable of the same name.
 
 - **WHEN** a pipeline declares a variable named `TERM` for a task
 - **THEN** the task SHALL observe the pipeline value, not the host value
+
+#### Scenario: Control-plane secrets never enter a remote job payload
+
+- **WHEN** a task dispatches as a job for `remote` mode
+- **THEN** the payload SHALL contain only the pipeline variables resolved for that task
+- **AND** SHALL NOT contain `DATABASE_URL`, any `KESTRIX_*` control-plane variable, or any value from `KESTRIX_RUNNER_ENV_PASSTHROUGH`
 
 ### Requirement: Docker tasks run with reduced privilege and bounded resources
 
@@ -97,6 +105,15 @@ SHALL NOT start. A run whose process could not be terminated SHALL stay
 `running` with the failure in its error, rather than being reported as
 `canceled`.
 
+In `remote` mode this guarantee does not hold and SHALL NOT be attempted: the
+task process runs on a machine Kestrix cannot reach, over a poll-only
+transport with no inbound channel (design.md D8). Cancelling a `remote`-mode
+run SHALL mark it `canceled` without terminating, or waiting for, a task
+already executing on a runner — the `remote`-mode behaviour is specified in
+full by the `remote-runner-execution` requirement "Cancelling a remote-mode
+run". The termination guarantee above continues to apply unchanged to
+`local`, `docker`, and `gitlab-runner` mode.
+
 #### Scenario: Cancel a running local task
 
 - **WHEN** a run is cancelled while a `local` task whose script spawned child processes is executing
@@ -131,3 +148,10 @@ SHALL NOT start. A run whose process could not be terminated SHALL stay
 - **WHEN** a manual task has been approved and its process is executing, and the run is cancelled before that process exits
 - **THEN** the task's process group SHALL receive a termination signal, then a kill signal after the grace period, by the same rule as a `local`-mode DAG task
 - **AND** the run SHALL be `canceled` rather than left `running` with the process still active
+
+#### Scenario: Cancel a remote-mode run with a task executing on a runner
+
+- **WHEN** a `remote`-mode run is cancelled while one of its jobs is executing on a registered runner
+- **THEN** the run SHALL be `canceled` with no termination attempted and no wait for the runner
+- **AND** the cancel request SHALL NOT fail merely because that task's process is still executing remotely
+

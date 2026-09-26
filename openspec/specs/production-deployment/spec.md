@@ -3,9 +3,7 @@
 ## Purpose
 
 Defines the safety and completeness guarantees of the production Compose deployment a customer installs from the repository or the release image.
-
 ## Requirements
-
 ### Requirement: No shared default database credential
 
 The production Compose file SHALL refuse to start unless `POSTGRES_PASSWORD` is set, and SHALL use that value for both the database container and the Kestrix `DATABASE_URL`. No default password SHALL be embedded in the file.
@@ -53,3 +51,14 @@ A deployment guide SHALL cover install, first administrator, webhook exposure, u
 #### Scenario: Operator upgrades
 - **WHEN** an operator follows the upgrade section
 - **THEN** the sequence is backup, pull the new tag, `up -d`, verify health, and they are told which release notes to read for breaking changes
+
+### Requirement: Runtime image runs local-mode tasks
+
+The published runtime image SHALL include the shell `local`-mode execution
+invokes, so both a `local`-mode project run by the server container and
+`kestrix runner --mode local` started from the image can execute tasks.
+
+#### Scenario: Runner from the image in local mode
+- **WHEN** `kestrix runner --mode local` runs in a container started from the published image and claims a job
+- **THEN** the task's script SHALL execute rather than fail because its shell is missing
+
