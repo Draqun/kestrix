@@ -263,6 +263,9 @@ func TestDockerExecutorHardeningFlags(t *testing.T) {
 	if !containsArg(captured, "--cap-drop") || !containsArg(captured, "ALL") {
 		t.Errorf("missing --cap-drop ALL: %v", captured)
 	}
+	if !containsArg(captured, "--init") {
+		t.Errorf("missing --init (cancel would wait out the full stop grace): %v", captured)
+	}
 	if !containsArg(captured, "--security-opt") || !containsArg(captured, "no-new-privileges") {
 		t.Errorf("missing --security-opt no-new-privileges: %v", captured)
 	}

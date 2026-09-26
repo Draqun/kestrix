@@ -58,7 +58,9 @@ escalation disabled, and bounded resources by default:
 | Network | `KESTRIX_RUNNER_DOCKER_NETWORK` | `runner.docker_network` | `bridge` (`none` disables egress) |
 | User | `KESTRIX_RUNNER_DOCKER_USER` | `runner.docker_user` | image default (unset) |
 
-`--cap-drop ALL` and `--security-opt no-new-privileges` are always applied.
+`--init`, `--cap-drop ALL` and `--security-opt no-new-privileges` are always applied.
+`--init` runs a minimal init as the container's PID 1, so cancelling a task
+delivers `SIGTERM` to the script instead of waiting out the full stop grace.
 Kestrix never mounts the Docker socket or passes `--privileged` into a task
 container.
 
