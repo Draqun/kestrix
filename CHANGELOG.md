@@ -67,6 +67,7 @@ All notable changes to Kestrix are documented here.
 
 ### Fixed
 
+- Cancelling a `docker`-mode task no longer always waits out the full `KESTRIX_RUNNER_CANCEL_GRACE` (default `10s`) before the container is killed. Task containers now start with `--init`; previously a script whose process became the container's PID 1 (e.g. `sleep`) ignored the `SIGTERM` from `docker stop`, which left only ~5s of the cancel request's budget and intermittently answered `504 run did not stop in time`.
 - Cancelling a single-task re-run or an approved manual task now terminates the task's process group (SIGTERM, then SIGKILL after `KESTRIX_RUNNER_CANCEL_GRACE`) and records the run as `canceled`: previously only the stored status was rewritten while the process kept running, and a late local verdict could overwrite the cancellation. A run already `canceled` also keeps that status against late writes.
 - The Webhook Logs page no longer falls back to fabricated sample events, and no longer calls a hard-coded `http://localhost:8080`, which broke the Docker deployment profile on port `18080`.
 - An approved manual task in a project configured for `docker` mode now runs in the same hardened container as a DAG task (dropped capabilities, PID/memory/CPU limits, configured network and user); previously manual approval always ran the task with a bare `bash -c` on the host regardless of the configured runner mode, bypassing that hardening entirely.

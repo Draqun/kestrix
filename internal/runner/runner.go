@@ -187,6 +187,10 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	args := []string{
 		"run", "--rm",
 		"--name", containerName,
+		// --init makes tini PID 1 so `docker stop` (cancel) delivers SIGTERM
+		// to the task; without it a PID-1 `sleep` ignores SIGTERM and every
+		// cancel waits out the full grace period before SIGKILL.
+		"--init",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 	}
