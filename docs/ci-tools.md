@@ -22,7 +22,7 @@ Executes pipeline tasks in one of four modes, set per project:
 |------|-------------|
 | `local` (default) | Runs tasks as bash subprocesses on the host |
 | `docker` | Executes each task in a Docker container |
-| `gitlab-runner` | Delegates execution to a GitLab Runner |
+| `gitlab-runner` | **Unsupported.** Shells out to `gitlab-runner exec`, a subcommand current GitLab Runner releases no longer ship (17.8.3 reports `Command exec not found`), so every task fails. Use `docker` or `remote` instead |
 | `remote` | Dispatches each task as a job for a registered runner to claim and execute on a separate machine - see [`remote-runners.md`](remote-runners.md) |
 
 Pipeline definitions are untrusted input, trusted only as far as the least
