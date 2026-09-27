@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"kestrix/internal/domain"
 )
 
 var (
@@ -204,9 +206,19 @@ func (c SourceCacheConfig) Validate() error {
 	return nil
 }
 
+// Validate rejects a runner.mode Kestrix cannot execute.
+func (c RunnerConfig) Validate() error {
+	if domain.IsValidMode(c.Mode) {
+		return nil
+	}
+	return fmt.Errorf("runner.mode %q is not supported: use one of %s", c.Mode, strings.Join(domain.Modes(), ", "))
+}
+
 // RunnerConfig controls how pipeline jobs are executed.
 type RunnerConfig struct {
-	// Mode selects the execution backend: "local" (direct sh -c) or "gitlab-runner" (gitlab-runner exec).
+	// Mode is the instance's default execution backend - "local" (bash on
+	// the host, the default when unset), "docker", or "remote" - which every
+	// project without a mode of its own takes.
 	Mode string `yaml:"mode"`
 	// DockerPIDs, DockerMemory, and DockerCPUs bound a Docker task's
 	// process count, memory, and CPU share. DockerUser and DockerNetwork

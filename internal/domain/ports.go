@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"time"
 )
 
@@ -479,8 +480,8 @@ type RunnerOptions struct {
 	// "user:<name>". Set by the handler from authenticated claims, never
 	// from client input - see run-attribution D2, D5. The runner ignores it.
 	Actor string
-	// Mode is the project's own execution backend ("local", "docker",
-	// "gitlab-runner", or "remote"), set by the handler from the project's
+	// Mode is the project's own execution backend ("local", "docker", or
+	// "remote"), set by the handler from the project's
 	// stored domain.ProjectConfig.Mode - see remote-runner-registration
 	// design.md D2. RunService branches on it directly (D10); a non-remote
 	// PipelineRunner/TaskRunner implementation uses it to select its own
@@ -612,6 +613,23 @@ type TokenIssuer interface {
 	Verify(token string) (Claims, error)
 }
 
+// modes are the execution backends a project's Mode or the instance's
+// runner.mode may name. Unexported so no importer can change what both accept.
+var modes = []string{"local", "docker", "remote"}
+
+// IsValidMode reports whether mode names a supported execution backend. The
+// empty mode is valid too: it defers to a default - the instance mode for a
+// project, "local" for the instance.
+func IsValidMode(mode string) bool {
+	return mode == "" || slices.Contains(modes, mode)
+}
+
+// Modes returns the supported execution backends, for messages that list
+// them. The empty mode is not listed.
+func Modes() []string {
+	return slices.Clone(modes)
+}
+
 // ProjectConfig is the configuration of a registered project.
 // It lives in domain so both ProjectStore and ProjectService can use it
 // without importing store.
@@ -622,8 +640,8 @@ type ProjectConfig struct {
 	RepoCredentialRef string `json:"repo_credential_ref,omitempty"`
 	PipelineDir       string `json:"pipeline_dir,omitempty"`
 	PipelineFile      string `json:"pipeline_file"`
-	// Mode selects this project's execution backend: "local", "docker",
-	// "gitlab-runner", or "remote" - see remote-runner-registration
+	// Mode selects this project's execution backend: "local", "docker", or
+	// "remote" - see remote-runner-registration
 	// design.md D2. Empty on input defaults to the instance's configured
 	// mode (ProjectService.DefaultMode); always populated on output.
 	Mode            string `json:"mode,omitempty"`

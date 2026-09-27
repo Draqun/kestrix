@@ -455,7 +455,7 @@ func TestSetCancelViaProcessGroupSendsTermThenKill(t *testing.T) {
 	}
 }
 
-func TestLocalAndGitLabExecutorsWireProcessGroupCancel(t *testing.T) {
+func TestLocalExecutorsWireProcessGroupCancel(t *testing.T) {
 	root := t.TempDir()
 	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
 	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "true"}}
@@ -480,21 +480,6 @@ func TestLocalAndGitLabExecutorsWireProcessGroupCancel(t *testing.T) {
 	}
 	if captured.WaitDelay <= 0 {
 		t.Error("LocalExecutor: WaitDelay not set")
-	}
-
-	captured = nil
-	gitlab := &GitLabRunnerExecutor{WorkDir: root, StageMap: map[string]string{"task": "build"}}
-	if _, err := gitlab.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
-		t.Fatalf("GitLabRunnerExecutor.RunTask: %v", err)
-	}
-	if captured.SysProcAttr == nil || !captured.SysProcAttr.Setpgid {
-		t.Error("GitLabRunnerExecutor: SysProcAttr.Setpgid not set")
-	}
-	if captured.Cancel == nil {
-		t.Error("GitLabRunnerExecutor: Cancel not set")
-	}
-	if captured.WaitDelay <= 0 {
-		t.Error("GitLabRunnerExecutor: WaitDelay not set")
 	}
 
 	captured = nil
@@ -584,11 +569,6 @@ func TestConcreteExecutorsWithFakeCommand(t *testing.T) {
 		t.Fatalf("LocalExecutor output=%q err=%v", out, err)
 	}
 
-	gitlab := &GitLabRunnerExecutor{WorkDir: root, StageMap: map[string]string{"task": "build"}}
-	out, err = gitlab.RunTask(context.Background(), task, opts)
-	if err != nil || !strings.Contains(out, "fake stdout") {
-		t.Fatalf("GitLabRunnerExecutor output=%q err=%v", out, err)
-	}
 }
 
 func TestRunnerRemotePreparationAndExternalDockerBranches(t *testing.T) {
@@ -599,13 +579,10 @@ func TestRunnerRemotePreparationAndExternalDockerBranches(t *testing.T) {
 	if _, err := Run(context.Background(), project, changed, failedSources); err == nil {
 		t.Fatal("Run should surface source preparation error")
 	}
-	if _, err := RunGitLabRunner(context.Background(), project, nil, failedSources, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
-		t.Fatal("RunGitLabRunner should surface source preparation error")
-	}
 	if _, err := RunOne(context.Background(), project, "build", failedSources); err == nil {
 		t.Fatal("RunOne should surface source preparation error")
 	}
-	executor := &PipelineExecutor{Mode: "gitlab-runner", GenerateYAML: func(model.Project, []dag.Node) string { return "yaml" }}
+	executor := &PipelineExecutor{Mode: "docker"}
 	if _, err := executor.Run(context.Background(), project, changed, domain.RunnerOptions{SourceAcquirer: &recordingAcquirer{fail: true}}); err == nil {
 		t.Fatal("PipelineExecutor should surface source preparation error")
 	}
@@ -642,7 +619,6 @@ func TestConcreteExecutorsErrors(t *testing.T) {
 	for name, executor := range map[string]Executor{
 		"docker": &DockerExecutor{WorkDir: root, Repos: goodRepos, DefaultImage: "alpine"},
 		"local":  &LocalExecutor{WorkDir: root, Repos: goodRepos},
-		"gitlab": &GitLabRunnerExecutor{WorkDir: root, StageMap: map[string]string{"task": "test"}},
 	} {
 		if _, err := executor.RunTask(context.Background(), task, opts); err == nil {
 			t.Errorf("%s should return fake command error", name)
@@ -755,15 +731,8 @@ func TestRunOneUnitBranches(t *testing.T) {
 // ran. A regression that made executorForMode always build a
 // DockerExecutor, regardless of mode, would slip through every existing
 // test until this one.
-//
-// "gitlab-runner" is included per REVIEW.md finding R4: closing GitLab work
-// item #1 only covers the Docker-mode bypass (confirmed against
-// openspec/changes/archive/2026-09-11-runner-docker-config-wiring/design.md:152-169),
-// so a project configured for gitlab-runner mode still runs manual
-// approvals via bash today - this pins that as an intentional fallback,
-// not an untested gap.
 func TestRunOneLocalModeUsesBash(t *testing.T) {
-	for _, mode := range []string{"", "local", "gitlab-runner"} {
+	for _, mode := range []string{"", "local"} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			var binary string
 			old := commandContext
@@ -890,8 +859,8 @@ func TestRepoDir_DefaultPath(t *testing.T) {
 }
 
 func TestFilesystemErrorSeams(t *testing.T) {
-	oldAbs, oldTemp, oldWrite := absPath, makeTemp, writeFile
-	t.Cleanup(func() { absPath, makeTemp, writeFile = oldAbs, oldTemp, oldWrite })
+	oldAbs := absPath
+	t.Cleanup(func() { absPath = oldAbs })
 	absPath = func(string) (string, error) { return "", errors.New("abs") }
 	if _, err := Run(context.Background(), runnerProject("run"), map[string]bool{"repo": true}, Options{}); err == nil {
 		t.Fatal("Run should surface abs error")
@@ -899,23 +868,11 @@ func TestFilesystemErrorSeams(t *testing.T) {
 	if _, err := RunLocal(context.Background(), runnerProject("run"), map[string]bool{"repo": true}, Options{}); err == nil {
 		t.Fatal("RunLocal should surface abs error")
 	}
-	if _, err := RunGitLabRunner(context.Background(), model.Project{}, nil, Options{}, func(model.Project, []dag.Node) string { return "" }); err == nil {
-		t.Fatal("RunGitLabRunner should surface abs error")
-	}
 	if _, err := RunOne(context.Background(), runnerProject("run"), "task", Options{}); err == nil {
 		t.Fatal("RunOne should surface abs error")
 	}
 
 	absPath = oldAbs
-	makeTemp = func(string, string) (string, error) { return "", errors.New("temp") }
-	if _, err := RunGitLabRunner(context.Background(), model.Project{}, nil, Options{}, func(model.Project, []dag.Node) string { return "" }); err == nil {
-		t.Fatal("expected temp error")
-	}
-	makeTemp = oldTemp
-	writeFile = func(string, []byte, os.FileMode) error { return errors.New("write") }
-	if _, err := RunGitLabRunner(context.Background(), model.Project{}, nil, Options{}, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
-		t.Fatal("expected write error")
-	}
 }
 
 func TestResolveErrorSeam(t *testing.T) {
@@ -932,27 +889,6 @@ func TestResolveErrorSeam(t *testing.T) {
 	if _, err := RunLocal(context.Background(), project, changed, Options{WorkDir: t.TempDir()}); err == nil {
 		t.Fatal("RunLocal should surface resolve error")
 	}
-	executor := &PipelineExecutor{Mode: "gitlab-runner", GenerateYAML: func(model.Project, []dag.Node) string { return "yaml" }}
-	if _, err := executor.Run(context.Background(), project, changed, domain.RunnerOptions{}); err == nil {
-		t.Fatal("PipelineExecutor should surface resolve error")
-	}
-}
-
-func TestRunGitLabRunnerUnitBranches(t *testing.T) {
-	installFakeCommands(t, false)
-	project := runnerProject("run")
-	nodes, err := dag.New(project).Resolve(map[string]bool{"repo": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	results, err := RunGitLabRunner(context.Background(), project, nodes, Options{SourcesPrepared: true}, func(model.Project, []dag.Node) string { return "yaml" })
-	if err != nil || len(results) != 1 || results[0].Status != "passed" {
-		t.Fatalf("results=%+v err=%v", results, err)
-	}
-	bad := append(nodes, dag.Node{Task: model.Task{Name: "bad", DependsOn: []string{"missing"}}})
-	if _, err := RunGitLabRunner(context.Background(), project, bad, Options{WorkDir: t.TempDir(), SourcesPrepared: true}, func(model.Project, []dag.Node) string { return "yaml" }); err == nil {
-		t.Fatal("expected ordering error")
-	}
 }
 
 func TestPipelineExecutorDispatchSeams(t *testing.T) {
@@ -968,17 +904,12 @@ func TestPipelineExecutorDispatchSeams(t *testing.T) {
 			called = "docker"
 			return want, nil
 		},
-		runGitLab: func(context.Context, model.Project, []dag.Node, Options, func(model.Project, []dag.Node) string) ([]TaskResult, error) {
-			called = "gitlab"
-			return want, nil
-		},
 		runOne: func(context.Context, model.Project, string, Options) (TaskResult, error) {
 			called = "one"
 			return want[0], nil
 		},
-		GenerateYAML: func(model.Project, []dag.Node) string { return "yaml" },
 	}
-	for _, mode := range []string{"", "local", "docker", "gitlab-runner"} {
+	for _, mode := range []string{"", "local", "docker"} {
 		executor.Mode = mode
 		got, err := executor.Run(context.Background(), project, nil, domain.RunnerOptions{})
 		if err != nil || !reflect.DeepEqual(got, want) {
@@ -999,7 +930,6 @@ func TestPipelineExecutorDefaultDispatch(t *testing.T) {
 
 	for _, executor := range []*PipelineExecutor{
 		{Mode: "docker"},
-		{Mode: "gitlab-runner", GenerateYAML: func(model.Project, []dag.Node) string { return "yaml" }},
 	} {
 		results, err := executor.Run(context.Background(), project, changed, domain.RunnerOptions{WorkDir: root})
 		if err != nil || len(results) != 1 || results[0].Status != "passed" {

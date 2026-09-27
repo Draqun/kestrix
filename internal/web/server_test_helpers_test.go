@@ -186,7 +186,7 @@ func NewServer(cfg Config) *Server {
 	}
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	webhookLog := &mocks.MockWebhookLogSink{}
-	pipelineRunner := &runner.PipelineExecutor{Mode: "local", GenerateYAML: GenerateGitLabCI}
+	pipelineRunner := &runner.PipelineExecutor{Mode: "local"}
 	srv := NewServerWithDeps(
 		cfg,
 		projectStore,

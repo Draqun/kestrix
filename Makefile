@@ -97,7 +97,7 @@ runner-unit-coverage:
 
 ## runner-integration: Run external runner regression tests without coverage accounting
 runner-integration:
-	KESTRIX_UNIT_ONLY=0 $(GOENV) $(GO) test ./internal/runner -count=1 -run 'TestRunExecutesDependenciesInOrder|TestRunSkipsManualTasks|TestRunRejectsTaskWithUntriggeredDependency|TestRunReturnsPerTaskResults|TestRunLocal_|TestRunOne_|TestRunGitLabRunner_CommandNotFound'
+	KESTRIX_UNIT_ONLY=0 $(GOENV) $(GO) test ./internal/runner -count=1 -run 'TestRunExecutesDependenciesInOrder|TestRunSkipsManualTasks|TestRunRejectsTaskWithUntriggeredDependency|TestRunReturnsPerTaskResults|TestRunLocal_|TestRunOne_'
 
 ## web-e2e: Run critical webhook and dispatch regression tests without coverage accounting
 web-e2e:

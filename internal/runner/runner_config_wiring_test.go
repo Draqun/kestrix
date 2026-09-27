@@ -3,10 +3,10 @@ package runner
 // Startup-level regression coverage for the runner-docker-config-wiring
 // change: a value set under `runner:` in config.yaml must reach the
 // DockerExecutor construction site (internal/runner/runner.go:451-460) and
-// every RunnerCancelGrace read site (runner.go:260 local, :294
-// gitlab-runner, :619 RunOne/manual approval) via the swapped Environment
-// snapshot. All three grace sites read config.Current() fresh at task time,
-// so asserting the swapped snapshot value covers each of them.
+// every RunnerCancelGrace read site (LocalExecutor.RunTask and RunOne/manual
+// approval) via the swapped Environment snapshot. Both grace sites read
+// config.Current() fresh at task time, so asserting the swapped snapshot
+// value covers each of them.
 //
 // These tests swap the process-global snapshot and therefore MUST NOT run
 // in parallel with anything (scripts/test.sh runs go test -race). The
@@ -115,8 +115,7 @@ func TestRunnerRun_ConfigFileWinsOverEnvVar(t *testing.T) {
 
 // TestRunnerCancelGrace_ReachesAllReadSites is the task 2.2 test: a
 // config-file runner.cancel_grace must reach the swapped snapshot that every
-// read site consumes (LocalExecutor.RunTask at runner.go:270,
-// GitLabRunnerExecutor.RunTask at :303, RunOne at :629 — each calls
+// read site consumes (LocalExecutor.RunTask and RunOne - each calls
 // config.Current() fresh). The RunOne assertion covers the grace-period
 // value only; the Docker sandbox bypass on that path is a pre-existing known
 // gap (design.md), not asserted here.

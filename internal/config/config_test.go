@@ -1491,3 +1491,16 @@ func TestSourceReportOmitsMetricsToken(t *testing.T) {
 		t.Fatal("source report does not name metrics.token at all")
 	}
 }
+
+// runner.mode is validated: an unknown value fails naming the accepted ones.
+func TestRunnerConfigValidate(t *testing.T) {
+	for _, mode := range []string{"", "local", "docker", "remote"} {
+		if err := (RunnerConfig{Mode: mode}).Validate(); err != nil {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+	}
+	err := (RunnerConfig{Mode: "bogus"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "runner.mode") || !strings.Contains(err.Error(), "local, docker, remote") {
+		t.Fatalf("bogus: err = %v, want it to name runner.mode and the accepted values", err)
+	}
+}

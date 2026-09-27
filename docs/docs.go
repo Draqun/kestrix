@@ -1180,7 +1180,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "mode": {
-                    "description": "Mode selects this project's execution backend: \"local\", \"docker\",\n\"gitlab-runner\", or \"remote\" - see remote-runner-registration\ndesign.md D2. Empty on input defaults to the instance's configured\nmode (ProjectService.DefaultMode); always populated on output.",
+                    "description": "Mode selects this project's execution backend: \"local\", \"docker\", or\n\"remote\" - see remote-runner-registration\ndesign.md D2. Empty on input defaults to the instance's configured\nmode (ProjectService.DefaultMode); always populated on output.",
                     "type": "string"
                 },
                 "name": {

@@ -119,7 +119,7 @@ type SourceCacheConfig struct {
 
 // RunnerConfig holds runner execution settings.
 type RunnerConfig struct {
-	Mode string // "local" or "gitlab-runner"
+	Mode string // instance default: "local", "docker", or "remote"
 	// MaxConcurrentRuns bounds how many runs execute at once; a run accepted
 	// beyond it is queued. MaxOutputBytes bounds stored run output. See
 	// run-concurrency-and-retention design.md D1/D4. Zero in either selects

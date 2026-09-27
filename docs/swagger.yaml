@@ -59,8 +59,8 @@ definitions:
         type: boolean
       mode:
         description: |-
-          Mode selects this project's execution backend: "local", "docker",
-          "gitlab-runner", or "remote" - see remote-runner-registration
+          Mode selects this project's execution backend: "local", "docker", or
+          "remote" - see remote-runner-registration
           design.md D2. Empty on input defaults to the instance's configured
           mode (ProjectService.DefaultMode); always populated on output.
         type: string

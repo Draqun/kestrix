@@ -102,18 +102,6 @@ func (s *ProjectService) checkCIRepoCredentials(proj model.Project) error {
 // ErrValidation identifies invalid project configuration supplied by a client.
 var ErrValidation = errors.New("project validation failed")
 
-// validProjectModes are the execution backends a project's Mode may name;
-// see remote-runner-registration design.md D2. An empty Mode is also valid
-// here - it defers to the store's instance-wide default (projectDefaults) -
-// so only a genuinely unrecognized value is rejected.
-var validProjectModes = map[string]bool{
-	"":              true,
-	"local":         true,
-	"docker":        true,
-	"gitlab-runner": true,
-	"remote":        true,
-}
-
 func validateProject(cfg *domain.ProjectConfig) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("%w: project name is required", ErrValidation)
@@ -126,7 +114,9 @@ func validateProject(cfg *domain.ProjectConfig) error {
 	if ref == "" {
 		return fmt.Errorf("%w: repo_ref is required", ErrValidation)
 	}
-	if !validProjectModes[cfg.Mode] {
+	// An empty Mode defers to the store's instance-wide default
+	// (projectDefaults); see remote-runner-registration design.md D2.
+	if !domain.IsValidMode(cfg.Mode) {
 		return fmt.Errorf("%w: mode %q is not a recognized execution backend", ErrValidation, cfg.Mode)
 	}
 	return validateRepoURL(raw)

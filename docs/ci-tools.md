@@ -16,13 +16,12 @@ Triggers GitLab pipelines from the command line or from within a Kestrix task ex
 
 ## Runner
 
-Executes pipeline tasks in one of four modes, set per project:
+Executes pipeline tasks in one of three modes, set per project:
 
 | Mode | Description |
 |------|-------------|
 | `local` (default) | Runs tasks as bash subprocesses on the host |
 | `docker` | Executes each task in a Docker container |
-| `gitlab-runner` | **Unsupported.** Shells out to `gitlab-runner exec`, a subcommand current GitLab Runner releases no longer ship (17.8.3 reports `Command exec not found`), so every task fails. Use `docker` or `remote` instead |
 | `remote` | Dispatches each task as a job for a registered runner to claim and execute on a separate machine - see [`remote-runners.md`](remote-runners.md) |
 
 Pipeline definitions are untrusted input, trusted only as far as the least
@@ -82,7 +81,7 @@ appear in.
 ### Cancellation
 
 Cancelling a run terminates its executing task before the run is recorded as
-`canceled`: the `local` and `gitlab-runner` executors send the task's whole
+`canceled`: the `local` executor sends the task's whole
 process group SIGTERM, then SIGKILL after `KESTRIX_RUNNER_CANCEL_GRACE`
 (default `10s`, also `runner.cancel_grace` in the config file); the `docker` executor stops the container with the same
 grace period. A run whose task cannot be confirmed terminated within grace

@@ -169,7 +169,7 @@ func TestRunReturnsPerTaskResults(t *testing.T) {
 	}
 }
 
-// --- Pure helper coverage: order / assignStage / repoDir ------------------
+// --- Pure helper coverage: order / repoDir ------------------
 //
 // These helpers contain the structural logic of the runner and live
 // below the docker-dependent paths. They are pure Go and can be
@@ -208,29 +208,6 @@ func TestOrder_IgnoresUntriggeredDependency(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("error should mention missing task: %v", err)
-	}
-}
-
-func TestAssignStage(t *testing.T) {
-	nodes := []dag.Node{
-		{Task: model.Task{Name: "manual_task", Manual: true}},
-		{Task: model.Task{Name: "tester_parent", DependsOn: []string{"previous"}}},
-		{Task: model.Task{Name: "test_dep", DependsOn: []string{"unit_test"}}},
-		{Task: model.Task{Name: "leaf"}},
-	}
-	cases := map[string]string{
-		"manual_task":   "deploy",
-		"test_dep":      "deploy", // depends on a name containing "test"
-		"tester_parent": "test",   // depends but no 'test' substring
-		"leaf":          "build",
-	}
-	for _, n := range nodes {
-		got := assignStage(n.Task, nodes)
-		if want, ok := cases[n.Task.Name]; ok {
-			if got != want {
-				t.Errorf("assignStage(%s) = %q, want %q", n.Task.Name, got, want)
-			}
-		}
 	}
 }
 
@@ -805,45 +782,6 @@ func TestRunOne_Defaults(t *testing.T) {
 	if res.Status != "passed" {
 		t.Errorf("status = %q, want passed", res.Status)
 	}
-}
-
-func TestRunGitLabRunner_CommandNotFound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration test")
-	}
-	tmp := t.TempDir()
-	proj := model.Project{
-		Name:  "test",
-		Repos: []model.Repo{{Name: "main", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
-			{
-				Name:    "build",
-				Execute: model.ExecuteSpec{Repo: "main", Script: "echo hello"},
-			},
-		},
-	}
-	changed := map[string]bool{"main": true}
-
-	var buf bytes.Buffer
-	opts := Options{
-		WorkDir:       tmp,
-		IncludeManual: true,
-		Stdout:        &buf,
-		Stderr:        &buf,
-	}
-
-	generateYAML := func(p model.Project, nodes []dag.Node) string {
-		return "stages:\n  - build\nbuild:\n  stage: build\n  script: echo hello\n"
-	}
-
-	_ = changed // nodes passed explicitly, Resolve not used here
-	results, err := RunGitLabRunner(context.Background(), proj, nil, opts, generateYAML)
-	// gitlab-runner won't be found, but we exercise the setup + ordering logic
-	if err == nil && len(results) > 0 {
-		// If it somehow succeeded, that's fine too
-	}
-	// At minimum, the function should not panic
-	_ = results
 }
 
 func TestRunLocal_VariablesInjected(t *testing.T) {

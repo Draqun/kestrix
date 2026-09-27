@@ -15,13 +15,6 @@ func TestPipelineExecutor_RejectsUnsupportedMode(t *testing.T) {
 	}
 }
 
-func TestPipelineExecutor_GitLabRequiresGenerator(t *testing.T) {
-	_, err := (&PipelineExecutor{Mode: "gitlab-runner"}).Run(context.Background(), domain.Project{}, nil, domain.RunnerOptions{})
-	if err == nil || !strings.Contains(err.Error(), "requires a YAML generator") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestPipelineExecutor_LocalRunsPipeline(t *testing.T) {
 	project := domain.Project{
 		Name:  "demo",
