@@ -455,8 +455,8 @@ scripts/preflight.sh
 scripts/test-all.sh
 scripts/test-all.sh unit coverage
 
-# Poll the current branch's GitLab pipeline until it finishes; read-only,
-# never merges or pushes
+# Poll the current branch's GitLab pipeline (its merge request's pipeline
+# when one is open) until it finishes; read-only, never merges or pushes
 scripts/wait-green.sh
 ```
 

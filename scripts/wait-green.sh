@@ -2,6 +2,9 @@
 # wait-green.sh — poll the current branch's GitLab pipeline until it
 # finishes, then print PASS/FAIL plus which jobs failed. Read-only: it
 # never merges or pushes anything, so it's safe to run unattended.
+# A branch with an open merge request has no branch pipeline of its own
+# (see `workflow:` in .gitlab-ci.yml), so for such a branch this watches
+# the merge request's latest pipeline instead.
 #
 # Usage: scripts/wait-green.sh [branch] [--interval SECONDS] [--max-cycles N]
 #   branch defaults to the current jj/git branch. interval defaults to 30s,
@@ -34,7 +37,14 @@ echo "wait-green: watching pipeline for '${branch}' (poll ${interval}s, max ${ma
 cycle=0
 while (( cycle < max_cycles )); do
   cycle=$((cycle + 1))
-  pipeline_json="$(glab api "projects/:id/pipelines?ref=${branch}&per_page=1" 2>/dev/null || true)"
+  mr_iid="$(glab api "projects/:id/merge_requests?source_branch=${branch}&state=opened&per_page=1" 2>/dev/null \
+    | jq -r '.[0].iid // empty' 2>/dev/null || true)"
+  if [[ -n "${mr_iid}" ]]; then
+    pipelines_path="projects/:id/merge_requests/${mr_iid}/pipelines?per_page=1"
+  else
+    pipelines_path="projects/:id/pipelines?ref=${branch}&per_page=1"
+  fi
+  pipeline_json="$(glab api "${pipelines_path}" 2>/dev/null || true)"
   status="$(echo "${pipeline_json}" | jq -r '.[0].status // empty' 2>/dev/null || true)"
   pipeline_id="$(echo "${pipeline_json}" | jq -r '.[0].id // empty' 2>/dev/null || true)"
   web_url="$(echo "${pipeline_json}" | jq -r '.[0].web_url // empty' 2>/dev/null || true)"

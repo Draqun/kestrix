@@ -9,10 +9,27 @@ default:
   before_script:
     - apk add --no-cache git gcc musl-dev
 
+# ─── Which pipelines exist ──────────────────────────────────
+# One pipeline per commit. A branch with an open merge request gets only
+# its merge request pipeline; without this, every push to such a branch
+# ran the whole suite twice (branch + MR) on the same two runners, which
+# queued the MR pipeline and timed `test_fe` out. main, other branches and
+# release tags keep their normal pipelines.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
 # ─── Change-based job rules ─────────────────────────────────
 # Every job below only runs when a file it actually depends on changed.
-# A docs/openspec/wiki-only push matches neither list, so no job runs and
-# no pipeline is created at all - nothing left to skip.
+# A docs/openspec/wiki-only change matches neither list, so no job runs and
+# no pipeline is created at all - nothing left to skip. In a merge request
+# pipeline `changes:` compares against the target branch, so this holds
+# from the first push; a brand-new branch pushed with no MR yet has no base
+# to compare with and runs every job once.
 # .gitlab-ci.yml itself is always included so editing the pipeline is
 # validated by its own run.
 #
