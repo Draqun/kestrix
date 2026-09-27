@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/redact"
 )
 
@@ -262,13 +263,33 @@ func (s *Server) handleRunnerJobComplete(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// runnerCreateRequest is the body POST /api/runners accepts.
+// runnerCreateRequest is the body POST /api/runners accepts. Tags are
+// optional and assigned only here, by the administrator - a runner never
+// declares its own (remote-runner-management design.md).
 type runnerCreateRequest struct {
-	Name string `json:"name"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
+
+// runnerCreateResponse is POST /api/runners' response; Token is shown once.
+type runnerCreateResponse struct {
+	ID    int      `json:"id"`
+	Name  string   `json:"name"`
+	Tags  []string `json:"tags"`
+	Token string   `json:"token"`
 }
 
 // handleCreateRunner implements POST /api/runners (tasks.md 3.5):
 // admin-only, returns the bearer token once.
+//
+// @Summary Register a runner
+// @Tags runners
+// @Accept json
+// @Produce json
+// @Param body body runnerCreateRequest true "Runner name and optional tags"
+// @Success 201 {object} runnerCreateResponse
+// @Failure 400 {object} map[string]string
+// @Router /api/runners [post]
 func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 	var req runnerCreateRequest
 	if !decodeJSON(w, r, &req) {
@@ -278,18 +299,64 @@ func (s *Server) handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	tags, err := domain.NormalizeRunnerTags(req.Tags)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if s.runnerStore == nil {
 		writeError(w, http.StatusInternalServerError, "runners not configured")
 		return
 	}
-	id, token, err := s.runnerStore.CreateRunner(req.Name)
+	id, token, err := s.runnerStore.CreateRunner(req.Name, tags)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if tags == nil {
+		tags = []string{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{"id": id, "name": req.Name, "token": token})
+	json.NewEncoder(w).Encode(runnerCreateResponse{ID: id, Name: req.Name, Tags: tags, Token: token})
+}
+
+// runnerView is one entry of GET /api/runners. It never carries the token
+// or its hash.
+type runnerView struct {
+	domain.Runner
+	Status string `json:"status"`
+}
+
+// handleListRunners implements GET /api/runners (admin only): every
+// unrevoked runner with its tags and liveness - busy, online, offline, or
+// never seen (remote-runner-management design.md).
+//
+// @Summary List registered runners
+// @Tags runners
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/runners [get]
+func (s *Server) handleListRunners(w http.ResponseWriter, _ *http.Request) {
+	if s.runnerStore == nil {
+		writeError(w, http.StatusInternalServerError, "runners not configured")
+		return
+	}
+	runners, err := s.runnerStore.ListRunners()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now()
+	views := make([]runnerView, len(runners))
+	for i, runner := range runners {
+		if runner.Tags == nil {
+			runner.Tags = []string{}
+		}
+		views[i] = runnerView{Runner: runner, Status: domain.RunnerStatus(runner, now, s.runnerOfflineAfter())}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"items": views})
 }
 
 // handleRevokeRunner implements DELETE /api/runners/{id} (tasks.md 3.5):

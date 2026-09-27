@@ -27,6 +27,9 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import useAccounts from '../../hooks/useAccounts.js';
 
 const ROLES = ['viewer', 'operator', 'admin'];
+// NAME_WIDTH keeps every row's controls on one axis: the role select sits
+// right after the name column and the grant row starts under it.
+const NAME_WIDTH = 200;
 const EMPTY_FORM = { name: '', password: '', role: 'viewer' };
 
 export default function AccountsSection() {
@@ -170,7 +173,7 @@ export default function AccountsSection() {
                 {ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
               </Select>
             </FormControl>
-            <Button type="submit" variant="contained" startIcon={<AddIcon />} disabled={creating}>Add account</Button>
+            <Button type="submit" variant="contained" startIcon={<AddIcon />} disabled={creating} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>Add account</Button>
           </Stack>
         </Box>
 
@@ -185,8 +188,8 @@ export default function AccountsSection() {
               data-testid={`account-row-${account.name}`}
               sx={{ display: 'block', py: 1.5 }}
             >
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
-                <ListItemText sx={{ minWidth: 0, my: 0, flexGrow: 1 }} primary={account.name} />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} useFlexGap sx={{ alignItems: { sm: 'center' } }}>
+                <ListItemText sx={{ minWidth: 0, my: 0, width: { sm: NAME_WIDTH }, flexGrow: 0, flexShrink: 0 }} primary={account.name} />
                 <FormControl size="small" sx={{ minWidth: 120 }} disabled={isPending(account.name)}>
                   <InputLabel id={`account-role-label-${account.name}`}>Role</InputLabel>
                   <Select
@@ -198,9 +201,22 @@ export default function AccountsSection() {
                     {ROLES.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
                   </Select>
                 </FormControl>
-                <Button size="small" color="error" disabled={isPending(account.name)} onClick={() => remove(account)}>Delete</Button>
+                <Button
+                  size="small"
+                  color="error"
+                  disabled={isPending(account.name)}
+                  onClick={() => remove(account)}
+                  sx={{ ml: { sm: 'auto' }, alignSelf: { xs: 'flex-start', sm: 'center' } }}
+                >
+                  Delete
+                </Button>
               </Stack>
-              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', mt: 1, alignItems: 'center' }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                useFlexGap
+                sx={{ flexWrap: 'wrap', mt: 1, alignItems: 'center', ml: { sm: `${NAME_WIDTH + 8}px` } }}
+              >
                 {(account.grants || []).map((grant) => (
                   <Chip
                     key={grant.project_name}

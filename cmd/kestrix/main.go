@@ -201,6 +201,7 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			MaxOutputBytes:       cfg.Runner.MaxOutputBytes,
 			RemoteJobTimeout:     env.RunnerJobTimeout,
 			RemoteJobMaxReclaims: env.RunnerJobMaxReclaims,
+			OfflineAfter:         env.RunnerOfflineAfter,
 		},
 		Metrics: web.MetricsConfig{
 			Enabled: cfg.Metrics.Enabled,

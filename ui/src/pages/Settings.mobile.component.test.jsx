@@ -20,7 +20,7 @@ beforeEach(() => {
     dispatchEvent() { return false; },
   }));
   globalThis.fetch = vi.fn(async (url, options = {}) => {
-    if (url === '/api/users' && !options.method) {
+    if ((url === '/api/users' || url === '/api/runners') && !options.method) {
       return new Response(JSON.stringify({ items: [] }), {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });

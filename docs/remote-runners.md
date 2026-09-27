@@ -47,19 +47,23 @@ to the runner as an archive.
 
 ## 1. Register a runner
 
-Registering a runner requires the admin role.
+Registering a runner requires the admin role. The easiest way is
+**Settings → Runners → Register runner**: give it a name and optional tags,
+and the dialog shows the token together with the exact `kestrix runner`
+command to start it. The same page lists every runner with its tags and
+liveness, and revokes a runner after confirmation. Or use the API:
 
 ```bash
 curl -X POST http://localhost:8080/api/runners \
   -H 'Authorization: Bearer <admin session token>' \
   -H 'Content-Type: application/json' \
-  -d '{"name": "build-box-1"}'
+  -d '{"name": "build-box-1", "tags": ["gpu", "linux"]}'
 ```
 
 The response includes a bearer token:
 
 ```json
-{"id": 3, "name": "build-box-1", "token": "b7f2c1..."}
+{"id": 3, "name": "build-box-1", "tags": ["gpu", "linux"], "token": "b7f2c1..."}
 ```
 
 **This token is shown once.** Store it somewhere your runner machine can
@@ -134,6 +138,51 @@ does not redact leaves that case open. Kestrix stores a job's variables and
 secret values encrypted with the credential master key and deletes them
 once the job or its run is finished.
 
+## Runner tags
+
+Tags route a task to the machines that can run it (an architecture, a GPU,
+a deploy credential). They are **assigned by an administrator when the
+runner is registered** - a runner never declares its own, so holding any
+runner token is not enough to receive jobs meant for a trusted machine. To
+change a runner's tags, revoke it and register it again.
+
+A task names the tags it needs in its `ci_task` block:
+
+```hcl
+ci_task "train" {
+  trigger     = "repo.ml.changed"
+  runner_tags = ["gpu", "linux"]
+  execute {
+    repo   = "ml"
+    script = "./train.sh"
+  }
+}
+```
+
+A job is offered only to a runner whose tags include **all** of the task's
+tags. A task with no `runner_tags` runs on any runner, tagged or not. Tags
+are trimmed, lowercased and deduplicated, must match `[a-z0-9._-]{1,64}`,
+and at most 32 are allowed. They are copied onto the job when it is
+dispatched, so editing the pipeline later does not retarget a job already
+waiting. Outside `remote` mode `runner_tags` is accepted and ignored.
+
+**A task whose tags no runner has stays `pending`** until a matching runner
+is registered or the run is canceled; Kestrix does not warn about it.
+Silent-runner recovery never fails a job that was never claimed.
+
+## Runner liveness
+
+Every request a runner makes (poll, trace, completion) records its
+last-seen time. The Runners page and `GET /api/runners` report each runner
+as:
+
+| Status | Meaning |
+|--------|---------|
+| `busy` | Holds a claimed or running job (a quiet task sends nothing until it completes) |
+| `online` | Seen within `KESTRIX_RUNNER_OFFLINE_AFTER` (default 60s, three long-poll intervals) |
+| `offline` | Not seen for longer than that |
+| `never seen` | Registered but has not polled yet |
+
 ## 3. Switch a project to `remote` mode
 
 ```bash
@@ -160,7 +209,7 @@ is pending, otherwise `200` with the claimed job:
 |-------|---------|
 | `id`, `run_id`, `task_name` | The job, its run, and the task it executes |
 | `claim_epoch` | Fencing token; send it back on every trace and completion |
-| `payload.task` | The task definition (`name`, `execute.repo`, `execute.script`, ...) |
+| `payload.task` | The task definition (`name`, `execute.repo`, `execute.script`, `runner_tags`, ...) |
 | `payload.repos` | Declared repositories (`name`, `path`, `kind`) to resolve the task's working directory inside the archive |
 | `payload.default_image` | The project's default image, for a Docker-mode runner |
 | `payload.variables` | The task's resolved variables, including runtime secrets, as a flat map |
@@ -188,11 +237,12 @@ before storing them.
 | Concurrent long-polls per runner token | `KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS` | 2 |
 | Silent-runner timeout | `KESTRIX_RUNNER_JOB_TIMEOUT` | 120s |
 | Max reclaim attempts before failing a job | `KESTRIX_RUNNER_JOB_MAX_RECLAIMS` | 3 |
+| Silence before an idle runner is reported offline | `KESTRIX_RUNNER_OFFLINE_AFTER` | 60s |
 | `kestrix runner`'s server URL (flag: `--server`) | `KESTRIX_RUNNER_SERVER` | none |
 | `kestrix runner`'s bearer token (flag: `--token`) | `KESTRIX_RUNNER_TOKEN` | none |
 | `kestrix runner`'s execution backend (flag: `--mode`) | `KESTRIX_RUNNER_MODE` | `local` |
 
-All seven are also documented in `.env.template`.
+All eight are also documented in `.env.template`.
 
 ## Silent-runner recovery
 
@@ -213,6 +263,7 @@ same fencing idea applied to cancellation.
 
 This guide covers registering and running a single-tenant fleet of runners
 you already trust - see the project's own Non-goals for the full list
-(multi-tenant/untrusted runners, per-task mode mixing, autoscaling, a
-Settings UI for managing runners, and migrating existing GitLab-CI-hosted
-projects onto remote runners are all out of scope for this feature).
+(multi-tenant/untrusted runners, per-task mode mixing, autoscaling,
+editing a runner's tags after registration, offline alerts, and migrating
+existing GitLab-CI-hosted projects onto remote runners are all out of scope
+for this feature).

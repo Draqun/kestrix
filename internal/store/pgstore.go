@@ -253,6 +253,12 @@ func migrate(db *sql.DB, defaultMode string) error {
 		// is what KESTRIX_RUNNER_JOB_MAX_RECLAIMS is checked against -
 		// remote-runner-fixes design.md D3.
 		{"add remote job reclaim count", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS reclaim_count INTEGER NOT NULL DEFAULT 0`},
+		// Runner tags (admin-assigned), liveness, and a job's required tags
+		// - remote-runner-management. Empty defaults keep every existing
+		// runner and job matching exactly as before.
+		{"add runner tags", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`},
+		{"add runner last seen", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`},
+		{"add remote job required tags", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS required_tags TEXT[] NOT NULL DEFAULT '{}'`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {

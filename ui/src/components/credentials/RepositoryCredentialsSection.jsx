@@ -61,7 +61,7 @@ export default function RepositoryCredentialsSection() {
               </Typography>
             </Box>
           </Box>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>Add credential</Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>Add credential</Button>
         </Stack>
 
         {loading && <LinearProgress sx={{ mb: 2 }} />}

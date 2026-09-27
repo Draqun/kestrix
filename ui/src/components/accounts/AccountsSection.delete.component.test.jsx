@@ -39,5 +39,5 @@ test('deleting an account removes the row once the request succeeds', async () =
   await user.click(screen.getByRole('button', { name: 'Delete' }));
 
   await vi.waitFor(() => assert.equal(deletedUrl, '/api/users/alice'));
-  await vi.waitFor(() => assert.equal(screen.queryByText('alice'), null));
+  await vi.waitFor(() => assert.equal(screen.queryByText('alice') === null, true));
 });

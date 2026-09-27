@@ -25,10 +25,11 @@ admin ──GET  /api/runners──────────────▶   │
 runner ──GET /api/runner-jobs/next──▶ AuthenticateRunner
           (bearer token)                   UPDATE runners SET last_seen_at=now()
                                            WHERE token_hash=$1 AND revoked_at IS NULL
-                                           RETURNING id, tags
+                                           RETURNING id
                                                 │
-                                           ClaimNextJob(runnerID, tags)
-                                           ... AND rj.required_tags <@ $tags
+                                           ClaimNextJob(runnerID)
+                                           ... AND rj.required_tags <@
+                                               (SELECT tags FROM runners WHERE id=$2)
                                                 │
 dispatch: ci_task.runner_tags ──▶ remote_jobs.required_tags
 ```
@@ -38,7 +39,7 @@ dispatch: ci_task.runner_tags ──▶ remote_jobs.required_tags
 ### Liveness is a timestamp stamped during authentication
 
 `AuthenticateRunner` becomes `UPDATE ... SET last_seen_at = now() ...
-RETURNING id, tags` instead of a `SELECT`. Every runner endpoint already calls
+RETURNING id` instead of a `SELECT`. Every runner endpoint already calls
 it, so poll, trace and complete all refresh liveness with no new query. A
 revoked runner's `UPDATE` matches no row, so a stale token never looks alive.
 Status is derived on read, not stored: no sweep goroutine, nothing to keep
@@ -70,8 +71,9 @@ The poll endpoint stays body-less.
 ### Matching is a Postgres array containment in the claim query
 
 `runners.tags` and `remote_jobs.required_tags` are `TEXT[] NOT NULL DEFAULT
-'{}'`. `ClaimNextJob` adds `AND rj.required_tags <@ $2` - the job's tags are
-contained in the runner's. An empty `required_tags` is contained in every set,
+'{}'`. `ClaimNextJob` adds `AND rj.required_tags <@ (SELECT tags FROM runners WHERE
+id = $2)` - the job's tags are contained in the runner's; the port keeps its
+`ClaimNextJob(runnerID)` signature. An empty `required_tags` is contained in every set,
 so untagged tasks run anywhere and every pre-existing job matches. A tagged
 runner still takes untagged jobs (superset semantics, GitLab's
 `run_untagged: true` default). `SKIP LOCKED` ordering is unchanged; a job no

@@ -32,6 +32,10 @@ type Task struct {
 	Execute   ExecuteSpec `hcl:"execute,block" json:"execute"`
 	DependsOn []string    `hcl:"depends_on,optional" json:"depends_on,omitempty"`
 	Manual    bool        `hcl:"manual,optional" json:"manual"`
+	// RunnerTags are the tags a runner must carry to execute this task in
+	// remote mode, normalised by NormalizeRunnerTags; ignored in every other
+	// mode (remote-runner-management).
+	RunnerTags []string `hcl:"runner_tags,optional" json:"runner_tags,omitempty"`
 }
 
 // Variable is a pipeline variable with optional repository/job scope.

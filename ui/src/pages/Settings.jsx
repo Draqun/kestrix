@@ -1,6 +1,7 @@
 import { Box, Typography } from '@mui/material';
 import AccountsSection from '../components/accounts/AccountsSection.jsx';
 import RepositoryCredentialsSection from '../components/credentials/RepositoryCredentialsSection.jsx';
+import RunnersSection from '../components/runners/RunnersSection.jsx';
 
 export default function Settings() {
   return (
@@ -11,6 +12,7 @@ export default function Settings() {
       </Typography>
       <RepositoryCredentialsSection />
       <AccountsSection />
+      <RunnersSection />
     </Box>
   );
 }

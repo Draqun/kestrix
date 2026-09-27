@@ -146,5 +146,5 @@ test('removing a project grant clears it once the request succeeds', async () =>
   await user.click(screen.getByTestId('CancelIcon'));
 
   await vi.waitFor(() => assert.deepEqual(grantsPayload, { grants: [] }));
-  await vi.waitFor(() => assert.equal(screen.queryByText('demo: operator'), null));
+  await vi.waitFor(() => assert.equal(screen.queryByText('demo: operator') === null, true));
 });

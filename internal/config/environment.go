@@ -117,6 +117,11 @@ type Environment struct {
 	// reason - see design.md D5. Defaults to 120s and 3.
 	RunnerJobTimeout     time.Duration
 	RunnerJobMaxReclaims int
+	// RunnerOfflineAfter is how long a runner holding no job may go without
+	// a request before GET /api/runners reports it offline
+	// (remote-runner-management). Defaults to 60s, three long-poll
+	// intervals.
+	RunnerOfflineAfter time.Duration
 	// MetricsEnabled, MetricsToken, and LogLevel back the observability
 	// settings; see observability design.md. MetricsEnabled defaults to
 	// false, MetricsToken has no default (empty means unconfigured), and
@@ -454,6 +459,18 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	runnerOfflineAfter := 60 * time.Second
+	if raw := values[Prefix+"RUNNER_OFFLINE_AFTER"]; raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_OFFLINE_AFTER must be a positive duration")
+			}
+		} else {
+			runnerOfflineAfter = parsed
+		}
+	}
+
 	runnerJobMaxReclaims := 3
 	if raw := values[Prefix+"RUNNER_JOB_MAX_RECLAIMS"]; raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -533,6 +550,7 @@ func LoadEnvironment(environ []string) *Environment {
 		RunnerJobMaxConcurrentPolls: runnerJobMaxConcurrentPolls,
 		RunnerJobTimeout:            runnerJobTimeout,
 		RunnerJobMaxReclaims:        runnerJobMaxReclaims,
+		RunnerOfflineAfter:          runnerOfflineAfter,
 		MetricsEnabled:              metricsEnabled,
 		MetricsToken:                values[Prefix+"METRICS_TOKEN"],
 		LogLevel:                    logLevel,

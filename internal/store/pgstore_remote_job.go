@@ -127,8 +127,8 @@ func (s *PGStore) CreateRemoteJob(runID int, taskName string, payload domain.Rem
 		return 0, fmt.Errorf("marshal remote job payload: %w", err)
 	}
 	if _, err := s.db.Exec(
-		`INSERT INTO remote_jobs (id, run_id, task_name, status, payload, secrets_enc) VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, runID, taskName, domain.RemoteJobStatusPending, string(b), enc,
+		`INSERT INTO remote_jobs (id, run_id, task_name, status, payload, secrets_enc, required_tags) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		id, runID, taskName, domain.RemoteJobStatusPending, string(b), enc, nonNilTags(payload.Task.RunnerTags),
 	); err != nil {
 		return 0, err
 	}
@@ -223,8 +223,9 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 	err = tx.QueryRow(
 		`SELECT rj.id FROM remote_jobs rj JOIN runs r ON r.id = rj.run_id
 		 WHERE rj.status = $1 AND r.status NOT IN ('passed', 'failed', 'canceled')
+		   AND rj.required_tags <@ (SELECT tags FROM runners WHERE id = $2)
 		 ORDER BY rj.id FOR UPDATE OF rj SKIP LOCKED LIMIT 1`,
-		domain.RemoteJobStatusPending,
+		domain.RemoteJobStatusPending, runnerID,
 	).Scan(&jobID)
 	if err == sql.ErrNoRows {
 		return nil, nil

@@ -369,7 +369,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"HTTPReadTimeout":      true, "HTTPWriteTimeout": true, "HTTPIdleTimeout": true,
 		"HTTPMaxBodyBytes": true, "WebhookMaxBodyBytes": true,
 		"RunnerJobMaxBodyBytes": true, "RunnerJobMaxConcurrentPolls": true,
-		"RunnerJobTimeout": true, "RunnerJobMaxReclaims": true,
+		"RunnerJobTimeout": true, "RunnerJobMaxReclaims": true, "RunnerOfflineAfter": true,
 		"RunnerServer": true, "RunnerToken": true, "RunnerMode": true,
 		"LogLevel": true,
 	}

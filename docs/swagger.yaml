@@ -57,6 +57,13 @@ definitions:
           disclosing it. Only publicProject sets this on an outgoing copy; the
           stored struct itself does not populate it.
         type: boolean
+      mode:
+        description: |-
+          Mode selects this project's execution backend: "local", "docker",
+          "gitlab-runner", or "remote" - see remote-runner-registration
+          design.md D2. Empty on input defaults to the instance's configured
+          mode (ProjectService.DefaultMode); always populated on output.
+        type: string
       name:
         type: string
       pipeline_dir:
@@ -129,6 +136,14 @@ definitions:
         type: boolean
       name:
         type: string
+      runner_tags:
+        description: |-
+          RunnerTags are the tags a runner must carry to execute this task in
+          remote mode, normalised by NormalizeRunnerTags; ignored in every other
+          mode (remote-runner-management).
+        items:
+          type: string
+        type: array
       trigger:
         type: string
     type: object
@@ -276,6 +291,28 @@ definitions:
       name:
         type: string
       role:
+        type: string
+    type: object
+  web.runnerCreateRequest:
+    properties:
+      name:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+    type: object
+  web.runnerCreateResponse:
+    properties:
+      id:
+        type: integer
+      name:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      token:
         type: string
     type: object
   web.setGrantsRequest:
@@ -814,6 +851,45 @@ paths:
       summary: Resolve trigger expressions against changed repos
       tags:
       - pipeline
+  /api/runners:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List registered runners
+      tags:
+      - runners
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Runner name and optional tags
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.runnerCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/web.runnerCreateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register a runner
+      tags:
+      - runners
   /api/runs:
     get:
       produces:

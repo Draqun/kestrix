@@ -4,6 +4,7 @@ import {
   completeSetup, createAccount, createCredential, createProject, deleteAccount, getWebhookLogs,
   listAccounts, listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
   login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus, runTask,
+  listRunners, createRunner, revokeRunner,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
@@ -458,3 +459,86 @@ test('UI API surfaces a rejected single-task re-run', async (t) => {
   globalThis.fetch = async () => new Response('not json', { status: 500, statusText: 'Internal Server Error' });
   await assert.rejects(runTask('demo', 'build'), /Re-run failed: Internal Server Error/);
 });
+
+test('listRunners requests the runners endpoint', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, method: options.method || 'GET' };
+    return new Response(JSON.stringify({ items: [{ id: 1, name: 'gpu-box', tags: ['gpu'], status: 'online' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const data = await listRunners();
+
+  assert.equal(captured.url, '/api/runners');
+  assert.equal(captured.method, 'GET');
+  assert.deepEqual(data.items.map((r) => r.name), ['gpu-box']);
+});
+
+test('listRunners throws when the list request fails', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response('{}', { status: 403, statusText: 'Forbidden' });
+
+  await assert.rejects(listRunners(), /List runners failed: Forbidden/);
+});
+
+test('createRunner posts the name and tags and returns the one-time token', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, options };
+    return new Response(JSON.stringify({ id: 2, name: 'gpu-box', tags: ['gpu'], token: 'tok' }), {
+      status: 201, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const created = await createRunner({ name: 'gpu-box', tags: ['GPU'] });
+
+  assert.equal(captured.url, '/api/runners');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body), { name: 'gpu-box', tags: ['GPU'] });
+  assert.equal(created.token, 'tok');
+});
+
+test('createRunner surfaces the server error message', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'invalid runner tag "has space"' }), {
+    status: 400, statusText: 'Bad Request', headers: { 'Content-Type': 'application/json' },
+  });
+
+  await assert.rejects(createRunner({ name: 'x', tags: ['has space'] }), /invalid runner tag "has space"/);
+});
+
+test('revokeRunner deletes the runner by id', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url, method: options.method };
+    return new Response(null, { status: 204 });
+  };
+
+  await revokeRunner(3);
+
+  assert.equal(captured.url, '/api/runners/3');
+  assert.equal(captured.method, 'DELETE');
+});
+
+test('revokeRunner surfaces the server error message, falling back to the status text', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'runners not configured' }), {
+    status: 500, statusText: 'Internal Server Error', headers: { 'Content-Type': 'application/json' },
+  });
+  await assert.rejects(revokeRunner(3), /runners not configured/);
+
+  globalThis.fetch = async () => new Response('not json', { status: 502, statusText: 'Bad Gateway' });
+  await assert.rejects(revokeRunner(3), /Revoke runner failed: Bad Gateway/);
+});
+

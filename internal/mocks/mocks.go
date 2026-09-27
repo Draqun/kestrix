@@ -775,6 +775,11 @@ type MockRunnerStore struct {
 	CreateRunnerID    int
 	CreateRunnerToken string
 	CreateRunnerErr   error
+	// CreateRunnerTags records the tags of the last CreateRunner call.
+	CreateRunnerTags []string
+
+	ListRunnersResult []domain.Runner
+	ListRunnersErr    error
 
 	AuthenticateRunnerID  int
 	AuthenticateRunnerOK  bool
@@ -784,8 +789,15 @@ type MockRunnerStore struct {
 	RevokeRunnerCalls []int
 }
 
-func (m *MockRunnerStore) CreateRunner(name string) (int, string, error) {
+func (m *MockRunnerStore) CreateRunner(name string, tags []string) (int, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CreateRunnerTags = tags
 	return m.CreateRunnerID, m.CreateRunnerToken, m.CreateRunnerErr
+}
+
+func (m *MockRunnerStore) ListRunners() ([]domain.Runner, error) {
+	return m.ListRunnersResult, m.ListRunnersErr
 }
 
 func (m *MockRunnerStore) AuthenticateRunner(token string) (int, bool, error) {
