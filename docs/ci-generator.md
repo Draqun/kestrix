@@ -4,11 +4,7 @@ The CI generator converts a resolved Kestrix pipeline into a standard `.gitlab-c
 
 ## Overview
 
-When a pipeline run starts, the DAG engine resolves which tasks are triggered and in what order. The CI generator takes that resolved list of DAG nodes and produces a GitLab CI YAML that can be:
-
-- Written to disk and executed via `kestrix run` (local/Docker/GitLab-runner modes).
-- Dispatched to a GitLab project via the dispatch client.
-- Previewed via `POST /api/generate`.
+When a pipeline run starts, the DAG engine resolves which tasks are triggered and in what order. The CI generator takes that resolved list of DAG nodes and produces a GitLab CI YAML, previewed via `POST /api/generate`.
 
 ## Stage Derivation
 
@@ -118,9 +114,9 @@ Returns:
 }
 ```
 
-### Runner Integration
+### Relation to execution and dispatch
 
-When using `kestrix run` (local mode), the generator is called internally. The generated YAML is written to a temporary directory and executed against the selected runner.
+Nothing executes the generated YAML. `local`, `docker`, and `remote` modes run tasks directly from the resolved DAG, and dispatch creates a pipeline on the target GitLab project at a ref, which runs that project's own `.gitlab-ci.yml`.
 
 ## Further Reading
 

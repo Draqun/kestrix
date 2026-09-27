@@ -50,7 +50,7 @@ func TestModeSelectingExecutor_TwoProjectsDifferentModesConcurrently(t *testing.
 	for i := 0; i < 20; i++ {
 		mode := "local"
 		if i%2 == 0 {
-			mode = "gitlab-runner"
+			mode = "docker" // no tasks, so no container starts
 		}
 		wg.Add(1)
 		go func(i int, mode string) {

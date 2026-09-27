@@ -15,7 +15,7 @@ Include, where you can:
 
 - The Kestrix version (`kestrix version`).
 - The deployment mode (Docker Compose, bare binary, etc.) and runner mode in
-  use (`local`, `docker`, or `gitlab-runner`).
+  use (`local`, `docker`, or `remote`).
 - Steps to reproduce, or a minimal pipeline/request that triggers the issue.
 
 ### Response commitment
@@ -57,6 +57,3 @@ A finding in one of these areas is the highest priority to report privately:
   untrusted pipeline definitions under `local` mode and reporting the
   resulting host access as a vulnerability is not necessary; it's documented
   behavior. See [CI Tools: Runner](docs/ci-tools.md#runner).
-- **`gitlab-runner` mode** delegates execution to an external GitLab Runner;
-  its isolation is whatever that runner is configured to provide, which is
-  outside Kestrix's control.

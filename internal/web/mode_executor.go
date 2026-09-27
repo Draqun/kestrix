@@ -16,7 +16,7 @@ import (
 // a PipelineRunner/TaskRunner call (design.md D10), so a "remote" project
 // arriving here at all is a bug upstream, not something to route silently -
 // runner.PipelineExecutor's own "unsupported runner mode" error covers it.
-// A runner.PipelineExecutor is cheap and stateless besides its two fields,
+// A runner.PipelineExecutor is cheap and stateless besides its Mode field,
 // so building one per call needs no pooling or caching.
 type modeSelectingExecutor struct {
 	// defaultMode is used only when a caller leaves opts.Mode empty - every
@@ -33,7 +33,7 @@ func (e modeSelectingExecutor) executorFor(opts domain.RunnerOptions) *runner.Pi
 	if mode == "" {
 		mode = e.defaultMode
 	}
-	return &runner.PipelineExecutor{Mode: mode, GenerateYAML: GenerateGitLabCI}
+	return &runner.PipelineExecutor{Mode: mode}
 }
 
 func (e modeSelectingExecutor) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {

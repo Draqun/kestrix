@@ -35,8 +35,8 @@ func TestProjectService_Create_MissingRepo(t *testing.T) {
 }
 
 // TestProjectService_Create_RejectsUnrecognizedMode pins
-// remote-runner-registration tasks.md 2.1: only local/docker/gitlab-runner/
-// remote (or empty, deferred to the store's default) are accepted.
+// remote-runner-registration tasks.md 2.1: only local/docker/remote (or
+// empty, deferred to the store's default) are accepted.
 func TestProjectService_Create_RejectsUnrecognizedMode(t *testing.T) {
 	mock := &mocks.MockProjectStore{}
 	svc := NewProjectService(mock)
@@ -51,7 +51,7 @@ func TestProjectService_Create_RejectsUnrecognizedMode(t *testing.T) {
 }
 
 func TestProjectService_Create_AcceptsEveryRecognizedMode(t *testing.T) {
-	for _, mode := range []string{"", "local", "docker", "gitlab-runner", "remote"} {
+	for _, mode := range []string{"", "local", "docker", "remote"} {
 		mock := &mocks.MockProjectStore{}
 		svc := NewProjectService(mock)
 		err := svc.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: mode})

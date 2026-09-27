@@ -281,6 +281,10 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
+	if err := cfg.Runner.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
 	if err := installLogging(os.Stderr, cfg.Logging.Level); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)

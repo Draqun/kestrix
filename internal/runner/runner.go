@@ -25,8 +25,6 @@ import (
 var (
 	commandContext = exec.CommandContext
 	absPath        = filepath.Abs
-	makeTemp       = os.MkdirTemp
-	writeFile      = os.WriteFile
 	resolveNodes   = func(project model.Project, changed map[string]bool) ([]dag.Node, error) {
 		return dag.New(project).Resolve(changed)
 	}
@@ -284,39 +282,6 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	return taskOut.String(), runErr
 }
 
-// GitLabRunnerExecutor runs tasks via gitlab-runner exec.
-type GitLabRunnerExecutor struct {
-	WorkDir  string
-	StageMap map[string]string
-}
-
-func (e *GitLabRunnerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
-	stage := e.StageMap[task.Name]
-	fmt.Fprintf(opts.Stdout, "[RUN] %s (stage=%s via gitlab-runner exec)\n", task.Name, stage)
-
-	ci := map[string]string{"CI_PROJECT_DIR": e.WorkDir}
-	var vars map[string]string
-	if opts.Variables != nil {
-		vars = opts.Variables.Get(task.Execute.Repo, task.Name, "")
-	}
-
-	envSettings := config.Current()
-
-	var taskOut bytes.Buffer
-	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
-	cmd := commandContext(ctx, "gitlab-runner", "exec", stage, task.Name)
-	cmd.Dir = e.WorkDir
-	cmd.Env = envSettings.TaskEnv(ci, vars)
-	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
-	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
-	stopCancelTimer := setCancelViaProcessGroup(cmd, envSettings.RunnerCancelGrace)
-
-	runErr := cmd.Run()
-	stopCancelTimer()
-
-	return taskOut.String(), runErr
-}
-
 // taskLoop iterates over ordered nodes, skipping manual/blocked tasks and
 // delegating execution to the provided Executor.
 func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts Options) ([]TaskResult, error) {
@@ -532,53 +497,6 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 	return taskLoop(ctx, ordered, executor, opts)
 }
 
-// RunGitLabRunner executes tasks via `gitlab-runner exec`.
-func RunGitLabRunner(ctx context.Context, project model.Project, nodes []dag.Node, opts Options, generateYAML func(model.Project, []dag.Node) string) ([]TaskResult, error) {
-	synchronizeOutput(&opts)
-	defer cleanupWorkspace(&opts)
-	project, cleanup, err := prepareSources(ctx, project, &opts)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-	if opts.WorkDir == "" {
-		opts.WorkDir = "."
-	}
-	workDir, err := absPath(opts.WorkDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workdir: %w", err)
-	}
-
-	tmpDir, err := makeTemp("", "kestrix-runner-*")
-	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	yaml := generateYAML(project, nodes)
-	ciFile := filepath.Join(tmpDir, ".gitlab-ci.yml")
-	if err := writeFile(ciFile, []byte(yaml), 0o644); err != nil {
-		return nil, fmt.Errorf("write .gitlab-ci.yml: %w", err)
-	}
-	fmt.Fprintf(opts.Stdout, "[CI] Generated .gitlab-ci.yml (%d bytes)\n", len(yaml))
-
-	stageMap := make(map[string]string, len(nodes))
-	for _, n := range nodes {
-		stageMap[n.Task.Name] = assignStage(n.Task, nodes)
-	}
-
-	ordered, err := order(nodes)
-	if err != nil {
-		return nil, err
-	}
-
-	executor := &GitLabRunnerExecutor{
-		WorkDir:  workDir,
-		StageMap: stageMap,
-	}
-	return taskLoop(ctx, ordered, executor, opts)
-}
-
 // executorForMode returns the Executor RunOne should use for a manual task
 // approval. Only "docker" changes behavior; every other Mode value keeps
 // the historical bare `bash -c` execution.
@@ -668,22 +586,6 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		return tr, fmt.Errorf("task %q failed: %w", task.Name, runErr)
 	}
 	return tr, nil
-}
-
-// assignStage determines which stage a task belongs to.
-func assignStage(task model.Task, nodes []dag.Node) string {
-	if task.Manual {
-		return "deploy"
-	}
-	if len(task.DependsOn) > 0 {
-		for _, dep := range task.DependsOn {
-			if strings.Contains(dep, "test") {
-				return "deploy"
-			}
-		}
-		return "test"
-	}
-	return "build"
 }
 
 func order(nodes []dag.Node) ([]dag.Node, error) {

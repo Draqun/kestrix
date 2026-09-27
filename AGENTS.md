@@ -1,7 +1,7 @@
 # AGENTS.md — Kestrix
 
 ## What this is
-Repo-agnostic CI/CD control plane. HCL pipelines → DAG trigger resolution → local/Docker/GitLab-runner execution. Dogfoods itself via `ci/pipeline.tf` + `scripts/`.
+Repo-agnostic CI/CD control plane. HCL pipelines → DAG trigger resolution → local/Docker/remote-runner execution. Dogfoods itself via `ci/pipeline.tf` + `scripts/`.
 
 ## Tech Stack
 - **Language:** Go 1.25 (go.mod), CI uses golang:1.25-alpine

@@ -4,19 +4,16 @@ import (
 	"context"
 	"fmt"
 
-	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
 )
 
 // PipelineExecutor adapts the runner package to the domain PipelineRunner port.
 type PipelineExecutor struct {
-	Mode         string
-	GenerateYAML func(model.Project, []dag.Node) string
-	runDocker    func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
-	runLocal     func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
-	runGitLab    func(context.Context, model.Project, []dag.Node, Options, func(model.Project, []dag.Node) string) ([]TaskResult, error)
-	runOne       func(context.Context, model.Project, string, Options) (TaskResult, error)
+	Mode      string
+	runDocker func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
+	runLocal  func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
+	runOne    func(context.Context, model.Project, string, Options) (TaskResult, error)
 }
 
 var _ domain.PipelineRunner = (*PipelineExecutor)(nil)
@@ -53,25 +50,6 @@ func (e *PipelineExecutor) Run(ctx context.Context, project domain.Project, chan
 			return e.runDocker(ctx, project, changed, runnerOpts)
 		}
 		return Run(ctx, project, changed, runnerOpts)
-	case "gitlab-runner":
-		if e.GenerateYAML == nil {
-			return nil, fmt.Errorf("gitlab-runner mode requires a YAML generator")
-		}
-		prepared, cleanup, err := prepareSources(ctx, project, &runnerOpts)
-		if err != nil {
-			return nil, err
-		}
-		defer cleanup()
-		project = prepared
-		runnerOpts.SourcesPrepared = true
-		nodes, err := resolveNodes(project, changed)
-		if err != nil {
-			return nil, err
-		}
-		if e.runGitLab != nil {
-			return e.runGitLab(ctx, project, nodes, runnerOpts, e.GenerateYAML)
-		}
-		return RunGitLabRunner(ctx, project, nodes, runnerOpts, e.GenerateYAML)
 	default:
 		return nil, fmt.Errorf("unsupported runner mode %q", e.Mode)
 	}

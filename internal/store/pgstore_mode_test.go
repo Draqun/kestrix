@@ -106,7 +106,7 @@ func TestMigrateBackfillsExistingProjectMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := migrate(pg.db, "gitlab-runner"); err != nil {
+	if err := migrate(pg.db, "remote"); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -114,8 +114,8 @@ func TestMigrateBackfillsExistingProjectMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacy.Mode != "gitlab-runner" {
-		t.Fatalf("backfilled legacy project Mode = %q, want gitlab-runner", legacy.Mode)
+	if legacy.Mode != "remote" {
+		t.Fatalf("backfilled legacy project Mode = %q, want remote", legacy.Mode)
 	}
 	explicit, err := pg.Get("proj-explicit-docker")
 	if err != nil {
