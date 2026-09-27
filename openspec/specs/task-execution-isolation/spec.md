@@ -27,7 +27,7 @@ runner's own environment.
 
 #### Scenario: Control-plane secrets are withheld
 
-- **WHEN** a task script prints its environment in `local`, `docker`, or `gitlab-runner` mode
+- **WHEN** a task script prints its environment in `local` or `docker` mode
 - **THEN** `DATABASE_URL`, every `KESTRIX_*` variable, and `DOCKER_PASSWORD` SHALL be absent unless explicitly passed through
 - **AND** `PATH`, `HOME`, and `CI_PROJECT_DIR` SHALL be present
 
@@ -84,7 +84,7 @@ same hardened container construction.
 
 - **WHEN** a manual task is approved in a project configured for `docker` mode
 - **THEN** the task SHALL run in a container with the same capability, privilege, PID, memory, CPU, network, and user hardening as a `docker`-mode DAG task
-- **AND** it SHALL NOT be executed with a bare host process, unlike a project configured for `local` or `gitlab-runner` mode
+- **AND** it SHALL NOT be executed with a bare host process, unlike a project configured for `local` mode
 
 #### Scenario: Limit exceeded
 
@@ -112,7 +112,7 @@ run SHALL mark it `canceled` without terminating, or waiting for, a task
 already executing on a runner — the `remote`-mode behaviour is specified in
 full by the `remote-runner-execution` requirement "Cancelling a remote-mode
 run". The termination guarantee above continues to apply unchanged to
-`local`, `docker`, and `gitlab-runner` mode.
+`local` and `docker` mode.
 
 #### Scenario: Cancel a running local task
 
