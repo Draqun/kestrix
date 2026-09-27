@@ -10,9 +10,9 @@ import (
 
 func mustCreateRunner(t *testing.T, pg *PGStore, name string) int {
 	t.Helper()
-	id, _, err := pg.CreateRunner(name)
+	id, _, err := pg.CreateRunner(name, nil)
 	if err != nil {
-		t.Fatalf("CreateRunner(%q): %v", name, err)
+		t.Fatalf("CreateRunner(%q, nil): %v", name, err)
 	}
 	return id
 }
@@ -32,7 +32,7 @@ func mustCreateRemoteJob(t *testing.T, pg *PGStore, runID int, taskName string) 
 
 func TestPG_CreateAndAuthenticateRunner(t *testing.T) {
 	pg := testPG(t)
-	id, token, err := pg.CreateRunner("runner-a")
+	id, token, err := pg.CreateRunner("runner-a", nil)
 	if err != nil {
 		t.Fatalf("CreateRunner: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestPG_AuthenticateRunner_UnknownToken(t *testing.T) {
 
 func TestPG_RevokeRunner_RejectsToken(t *testing.T) {
 	pg := testPG(t)
-	id, token, err := pg.CreateRunner("runner-b")
+	id, token, err := pg.CreateRunner("runner-b", nil)
 	if err != nil {
 		t.Fatalf("CreateRunner: %v", err)
 	}

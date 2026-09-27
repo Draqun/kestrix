@@ -86,6 +86,7 @@ ci_task "build" {
 | `trigger` | string | Yes | Boolean expression deciding if the task runs |
 | `depends_on` | list(string) | No | Tasks that must complete before this one starts |
 | `manual` | bool | No | If `true`, requires human approval before execution |
+| `runner_tags` | list(string) | No | Tags a runner must carry to execute the task in `remote` mode; ignored in other modes (see [remote runners](remote-runners.md#runner-tags)) |
 
 ### Execute Block
 

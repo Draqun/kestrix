@@ -131,6 +131,9 @@ type RunnerConfig struct {
 	// default (120s, 3 reclaims).
 	RemoteJobTimeout     time.Duration
 	RemoteJobMaxReclaims int
+	// OfflineAfter is how long a runner holding no job may be silent before
+	// GET /api/runners reports it offline. Zero selects the 60s default.
+	OfflineAfter time.Duration
 }
 
 // Server is the HTTP server.
@@ -560,6 +563,7 @@ func (s *Server) buildRouter() chi.Router {
 				r.Put("/users/{user}/role", s.handleUpdateUserRole)
 				r.Put("/users/{user}/grants", s.handleSetUserGrants)
 				r.Delete("/users/{user}", s.handleDeleteUser)
+				r.Get("/runners", s.handleListRunners)
 				r.Post("/runners", s.handleCreateRunner)
 				r.Delete("/runners/{id}", s.handleRevokeRunner)
 			})
@@ -651,6 +655,20 @@ func (s *Server) remoteJobTimeout() time.Duration {
 		return s.cfg.Runner.RemoteJobTimeout
 	}
 	return defaultRemoteJobTimeout
+}
+
+// defaultRunnerOfflineAfter mirrors the KESTRIX_RUNNER_OFFLINE_AFTER default
+// (internal/config), for a Config built without it. 60s was chosen as three
+// of runnerLongPollInterval's 20s periods, so one slow poll never flaps a
+// runner offline; revisit it if that interval changes. It is a literal, not
+// derived, because runnerLongPollInterval is a var tests shorten.
+const defaultRunnerOfflineAfter = 60 * time.Second
+
+func (s *Server) runnerOfflineAfter() time.Duration {
+	if s.cfg.Runner.OfflineAfter > 0 {
+		return s.cfg.Runner.OfflineAfter
+	}
+	return defaultRunnerOfflineAfter
 }
 
 func (s *Server) remoteJobMaxReclaims() int {

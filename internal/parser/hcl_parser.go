@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/model"
 )
 
@@ -180,7 +181,7 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
 	}
 	t := model.Task{Name: blk.Labels[0]}
 
-	// Top-level attributes of ci_task: trigger, manual, depends_on
+	// Top-level attributes of ci_task: trigger, manual, depends_on, runner_tags
 	for name, attr := range attrsMap(blk.Body) {
 		val, err := literal(attr.Expr)
 		if err != nil {
@@ -193,6 +194,12 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
 			t.Manual = val == "true"
 		case "depends_on":
 			t.DependsOn = splitList(val)
+		case "runner_tags":
+			tags, err := domain.NormalizeRunnerTags(splitList(val))
+			if err != nil {
+				return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+			}
+			t.RunnerTags = tags
 		}
 	}
 

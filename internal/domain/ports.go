@@ -276,10 +276,12 @@ type RemoteJob struct {
 type RemoteJobStore interface {
 	// CreateRemoteJob dispatches one task of runID as a pending job.
 	CreateRemoteJob(runID int, taskName string, payload RemoteJobPayload) (int, error)
-	// ClaimNextJob atomically claims the oldest pending job for any runner
-	// (Phase 1 has no tags - design.md Risks) via SELECT ... FOR UPDATE SKIP
-	// LOCKED, incrementing claim_epoch. Returns a nil job and no error when
-	// nothing is pending.
+	// ClaimNextJob atomically claims the oldest pending job whose required
+	// tags are all among runnerID's tags (an untagged job matches every
+	// runner; remote-runner-management) via SELECT ... FOR UPDATE SKIP
+	// LOCKED, incrementing claim_epoch. A job no polling runner matches is
+	// skipped, never blocking newer ones. Returns a nil job and no error
+	// when nothing matching is pending.
 	ClaimNextJob(runnerID int) (*RemoteJob, error)
 	// GetRemoteJob returns a job by ID, or nil if it does not exist.
 	GetRemoteJob(jobID int) (*RemoteJob, error)
@@ -376,13 +378,55 @@ type RunnerStore interface {
 	// CreateRunner registers a new runner and returns its ID and a
 	// newly-generated bearer token. The token is returned once, in plain
 	// text, and never again - only its hash is stored.
-	CreateRunner(name string) (id int, token string, err error)
-	// AuthenticateRunner resolves token to a runner ID in constant time. ok
-	// is false for an unknown or revoked token.
+	// tags are assigned here, by the administrator, and only here - a
+	// runner never declares its own (remote-runner-management design.md).
+	CreateRunner(name string, tags []string) (id int, token string, err error)
+	// AuthenticateRunner resolves token to a runner ID in constant time and
+	// records the request as the runner's last-seen time. ok is false for
+	// an unknown or revoked token, which records nothing.
 	AuthenticateRunner(token string) (runnerID int, ok bool, err error)
 	// RevokeRunner marks a runner revoked; a revoked runner's token no
 	// longer authenticates.
 	RevokeRunner(id int) error
+	// ListRunners returns every unrevoked runner, oldest first.
+	ListRunners() ([]Runner, error)
+}
+
+// Runner is a registered runner as ListRunners reports it. It never carries
+// the token or its hash.
+type Runner struct {
+	ID         int        `json:"id"`
+	Name       string     `json:"name"`
+	Tags       []string   `json:"tags"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// Busy is true while the runner holds a claimed or running job.
+	Busy bool `json:"-"`
+}
+
+// Runner liveness states, as RunnerStatus derives them.
+const (
+	RunnerStatusBusy      = "busy"
+	RunnerStatusOnline    = "online"
+	RunnerStatusOffline   = "offline"
+	RunnerStatusNeverSeen = "never seen"
+)
+
+// RunnerStatus derives r's liveness at now: busy while it holds a job
+// (a quiet task sends nothing until it completes, so staleness says
+// nothing then), never seen before its first request, otherwise online or
+// offline against offlineAfter (remote-runner-management design.md).
+func RunnerStatus(r Runner, now time.Time, offlineAfter time.Duration) string {
+	switch {
+	case r.Busy:
+		return RunnerStatusBusy
+	case r.LastSeenAt == nil:
+		return RunnerStatusNeverSeen
+	case now.Sub(*r.LastSeenAt) <= offlineAfter:
+		return RunnerStatusOnline
+	default:
+		return RunnerStatusOffline
+	}
 }
 
 // RunSourceStore persists non-secret source metadata after acquisition.

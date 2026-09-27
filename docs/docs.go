@@ -750,6 +750,66 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/runners": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "runners"
+                ],
+                "summary": "List registered runners",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "runners"
+                ],
+                "summary": "Register a runner",
+                "parameters": [
+                    {
+                        "description": "Runner name and optional tags",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/web.runnerCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/web.runnerCreateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/runs": {
             "get": {
                 "produces": [
@@ -1119,6 +1179,10 @@ const docTemplate = `{
                     "description": "HasWebhookSecret reports whether a webhook secret is stored, without\ndisclosing it. Only publicProject sets this on an outgoing copy; the\nstored struct itself does not populate it.",
                     "type": "boolean"
                 },
+                "mode": {
+                    "description": "Mode selects this project's execution backend: \"local\", \"docker\",\n\"gitlab-runner\", or \"remote\" - see remote-runner-registration\ndesign.md D2. Empty on input defaults to the instance's configured\nmode (ProjectService.DefaultMode); always populated on output.",
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1218,6 +1282,13 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "runner_tags": {
+                    "description": "RunnerTags are the tags a runner must carry to execute this task in\nremote mode, normalised by NormalizeRunnerTags; ignored in every other\nmode (remote-runner-management).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "trigger": {
                     "type": "string"
@@ -1422,6 +1493,40 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "web.runnerCreateRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "web.runnerCreateResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "token": {
                     "type": "string"
                 }
             }

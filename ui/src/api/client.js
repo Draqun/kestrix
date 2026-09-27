@@ -412,3 +412,27 @@ export async function deleteAccount(name) {
     throw new Error(err.error || `Delete account failed: ${res.statusText}`);
   }
 }
+
+export async function listRunners() {
+  const res = await apiFetch(`${API_BASE}/api/runners`);
+  if (!res.ok) throw new Error(`List runners failed: ${res.statusText}`);
+  return res.json();
+}
+
+// createRunner returns { id, name, tags, token }; the token is shown once.
+export async function createRunner(input) {
+  const res = await apiFetch(`${API_BASE}/api/runners`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Register runner failed: ${res.statusText}`);
+  return data;
+}
+
+export async function revokeRunner(id) {
+  const res = await apiFetch(`${API_BASE}/api/runners/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Revoke runner failed: ${res.statusText}`);
+  }
+}

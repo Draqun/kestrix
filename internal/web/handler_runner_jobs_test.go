@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -760,5 +761,117 @@ func TestRunnerJobRoutesWiredOutsideAPIAuth(t *testing.T) {
 	srv.router.ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (requireRunnerAuth, not RequireAuth)", w.Code)
+	}
+}
+
+// ── remote-runner-management: tags and GET /api/runners ────────────
+
+func TestHandleCreateRunner_NormalisesAndEchoesTags(t *testing.T) {
+	runnerStore := &mocks.MockRunnerStore{CreateRunnerID: 4, CreateRunnerToken: "tok"}
+	srv := setupRunnerJobServer(t, runnerStore, &mocks.MockRemoteJobStore{}, nil)
+	body, _ := json.Marshal(map[string]any{"name": "gpu-box", "tags": []string{"GPU", " gpu", "linux"}})
+	w := httptest.NewRecorder()
+	srv.handleCreateRunner(w, httptest.NewRequest("POST", "/api/runners", bytes.NewReader(body)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", w.Code, w.Body.String())
+	}
+	var resp runnerCreateResponse
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	want := []string{"gpu", "linux"}
+	if !reflect.DeepEqual(resp.Tags, want) || !reflect.DeepEqual(runnerStore.CreateRunnerTags, want) {
+		t.Fatalf("response tags %q, stored tags %q, want %q", resp.Tags, runnerStore.CreateRunnerTags, want)
+	}
+}
+
+func TestHandleCreateRunner_UntaggedEchoesEmptyList(t *testing.T) {
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{CreateRunnerID: 5}, &mocks.MockRemoteJobStore{}, nil)
+	w := httptest.NewRecorder()
+	srv.handleCreateRunner(w, httptest.NewRequest("POST", "/api/runners", strings.NewReader(`{"name":"plain"}`)))
+	if !strings.Contains(w.Body.String(), `"tags":[]`) {
+		t.Fatalf("body = %s, want tags as an empty list", w.Body.String())
+	}
+}
+
+func TestHandleCreateRunner_InvalidTagRejected(t *testing.T) {
+	runnerStore := &mocks.MockRunnerStore{}
+	srv := setupRunnerJobServer(t, runnerStore, &mocks.MockRemoteJobStore{}, nil)
+	w := httptest.NewRecorder()
+	srv.handleCreateRunner(w, httptest.NewRequest("POST", "/api/runners", strings.NewReader(`{"name":"x","tags":["has space"]}`)))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "has space") {
+		t.Fatalf("status = %d body = %s, want 400 naming the tag", w.Code, w.Body.String())
+	}
+	if runnerStore.CreateRunnerTags != nil {
+		t.Fatal("a runner was created despite the invalid tag")
+	}
+}
+
+func TestHandleListRunners_StatusesAndNoSecrets(t *testing.T) {
+	now := time.Now()
+	recent, stale := now.Add(-5*time.Second), now.Add(-10*time.Minute)
+	runnerStore := &mocks.MockRunnerStore{ListRunnersResult: []domain.Runner{
+		{ID: 1, Name: "busy", Tags: []string{"gpu"}, LastSeenAt: &stale, Busy: true},
+		{ID: 2, Name: "online", LastSeenAt: &recent},
+		{ID: 3, Name: "offline", LastSeenAt: &stale},
+		{ID: 4, Name: "new"},
+	}}
+	srv := setupRunnerJobServer(t, runnerStore, &mocks.MockRemoteJobStore{}, nil)
+	w := httptest.NewRecorder()
+	srv.handleListRunners(w, httptest.NewRequest("GET", "/api/runners", nil))
+	var resp struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"busy", "online", "offline", "never seen"}
+	for i, item := range resp.Items {
+		if item["status"] != want[i] {
+			t.Fatalf("runner %v status = %v, want %s", item["name"], item["status"], want[i])
+		}
+		for _, secret := range []string{"token", "token_hash", "busy"} {
+			if _, present := item[secret]; present {
+				t.Fatalf("runner %v exposes %q", item["name"], secret)
+			}
+		}
+	}
+	if tags := resp.Items[1]["tags"]; tags == nil {
+		t.Fatal("an untagged runner's tags should be an empty list, not null")
+	}
+}
+
+func TestHandleListRunners_Errors(t *testing.T) {
+	srv := setupRunnerJobServer(t, nil, &mocks.MockRemoteJobStore{}, nil)
+	w := httptest.NewRecorder()
+	srv.handleListRunners(w, httptest.NewRequest("GET", "/api/runners", nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("nil store: status = %d, want 500", w.Code)
+	}
+	srv = setupRunnerJobServer(t, &mocks.MockRunnerStore{ListRunnersErr: errGap}, &mocks.MockRemoteJobStore{}, nil)
+	w = httptest.NewRecorder()
+	srv.handleListRunners(w, httptest.NewRequest("GET", "/api/runners", nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("store error: status = %d, want 500", w.Code)
+	}
+}
+
+func TestListRunnersRoute_AdminOnly(t *testing.T) {
+	srv := NewServer(Config{})
+	req := httptest.NewRequest(http.MethodGet, "/api/runners", nil)
+	req.Header.Set("Authorization", authToken(t, srv, domain.RoleOperator))
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("operator GET /api/runners = %d, want 403", w.Code)
+	}
+}
+
+func TestServer_RunnerOfflineAfterDefault(t *testing.T) {
+	srv := &Server{cfg: Config{ListenAddr: ":0"}}
+	if got := srv.runnerOfflineAfter(); got != defaultRunnerOfflineAfter {
+		t.Fatalf("default = %v, want %v", got, defaultRunnerOfflineAfter)
+	}
+	srv.cfg.Runner.OfflineAfter = 2 * time.Minute
+	if got := srv.runnerOfflineAfter(); got != 2*time.Minute {
+		t.Fatalf("configured = %v, want 2m", got)
 	}
 }

@@ -494,6 +494,7 @@ func TestLoadEnvironmentHTTPDurationSettings(t *testing.T) {
 		{"KESTRIX_HTTP_WRITE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPWriteTimeout }, 120 * time.Second},
 		{"KESTRIX_HTTP_IDLE_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.HTTPIdleTimeout }, 120 * time.Second},
 		{"KESTRIX_RUNNER_JOB_TIMEOUT", 120 * time.Second, func(e *Environment) time.Duration { return e.RunnerJobTimeout }, 120 * time.Second},
+		{"KESTRIX_RUNNER_OFFLINE_AFTER", 60 * time.Second, func(e *Environment) time.Duration { return e.RunnerOfflineAfter }, 60 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/default", func(t *testing.T) {
