@@ -12,7 +12,7 @@ The project SHALL enforce 100.0% statement coverage for `internal/runner` using 
 - **AND** the quality gate SHALL fail for any lower result
 
 #### Scenario: External adapter behavior is unit-tested
-- **WHEN** runner code constructs or dispatches Docker, bash, or `gitlab-runner` execution
+- **WHEN** runner code constructs or dispatches Docker or bash execution
 - **THEN** unit tests SHALL exercise that production logic through fakes or equivalent test seams
 - **AND** no external binary or service SHALL be required to reach 100.0% statement coverage
 
@@ -20,7 +20,7 @@ The project SHALL enforce 100.0% statement coverage for `internal/runner` using 
 The unit coverage profile SHALL contain execution data only from unit tests. Integration and end-to-end suites SHALL NOT contribute to the unit coverage percentage, regardless of whether they execute the same production statements.
 
 #### Scenario: Integration-capable environment does not affect the metric
-- **WHEN** Docker, bash, `gitlab-runner`, databases, or external services are available on the test host
+- **WHEN** Docker, bash, databases, or external services are available on the test host
 - **THEN** the unit coverage target SHALL skip or exclude tests that execute those dependencies
 - **AND** the result SHALL remain deterministic across developer and CI environments
 
@@ -47,9 +47,9 @@ Runner ordering, stage assignment, repository path resolution, manual handling, 
 #### Scenario: Orchestration is tested with fakes
 - **WHEN** a task passes, fails, is manual, or is blocked by a failed dependency
 - **THEN** unit tests SHALL verify results, ordering, skips, and callbacks with a fake executor
-- **AND** the tests SHALL not invoke Docker, bash, or `gitlab-runner`
+- **AND** the tests SHALL not invoke Docker or bash
 
 #### Scenario: All execution modes are dispatched deterministically
-- **WHEN** `PipelineExecutor` receives local, empty, Docker, GitLab runner, or unsupported mode
+- **WHEN** `PipelineExecutor` receives local, empty, Docker, or unsupported mode
 - **THEN** unit tests SHALL verify the selected path and all nil or error branches without invoking an external executor
 

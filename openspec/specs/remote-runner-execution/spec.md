@@ -35,8 +35,8 @@ invalidating its token.
 
 ### Requirement: Remote project mode
 
-A project's `Mode` SHALL accept the value `remote` alongside `local`,
-`docker`, and `gitlab-runner`. In a `remote`-mode project, every task of a run
+A project's `Mode` SHALL accept the value `remote` alongside `local` and
+`docker`. In a `remote`-mode project, every task of a run
 SHALL be dispatched as a job for a registered runner instead of executing
 in-process. This SHALL hold for every entry point that executes a task — a
 whole-pipeline run, a single-task re-run, and an approved manual task alike —

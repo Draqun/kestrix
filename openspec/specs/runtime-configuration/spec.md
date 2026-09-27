@@ -67,8 +67,8 @@ For each migrated setting, explicit CLI flags SHALL override config-file values,
 - **WHEN** `config.yaml` sets `runner.cancel_grace` and no `KESTRIX_RUNNER_CANCEL_GRACE` environment variable is set
 - **THEN** a cancelled task SHALL be stopped using the config-file grace period
 - **AND** the config-file value SHALL apply to the Docker executor (`Grace`
-  field), local execution (`LocalExecutor.RunTask`), gitlab-runner execution
-  (`GitLabRunnerExecutor.RunTask`), and manual approval (`RunOne`) alike
+  field), local execution (`LocalExecutor.RunTask`), and manual approval
+  (`RunOne`) alike
 - **AND** manual approval SHALL still execute on the host regardless of runner
   mode (tracked in #1)
 
@@ -199,4 +199,18 @@ any API response.
 - **WHEN** `metrics.token` is set by any form
 - **THEN** the startup source report SHALL name the setting and its source without its value
 - **AND** no log line SHALL contain the token
+
+### Requirement: Instance runner mode is validated
+
+The instance-wide `runner.mode` setting SHALL accept only `local`, `docker`,
+or `remote` (or be unset, meaning `local`). Any other value SHALL fail
+startup naming the setting and the accepted values.
+
+#### Scenario: Unknown mode rejected at startup
+- **WHEN** Kestrix starts with `runner.mode: bogus`
+- **THEN** startup SHALL fail naming `runner.mode` and the accepted values
+
+#### Scenario: Supported modes accepted
+- **WHEN** Kestrix starts with `runner.mode` unset, `local`, `docker`, or `remote`
+- **THEN** startup SHALL NOT fail on the runner mode
 
