@@ -137,6 +137,7 @@ func TestRunHandlersSuccessAndServiceErrors(t *testing.T) {
 	srv.runService = nil
 	srv.handleRunProject(httptest.NewRecorder(), runCtx(httptest.NewRequest("POST", "/", strings.NewReader(`{}`)), "name", project.Name))
 	srv.runService = service.NewRunService(runs, nil, nil)
+	srv.runService.SetLocalExecutionPolicy(true, "local")
 	w = httptest.NewRecorder()
 	srv.handleRunProject(w, runCtx(httptest.NewRequest("POST", "/", strings.NewReader(`{}`)), "name", project.Name))
 	if w.Code != http.StatusInternalServerError {
@@ -150,6 +151,7 @@ func TestRunHandlersSuccessAndServiceErrors(t *testing.T) {
 		runs := &mocks.MockRunStore{CreateRunID: 4, FinishRunErr: finishErr}
 		srv = setupRunServer(t, store, runs)
 		srv.runService = service.NewRunService(runs, nil, nil)
+		srv.runService.SetLocalExecutionPolicy(true, "local")
 		w = httptest.NewRecorder()
 		srv.handleRunTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "task", "task"))
 		if w.Code != http.StatusInternalServerError {
@@ -207,6 +209,7 @@ func TestRunListNilAndApprovalBranches(t *testing.T) {
 		t.Fatalf("approval service=%d", w.Code)
 	}
 	srv.runService = service.NewRunService(runs, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	srv.runService.SetLocalExecutionPolicy(true, "local")
 	w = httptest.NewRecorder()
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", project.Name, "runID", "9", "task", "task"))
 	if w.Code != http.StatusOK {

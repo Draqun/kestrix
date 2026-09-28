@@ -90,6 +90,8 @@ const (
 	KeyRunnerMaxConcurrentRuns = "runner.max_concurrent_runs"
 	KeyRunHistoryLimit         = "runner.run_history_limit"
 	KeyRunnerMaxOutputBytes    = "runner.max_output_bytes"
+	KeyRunnerMode              = "runner.mode"
+	KeyRunnerAllowLocal        = "runner.allow_local"
 	KeyMetricsEnabled          = "metrics.enabled"
 	KeyMetricsToken            = "metrics.token"
 	KeyLoggingLevel            = "logging.level"
@@ -106,6 +108,7 @@ var multiFormSettingKeys = []string{
 	KeyRunnerDockerPIDs, KeyRunnerDockerMemory, KeyRunnerDockerCPUs,
 	KeyRunnerDockerUser, KeyRunnerDockerNetwork, KeyRunnerCancelGrace,
 	KeyRunnerMaxConcurrentRuns, KeyRunHistoryLimit, KeyRunnerMaxOutputBytes,
+	KeyRunnerMode, KeyRunnerAllowLocal,
 	KeyMetricsEnabled, KeyMetricsToken, KeyLoggingLevel,
 }
 
@@ -206,12 +209,21 @@ func (c SourceCacheConfig) Validate() error {
 	return nil
 }
 
-// Validate rejects a runner.mode Kestrix cannot execute.
+// Validate rejects a runner.mode Kestrix cannot execute, and rejects an
+// instance mode of `local` (or unset, which defaults to `local`) unless
+// AllowLocal opts in - see safe-production-execution design.md D1.
 func (c RunnerConfig) Validate() error {
-	if domain.IsValidMode(c.Mode) {
-		return nil
+	if !domain.IsValidMode(c.Mode) {
+		return fmt.Errorf("runner.mode %q is not supported: use one of %s", c.Mode, strings.Join(domain.Modes(), ", "))
 	}
-	return fmt.Errorf("runner.mode %q is not supported: use one of %s", c.Mode, strings.Join(domain.Modes(), ", "))
+	mode := c.Mode
+	if mode == "" {
+		mode = "local"
+	}
+	if mode == "local" && !c.AllowLocal {
+		return fmt.Errorf("%s", domain.LocalExecutionDisabledMessage())
+	}
+	return nil
 }
 
 // RunnerConfig controls how pipeline jobs are executed.
@@ -238,6 +250,10 @@ type RunnerConfig struct {
 	MaxConcurrentRuns int `yaml:"max_concurrent_runs"`
 	RunHistoryLimit   int `yaml:"run_history_limit"`
 	MaxOutputBytes    int `yaml:"max_output_bytes"`
+	// AllowLocal opts an instance into `local` execution (env:
+	// KESTRIX_RUNNER_ALLOW_LOCAL, default false) - see
+	// safe-production-execution design.md D1.
+	AllowLocal bool `yaml:"allow_local"`
 }
 
 // PipelineConfig controls pipeline parsing behavior.
@@ -437,6 +453,7 @@ func Load(path string) (*Config, error) {
 			MaxBytes  *int64    `yaml:"max_bytes"`
 		} `yaml:"source_cache"`
 		Runner *struct {
+			Mode              *string   `yaml:"mode"`
 			DockerPIDs        *int      `yaml:"docker_pids"`
 			DockerMemory      *string   `yaml:"docker_memory"`
 			DockerCPUs        *string   `yaml:"docker_cpus"`
@@ -446,6 +463,7 @@ func Load(path string) (*Config, error) {
 			MaxConcurrentRuns *int      `yaml:"max_concurrent_runs"`
 			RunHistoryLimit   *int      `yaml:"run_history_limit"`
 			MaxOutputBytes    *int      `yaml:"max_output_bytes"`
+			AllowLocal        *bool     `yaml:"allow_local"`
 		} `yaml:"runner"`
 		Metrics *struct {
 			Enabled *bool   `yaml:"enabled"`
@@ -490,6 +508,8 @@ func Load(path string) (*Config, error) {
 		markFile(KeySourceCacheMaxBytes, explicit.SourceCache.MaxBytes != nil)
 	}
 	if explicit.Runner != nil {
+		markFile(KeyRunnerMode, explicit.Runner.Mode != nil)
+		markFile(KeyRunnerAllowLocal, explicit.Runner.AllowLocal != nil)
 		markFile(KeyRunnerDockerPIDs, explicit.Runner.DockerPIDs != nil)
 		markFile(KeyRunnerDockerMemory, explicit.Runner.DockerMemory != nil)
 		markFile(KeyRunnerDockerCPUs, explicit.Runner.DockerCPUs != nil)
@@ -629,6 +649,23 @@ func (c *Config) ApplyEnvironment(env *Environment) error {
 	if !c.isSet(KeyRunnerMaxOutputBytes) && env.RunnerMaxOutputBytes > 0 {
 		c.Runner.MaxOutputBytes = env.RunnerMaxOutputBytes
 		c.setSource(KeyRunnerMaxOutputBytes, "env")
+	}
+	// KESTRIX_EXECUTION_MODE, not KESTRIX_RUNNER_MODE: that name already
+	// means `kestrix runner`'s own execution backend (env.RunnerMode), a
+	// different setting on a different binary - see design.md D2 in
+	// safe-production-execution.
+	if !c.isSet(KeyRunnerMode) && env.RunnerExecutionMode != "" {
+		c.Runner.Mode = env.RunnerExecutionMode
+		c.setSource(KeyRunnerMode, "env")
+	}
+	// No env.RunnerAllowLocal-is-truthy guard, like KeyMetricsEnabled below:
+	// env.RunnerAllowLocal is already the parsed bool (false when unset or
+	// explicitly false), so this always applies when the file did not set
+	// the key, and marks the source "env" even when the variable was never
+	// set.
+	if !c.isSet(KeyRunnerAllowLocal) {
+		c.Runner.AllowLocal = env.RunnerAllowLocal
+		c.setSource(KeyRunnerAllowLocal, "env")
 	}
 	// KESTRIX_METRICS_ENABLED has no non-empty-string sentinel the way most
 	// other env branches do: env.MetricsEnabled is already the parsed bool

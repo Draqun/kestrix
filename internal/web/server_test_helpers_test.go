@@ -187,14 +187,23 @@ func NewServer(cfg Config) *Server {
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	webhookLog := &mocks.MockWebhookLogSink{}
 	pipelineRunner := &runner.PipelineExecutor{Mode: "local"}
+	// This helper always runs projects in local mode (pipelineRunner above),
+	// so it opts into runner.allow_local the same way docker-compose.yml and
+	// the Makefile dev targets do - see safe-production-execution design.md
+	// D3. A test asserting the opt-in's own gating behavior builds its
+	// Server by hand instead of through this helper.
+	projectService := service.NewProjectService(projectStore)
+	projectService.SetAllowLocal(true)
+	runService := service.NewRunService(runStore, pipelineRunner, pipelineRunner)
+	runService.SetLocalExecutionPolicy(true, "local")
 	srv := NewServerWithDeps(
 		cfg,
 		projectStore,
 		runStore,
-		service.NewProjectService(projectStore),
+		projectService,
 		pipelineRunner,
 		pipelineRunner,
-		service.NewRunService(runStore, pipelineRunner, pipelineRunner),
+		runService,
 		service.NewWebhookService(webhookLog),
 	)
 	srv.webhookLogStore = webhookLog

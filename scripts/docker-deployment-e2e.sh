@@ -58,7 +58,7 @@ ADMIN_NAME="e2e-admin"
 ADMIN_PASSWORD="e2e-admin-password-$$"
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 
-mkdir -p "${REMOTE_WORK}/ci"
+mkdir -p "${REMOTE_WORK}/ci" "${REMOTE_WORK}/ci-remote"
 git init --quiet --bare --initial-branch=main "${REMOTE_BARE}"
 git -C "${REMOTE_WORK}" init --quiet --initial-branch=main
 git -C "${REMOTE_WORK}" remote add origin "${REMOTE_BARE}"
@@ -98,6 +98,39 @@ printf '%s\n' \
   '    }' \
   '  }' \
   '}' > "${REMOTE_WORK}/ci/pipeline.tf"
+# safe-production-execution: a separate project, mode "remote" set directly
+# on its row (not deferring to the `kestrix` container's own instance mode,
+# forced to `docker` above for the docker-remote checks), so its tasks
+# dispatch to the `runner` service - see design.md D3. check_no_keys
+# interpolates the exact host paths the `kestrix` container mounts its key
+# files at; the `runner` service has no such mount, so the paths must be
+# absent there. check_no_db probes the same postgres:5432 the `runners`
+# network deliberately excludes the runner service from.
+printf '%s\n' \
+  'project "remote-runner" {' \
+  '  ci_repo "app" { path = "." }' \
+  '  ci_task "remote_task" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "echo running-on-runner"' \
+  '    }' \
+  '  }' \
+  '  ci_task "check_no_keys" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  "      script = \"test -f '${MASTER_KEY_FILE}' && echo PRESENT || echo ABSENT; test -f '${JWT_SIGNING_KEY_FILE}' && echo PRESENT || echo ABSENT\"" \
+  '    }' \
+  '  }' \
+  '  ci_task "check_no_db" {' \
+  '    trigger = "repo.app.changed"' \
+  '    execute {' \
+  '      repo = "app"' \
+  '      script = "(exec 3<>/dev/tcp/postgres/5432) 2>/dev/null && echo DB_REACHABLE || echo DB_UNREACHABLE"' \
+  '    }' \
+  '  }' \
+  '}' > "${REMOTE_WORK}/ci-remote/pipeline.tf"
 printf '%s\n' 'docker-e2e-source' > "${REMOTE_WORK}/version.txt"
 git -C "${REMOTE_WORK}" add .
 git -C "${REMOTE_WORK}" -c user.name='Kestrix Docker E2E' -c user.email=e2e@example.test commit --quiet -m initial
@@ -388,20 +421,21 @@ if [[ "${status}" != "401" ]]; then
 fi
 echo "Deleted account's token correctly rejected with 401."
 
-# run_single_task starts a single-task run of the docker-remote project and
-# waits for it to finish, leaving the finished run record in $2, its id in
+# run_single_task starts a single-task run of the named project and waits
+# for it to finish, leaving the finished run record in $3, its id in
 # SINGLE_TASK_RUN_ID, and the POST response's path in SINGLE_TASK_ACCEPT_FILE.
 # The route answers with the accepted run_id at once and executes in the
 # background - see ui-single-task-rerun design.md D3 - so the task's output
 # is read from the run record, not the POST response.
 run_single_task() {
-  local task="$1"
-  local run_file="$2"
-  SINGLE_TASK_ACCEPT_FILE="${TEMP_DIR}/${task}-accept.json"
+  local project="$1"
+  local task="$2"
+  local run_file="$3"
+  SINGLE_TASK_ACCEPT_FILE="${TEMP_DIR}/${project}-${task}-accept.json"
   local accept_file="${SINGLE_TASK_ACCEPT_FILE}"
   local status
   status="$(curl -sS -o "${accept_file}" -w '%{http_code}' --max-time 20 "${AUTH_HEADER[@]}" \
-    -X POST "${API_BASE}/api/projects/docker-remote/tasks/${task}/run" \
+    -X POST "${API_BASE}/api/projects/${project}/tasks/${task}/run" \
     -H 'Content-Type: application/json' -d '{}')"
   if [[ "${status}" != "200" ]]; then
     echo "${task} task run returned HTTP ${status}:" >&2
@@ -415,8 +449,8 @@ run_single_task() {
     exit 1
   fi
   local deadline=$((SECONDS + 60))
-  until curl -sS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote/runs/${SINGLE_TASK_RUN_ID}" -o "${run_file}" \
-    && grep -Eq '"project_name":"docker-remote","status":"(passed|failed|canceled)"' "${run_file}"; do
+  until curl -sS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/${project}/runs/${SINGLE_TASK_RUN_ID}" -o "${run_file}" \
+    && grep -Eq "\"project_name\":\"${project}\",\"status\":\"(passed|failed|canceled)\"" "${run_file}"; do
     if (( SECONDS >= deadline )); then
       echo "${task} run ${SINGLE_TASK_RUN_ID} did not finish within timeout:" >&2
       sed -n '1,200p' "${run_file}" >&2
@@ -424,6 +458,18 @@ run_single_task() {
     fi
     sleep 1
   done
+}
+
+# task_output extracts the run record's top-level "output" field only - not
+# the whole JSON document, which also embeds pipeline_def with each task's
+# own script *source* (so a marker word chosen for a script's echo output,
+# e.g. PRESENT/ABSENT below, would otherwise match its own source text
+# mirrored back by the API regardless of which branch actually ran), and not
+# a per-task-result "output" (each starts "" before the run finishes). The
+# top-level field is the first "output" key the response serializes, so the
+# first grep match is always it.
+task_output() {
+  grep -oE '"output":"(\\.|[^"\\])*"' "$1" | head -n1 | sed -E 's/^"output":"//; s/"$//'
 }
 
 assert_json_endpoint() {
@@ -621,7 +667,7 @@ echo "/webhook: secondary source resolved docker-remote (source_name=shared)"
 # environment - see design.md D1/D2.
 echo "Verifying a task process cannot see control-plane secrets..."
 ENV_TASK_RUN_RESPONSE="${TEMP_DIR}/env-task.json"
-run_single_task print_env "${ENV_TASK_RUN_RESPONSE}"
+run_single_task docker-remote print_env "${ENV_TASK_RUN_RESPONSE}"
 if grep -Eq '(^|\\n)DATABASE_URL=|KESTRIX_MASTER_KEY_PATH=|KESTRIX_JWT_SIGNING_KEY_PATH=|KESTRIX_GITLAB_TOKEN=|KESTRIX_WEBHOOK_SECRET=' "${ENV_TASK_RUN_RESPONSE}"; then
   echo "Task process leaked a control-plane secret variable:" >&2
   sed -n '1,200p' "${ENV_TASK_RUN_RESPONSE}" >&2
@@ -712,7 +758,7 @@ git -C "${REMOTE_WORK}" push --quiet origin main
 # The POST response carries only the accepted run, so the redaction checks
 # below read the persisted run record, which holds the task result output.
 ECHO_SECRET_RUN_RESPONSE="${TEMP_DIR}/echo-secret-run.json"
-run_single_task echo_secret "${ECHO_SECRET_RUN_RESPONSE}"
+run_single_task docker-remote echo_secret "${ECHO_SECRET_RUN_RESPONSE}"
 ECHO_SECRET_ACCEPT_FILE="${SINGLE_TASK_ACCEPT_FILE}"
 if grep -q "${RUNTIME_SECRET_VALUE}" "${ECHO_SECRET_RUN_RESPONSE}"; then
   echo "Persisted run record (task result output) leaked the runtime secret value:" >&2
@@ -820,6 +866,72 @@ if [[ "${status}" != "400" ]] || ! grep -qi 'revoked' "${TEMP_DIR}/revoked-read.
   echo "Cached source did not fail closed after credential revocation (HTTP ${status})." >&2
   exit 1
 fi
+
+# safe-production-execution: register a runner, start it (--profile
+# runner), and confirm a remote-mode project's tasks execute there rather
+# than in the `kestrix` container - see design.md D3, tasks.md 3.2.
+echo "Registering a runner and starting --profile runner..."
+compose exec -T postgres psql -U kestrix -d kestrix -v ON_ERROR_STOP=1 -c \
+  "INSERT INTO projects (name, repo_url, repo_ref, pipeline_dir, pipeline_file, mode) VALUES ('remote-runner', 'file:///e2e/remote.git', 'main', 'ci-remote', 'pipeline.tf', 'remote');" \
+  >/dev/null
+
+RUNNER_CREATE_RESPONSE="${TEMP_DIR}/runner-create.json"
+status="$(curl -sS -o "${RUNNER_CREATE_RESPONSE}" -w '%{http_code}' --max-time 10 "${AUTH_HEADER[@]}" \
+  -X POST "${API_BASE}/api/runners" \
+  -H 'Content-Type: application/json' -d '{"name":"e2e-runner"}')"
+if [[ "${status}" != "201" ]]; then
+  echo "Runner registration returned HTTP ${status}:" >&2
+  sed -n '1,120p' "${RUNNER_CREATE_RESPONSE}" >&2
+  exit 1
+fi
+RUNNER_TOKEN="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${RUNNER_CREATE_RESPONSE}")"
+if [[ -z "${RUNNER_TOKEN}" ]]; then
+  echo "Runner registration response did not contain a token." >&2
+  exit 1
+fi
+export KESTRIX_RUNNER_TOKEN="${RUNNER_TOKEN}"
+compose --profile runner up -d
+
+REMOTE_TASK_RUN="${TEMP_DIR}/remote-task-run.json"
+run_single_task remote-runner remote_task "${REMOTE_TASK_RUN}"
+if ! grep -q '"status":"passed"' "${REMOTE_TASK_RUN}"; then
+  echo "remote_task did not pass on the runner service:" >&2
+  sed -n '1,200p' "${REMOTE_TASK_RUN}" >&2
+  exit 1
+fi
+echo "remote_task executed and passed on the runner service."
+
+echo "Verifying a task on the runner cannot read the control-plane key files..."
+CHECK_NO_KEYS_RUN="${TEMP_DIR}/check-no-keys-run.json"
+run_single_task remote-runner check_no_keys "${CHECK_NO_KEYS_RUN}"
+CHECK_NO_KEYS_OUTPUT="$(task_output "${CHECK_NO_KEYS_RUN}")"
+if echo "${CHECK_NO_KEYS_OUTPUT}" | grep -q 'PRESENT'; then
+  echo "A task on the runner found a control-plane key file:" >&2
+  sed -n '1,200p' "${CHECK_NO_KEYS_RUN}" >&2
+  exit 1
+fi
+if ! echo "${CHECK_NO_KEYS_OUTPUT}" | grep -q 'ABSENT'; then
+  echo "check_no_keys did not report ABSENT for either key file:" >&2
+  sed -n '1,200p' "${CHECK_NO_KEYS_RUN}" >&2
+  exit 1
+fi
+echo "Runner-executed task confirmed both key files are absent."
+
+echo "Verifying the runner cannot reach postgres:5432..."
+CHECK_NO_DB_RUN="${TEMP_DIR}/check-no-db-run.json"
+run_single_task remote-runner check_no_db "${CHECK_NO_DB_RUN}"
+CHECK_NO_DB_OUTPUT="$(task_output "${CHECK_NO_DB_RUN}")"
+if echo "${CHECK_NO_DB_OUTPUT}" | grep -q 'DB_REACHABLE'; then
+  echo "A task on the runner reached postgres:5432:" >&2
+  sed -n '1,200p' "${CHECK_NO_DB_RUN}" >&2
+  exit 1
+fi
+if ! echo "${CHECK_NO_DB_OUTPUT}" | grep -q 'DB_UNREACHABLE'; then
+  echo "check_no_db did not report DB_UNREACHABLE:" >&2
+  sed -n '1,200p' "${CHECK_NO_DB_RUN}" >&2
+  exit 1
+fi
+echo "Runner confirmed postgres:5432 is unreachable."
 
 curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/credentials" > "${TEMP_DIR}/credentials.json"
 curl -fsS --max-time 10 "${AUTH_HEADER[@]}" "${API_BASE}/api/projects/docker-remote" > "${TEMP_DIR}/project-read.json"

@@ -630,6 +630,33 @@ func Modes() []string {
 	return slices.Clone(modes)
 }
 
+// ResolveMode folds an empty project (or caller) mode through the
+// instance default, and an empty instance default to "local" - the one
+// fallback chain every mode-aware call site (RunService.CheckLocalAllowed,
+// Server.CountLocalModeProjects, modeSelectingExecutor.executorFor) must
+// agree on, so the rule is written once instead of three times. mode wins
+// when set; instanceDefault wins when mode is empty; "local" is the final
+// fallback, matching DefaultConfig's own runner.mode default.
+func ResolveMode(mode, instanceDefault string) string {
+	if mode != "" {
+		return mode
+	}
+	if instanceDefault != "" {
+		return instanceDefault
+	}
+	return "local"
+}
+
+// LocalExecutionDisabledMessage explains why Kestrix refuses `local`
+// execution without runner.allow_local: a `local` task shares this
+// process's master key and JWT signing key with whatever script it runs.
+// Startup validation, project validation, and the stored-project run guard
+// all return this same text, so the explanation is identical wherever
+// `local` is refused - see safe-production-execution design.md D1.
+func LocalExecutionDisabledMessage() string {
+	return "local execution can read this instance's master key and JWT signing key; use runner mode remote with a registered runner, or set KESTRIX_RUNNER_ALLOW_LOCAL=true (runner.allow_local) only on a single-user machine"
+}
+
 // ProjectConfig is the configuration of a registered project.
 // It lives in domain so both ProjectStore and ProjectService can use it
 // without importing store.

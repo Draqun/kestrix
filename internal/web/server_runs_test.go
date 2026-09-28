@@ -29,14 +29,22 @@ import (
 func setupRunServer(t *testing.T, projectStore domain.ProjectStore, runStore domain.RunStore) *Server {
 	t.Helper()
 	pipeline := &mocks.MockPipelineRunner{}
+	// This helper always runs projects in local mode (Runner.Mode above), so
+	// it opts into runner.allow_local the same way docker-compose.yml and
+	// the Makefile dev targets do - see safe-production-execution design.md
+	// D3.
+	projectService := service.NewProjectService(projectStore)
+	projectService.SetAllowLocal(true)
+	runService := service.NewRunService(runStore, pipeline, pipeline)
+	runService.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
 		projectStore:   projectStore,
 		runStore:       runStore,
 		pipelineRunner: pipeline,
 		taskRunner:     pipeline,
-		projectService: service.NewProjectService(projectStore),
-		runService:     service.NewRunService(runStore, pipeline, pipeline),
+		projectService: projectService,
+		runService:     runService,
 		sourceSessions: &testSourceSessions{},
 	}
 	return srv
@@ -388,6 +396,8 @@ func TestHandleListAllRuns_Happy(t *testing.T) {
 func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore domain.RunStore) *Server {
 	t.Helper()
 	pipeline := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "test", Status: "passed"}}}
+	runService := service.NewRunService(runStore, pipeline, pipeline)
+	runService.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg: Config{
 			ListenAddr: ":0",
@@ -398,7 +408,7 @@ func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore d
 		pipelineRunner: pipeline,
 		taskRunner:     pipeline,
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
-		runService:     service.NewRunService(runStore, pipeline, pipeline),
+		runService:     runService,
 		sourceSessions: &testSourceSessions{},
 	}
 	return srv
@@ -607,6 +617,8 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 		Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main",
 		PipelineDir: "ci", PipelineFile: "pipeline.tf",
 	}
+	runService := service.NewRunService(mock, runner, runner)
+	runService.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
 		projectStore:   &mocks.MockProjectStore{GetResult: cfg},
@@ -614,7 +626,7 @@ func TestHandleRunTask_SkipsFinishRunWhenCanceled(t *testing.T) {
 		pipelineRunner: runner,
 		taskRunner:     runner,
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
-		runService:     service.NewRunService(mock, runner, runner),
+		runService:     runService,
 		sourceSessions: &testSourceSessions{},
 	}
 
@@ -689,6 +701,8 @@ func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
 		Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main",
 		PipelineDir: "ci", PipelineFile: "pipeline.tf",
 	}
+	runService := service.NewRunService(mock, runner, runner)
+	runService.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0", Runner: RunnerConfig{Mode: "local"}},
 		projectStore:   &mocks.MockProjectStore{GetResult: cfg},
@@ -696,7 +710,7 @@ func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
 		pipelineRunner: runner,
 		taskRunner:     runner,
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
-		runService:     service.NewRunService(mock, runner, runner),
+		runService:     runService,
 		sourceSessions: &testSourceSessions{},
 	}
 	srv.runService.SetMaxConcurrentRuns(1)
@@ -976,6 +990,7 @@ func TestHandleApproveManualTaskRunnerFailure(t *testing.T) {
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
 	srv.taskRunner = runner
 	srv.runService = service.NewRunService(store, runner, runner)
+	srv.runService.SetLocalExecutionPolicy(true, "local")
 	w := httptest.NewRecorder()
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "2", "task", "deploy"))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "manual runner failed") {
@@ -1125,6 +1140,7 @@ func TestManualApproval_ResolvesRotatedSecret(t *testing.T) {
 	srv := setupRunServer(t, &mocks.MockProjectStore{}, store)
 	srv.taskRunner = runner
 	srv.runService = service.NewRunService(store, runner, runner)
+	srv.runService.SetLocalExecutionPolicy(true, "local")
 	credStore := &fakeCredentialStore{items: map[string]domain.CredentialMetadata{}, resolveResult: domain.Credential{Type: "secret", Value: "rotated-value"}}
 	srv.credentialStore = credStore
 
@@ -1165,6 +1181,7 @@ func TestManualApprovalUsesStoredSnapshotAndExactRecordedSources(t *testing.T) {
 	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed"}}}
 	srv.taskRunner = runner
 	srv.runService = service.NewRunService(runStore, runner, runner)
+	srv.runService.SetLocalExecutionPolicy(true, "local")
 
 	w := httptest.NewRecorder()
 	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "73", "task", "deploy"))

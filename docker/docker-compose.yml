@@ -69,6 +69,9 @@ services:
       - KESTRIX_RUNNER_DOCKER_USER=${KESTRIX_RUNNER_DOCKER_USER:-}
       - KESTRIX_RUNNER_DOCKER_NETWORK=${KESTRIX_RUNNER_DOCKER_NETWORK:-}
       - KESTRIX_RUNNER_CANCEL_GRACE=${KESTRIX_RUNNER_CANCEL_GRACE:-}
+      # Local dev runs tasks in-process (no separate runner container);
+      # see safe-production-execution design.md D3.
+      - KESTRIX_RUNNER_ALLOW_LOCAL=true
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
       interval: 10s

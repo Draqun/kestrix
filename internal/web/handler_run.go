@@ -28,6 +28,15 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	if err := runService.CheckLocalAllowed(p.Mode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var req struct {
 		Changed       []string `json:"changed"`
 		IncludeManual bool     `json:"include_manual"`
@@ -54,12 +63,6 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		primary.Cleanup()
 		s.failRunOnSecretError(name, &proj, executionChanged, req.IncludeManual, actor, err)
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	runService := s.runService
-	if runService == nil {
-		primary.Cleanup()
-		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
 	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
@@ -116,6 +119,15 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	if err := runService.CheckLocalAllowed(p.Mode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	proj, primary, err := s.loadProjectPipeline(r.Context(), p, "", "single-task-run")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -133,13 +145,6 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		primary.Cleanup()
 		writeError(w, http.StatusNotFound, fmt.Sprintf("task %q not found", taskName))
-		return
-	}
-
-	runService := s.runService
-	if runService == nil {
-		primary.Cleanup()
-		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
 
@@ -285,11 +290,22 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 	}
 	// Best-effort only: approval uses the run's own stored pipeline snapshot
 	// and does not otherwise require the live project, so a lookup failure
-	// here just leaves Mode unset (the executor falls back to the
-	// instance-wide default) rather than blocking the approval.
+	// here just leaves Mode unset - the executor falls back to the
+	// instance-wide default the same way CheckLocalAllowed below does. If
+	// that default resolves to `local` without the opt-in, the empty Mode
+	// now gets the approval rejected rather than silently proceeding.
 	var mode string
 	if p, err := s.projectStore.Get(name); err == nil && p != nil {
 		mode = p.Mode
+	}
+	runService := s.runService
+	if runService == nil {
+		writeError(w, http.StatusInternalServerError, "run service not configured")
+		return
+	}
+	if err := runService.CheckLocalAllowed(mode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	latest := make(map[string]domain.TaskResult)
 	for _, tr := range run.TaskResults {
@@ -315,12 +331,6 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 	workDir, repoPaths, cleanup, err := s.openRecordedRunSources(r.Context(), run)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	runService := s.runService
-	if runService == nil {
-		writeError(w, http.StatusInternalServerError, "run service not configured")
 		return
 	}
 

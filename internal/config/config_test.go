@@ -473,6 +473,21 @@ func TestRunnerConfigPrecedence(t *testing.T) {
 	}
 }
 
+// TestApplyEnvironmentRunnerModeFromExecutionModeEnv pins design.md D2:
+// KESTRIX_EXECUTION_MODE fills cfg.Runner.Mode when the file did not set
+// runner.mode, and is distinct from KESTRIX_RUNNER_MODE, which never
+// reaches the server's Runner.Mode at all.
+func TestApplyEnvironmentRunnerModeFromExecutionModeEnv(t *testing.T) {
+	cfg := DefaultConfig()
+	env := LoadEnvironment([]string{"KESTRIX_EXECUTION_MODE=remote"})
+	if err := cfg.ApplyEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runner.Mode != "remote" {
+		t.Fatalf("Runner.Mode = %q, want remote", cfg.Runner.Mode)
+	}
+}
+
 func TestApplyEnvironmentRunnerBranches(t *testing.T) {
 	cfg := DefaultConfig()
 	if err := cfg.ApplyEnvironment(nil); err != nil {
@@ -1492,15 +1507,54 @@ func TestSourceReportOmitsMetricsToken(t *testing.T) {
 	}
 }
 
-// runner.mode is validated: an unknown value fails naming the accepted ones.
+// runner.mode is validated: an unknown value fails naming the accepted
+// ones. AllowLocal: true isolates this from the allow_local gate below -
+// see TestRunnerConfigValidateAllowLocal for that.
 func TestRunnerConfigValidate(t *testing.T) {
 	for _, mode := range []string{"", "local", "docker", "remote"} {
-		if err := (RunnerConfig{Mode: mode}).Validate(); err != nil {
+		if err := (RunnerConfig{Mode: mode, AllowLocal: true}).Validate(); err != nil {
 			t.Fatalf("mode %q: %v", mode, err)
 		}
 	}
-	err := (RunnerConfig{Mode: "bogus"}).Validate()
+	err := (RunnerConfig{Mode: "bogus", AllowLocal: true}).Validate()
 	if err == nil || !strings.Contains(err.Error(), "runner.mode") || !strings.Contains(err.Error(), "local, docker, remote") {
 		t.Fatalf("bogus: err = %v, want it to name runner.mode and the accepted values", err)
+	}
+}
+
+// runner.allow_local gates `local` execution: mode local or unset fails
+// without it, naming the key files, remote, and the opt-in; docker/remote
+// are unaffected either way - see safe-production-execution design.md D1.
+func TestRunnerConfigValidateAllowLocal(t *testing.T) {
+	cases := []struct {
+		name       string
+		mode       string
+		allowLocal bool
+		wantErr    bool
+	}{
+		{"unset mode without opt-in", "", false, true},
+		{"local mode without opt-in", "local", false, true},
+		{"unset mode with opt-in", "", true, false},
+		{"local mode with opt-in", "local", true, false},
+		{"docker mode without opt-in", "docker", false, false},
+		{"remote mode without opt-in", "remote", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := (RunnerConfig{Mode: tc.mode, AllowLocal: tc.allowLocal}).Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "KESTRIX_RUNNER_ALLOW_LOCAL") {
+					t.Errorf("error = %q, want it to name KESTRIX_RUNNER_ALLOW_LOCAL", err.Error())
+				}
+				if !strings.Contains(err.Error(), "remote") {
+					t.Errorf("error = %q, want it to name remote", err.Error())
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

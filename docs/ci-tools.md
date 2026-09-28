@@ -16,13 +16,20 @@ Triggers GitLab pipelines from the command line or from within a Kestrix task ex
 
 ## Runner
 
-Executes pipeline tasks in one of three modes, set per project:
+Executes pipeline tasks in one of three modes, set per project (empty
+defers to the instance's own `runner.mode`, `local` unless configured
+otherwise):
 
 | Mode | Description |
 |------|-------------|
-| `local` (default) | Runs tasks as bash subprocesses on the host |
+| `local` | Runs tasks as bash subprocesses in this same process - can read its master key and JWT signing key, so it executes only when `runner.allow_local` (`KESTRIX_RUNNER_ALLOW_LOCAL`) is true; see [Known limitations](../SECURITY.md#known-limitations-not-vulnerabilities) |
 | `docker` | Executes each task in a Docker container |
-| `remote` | Dispatches each task as a job for a registered runner to claim and execute on a separate machine - see [`remote-runners.md`](remote-runners.md) |
+| `remote` | Dispatches each task as a job for a registered runner to claim and execute on a separate machine or container - see [`remote-runners.md`](remote-runners.md) |
+
+The instance's own `runner.mode` has an env form, `KESTRIX_EXECUTION_MODE`
+- distinct from `KESTRIX_RUNNER_MODE`, which configures only `kestrix
+runner`'s own execution backend (`local` or `docker`) on the machine
+running that subcommand, not the server.
 
 Pipeline definitions are untrusted input, trusted only as far as the least
 trusted committer of the repository they are read from - anyone who can push

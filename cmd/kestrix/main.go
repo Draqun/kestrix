@@ -202,6 +202,7 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			RemoteJobTimeout:     env.RunnerJobTimeout,
 			RemoteJobMaxReclaims: env.RunnerJobMaxReclaims,
 			OfflineAfter:         env.RunnerOfflineAfter,
+			AllowLocal:           cfg.Runner.AllowLocal,
 		},
 		Metrics: web.MetricsConfig{
 			Enabled: cfg.Metrics.Enabled,
@@ -305,6 +306,10 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
 		os.Exit(1)
 	}
+	if err := warnLocalModeProjects(server, cfg.Runner.AllowLocal, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
+		os.Exit(1)
+	}
 	server.StartRemoteJobReclaimLoop(context.Background())
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -317,6 +322,29 @@ func cmdServe(args []string) {
 // nor internal/domain.
 type runReconciler interface {
 	FailInterruptedRuns(reason string) (int, error)
+}
+
+// localModeProjectCounter is satisfied by *web.Server in production and by
+// a fake in tests, mirroring runReconciler above.
+type localModeProjectCounter interface {
+	CountLocalModeProjects() (int, error)
+}
+
+// warnLocalModeProjects logs the runner.allow_local exposure warning,
+// naming how many stored projects resolve to `local` execution - see
+// safe-production-execution spec.md "Opt-in accepted for a single-user
+// machine". A no-op when allowLocal is false: in that state no local
+// execution can happen at all, so there is nothing to warn about.
+func warnLocalModeProjects(c localModeProjectCounter, allowLocal bool, w io.Writer) error {
+	if !allowLocal {
+		return nil
+	}
+	n, err := c.CountLocalModeProjects()
+	if err != nil {
+		return fmt.Errorf("count local-mode projects: %w", err)
+	}
+	fmt.Fprintf(w, "runner: KESTRIX_RUNNER_ALLOW_LOCAL is true; %d stored project(s) execute in local mode and can read this instance's key files\n", n)
+	return nil
 }
 
 // reconcileInterruptedRuns fails every run left "running" by a previous

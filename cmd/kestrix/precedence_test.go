@@ -190,6 +190,24 @@ func precedenceSettings() []precedenceSetting {
 			get: func(c web.Config) string { return fmt.Sprintf("%d", c.Runner.MaxOutputBytes) },
 		},
 		{
+			// Not KESTRIX_RUNNER_MODE: that env var is `kestrix runner`'s own
+			// execution backend (RunnerMode, allowlisted below), a different
+			// setting on a different binary - see design.md D2 in
+			// safe-production-execution.
+			name: config.KeyRunnerMode, fileYAML: "runner:\n  mode: docker\n",
+			envKV:    "KESTRIX_EXECUTION_MODE=remote",
+			flag:     nil,
+			wantFile: "docker", wantEnv: "remote", wantFlag: "docker",
+			get: func(c web.Config) string { return c.Runner.Mode },
+		},
+		{
+			name: config.KeyRunnerAllowLocal, fileYAML: "runner:\n  allow_local: true\n",
+			envKV:    "KESTRIX_RUNNER_ALLOW_LOCAL=false",
+			flag:     nil,
+			wantFile: "true", wantEnv: "false", wantFlag: "true",
+			get: func(c web.Config) string { return fmt.Sprintf("%v", c.Runner.AllowLocal) },
+		},
+		{
 			name: config.KeyMetricsEnabled, fileYAML: "metrics:\n  enabled: true\n",
 			envKV:    "KESTRIX_METRICS_ENABLED=false",
 			flag:     nil,
@@ -331,6 +349,18 @@ func TestPrecedenceTable(t *testing.T) {
 	}
 }
 
+// TestKestrixRunnerModeEnvDoesNotAffectServerMode pins the D2 boundary:
+// KESTRIX_RUNNER_MODE is `kestrix runner`'s own execution backend, not the
+// server's instance mode. Setting it alone must leave web.Config.Runner.Mode
+// at its default ("local"); only KESTRIX_EXECUTION_MODE (KeyRunnerMode)
+// reaches the server - see safe-production-execution design.md D2.
+func TestKestrixRunnerModeEnvDoesNotAffectServerMode(t *testing.T) {
+	_, wc := runPipeline(t, "", []string{"KESTRIX_RUNNER_MODE=docker"}, config.FlagValues{})
+	if wc.Runner.Mode != "local" {
+		t.Fatalf("Runner.Mode = %q, want default %q (KESTRIX_RUNNER_MODE must not leak into the server's mode)", wc.Runner.Mode, "local")
+	}
+}
+
 // TestBuildServeConfigDatabaseURLDefault pins the empty-file+empty-env+
 // empty-flags wiring: with no source for database_url, web.Config carries
 // the local default rather than an empty string.
@@ -338,6 +368,18 @@ func TestBuildServeConfigDatabaseURLDefault(t *testing.T) {
 	_, wc := runPipeline(t, "", nil, config.FlagValues{})
 	if wc.DatabaseURL != defaultLocalDatabaseURL {
 		t.Fatalf("DatabaseURL = %q, want default %q", wc.DatabaseURL, defaultLocalDatabaseURL)
+	}
+}
+
+// TestBuildServeConfigRunnerModeDefault pins the empty-file+empty-env+
+// empty-flags wiring for KeyRunnerMode: with neither runner.mode in the
+// file nor KESTRIX_EXECUTION_MODE in the environment, web.Config carries
+// DefaultConfig's own "local" rather than an empty string - a regression
+// here would leave RunnerConfig.Validate() checking an unintended mode.
+func TestBuildServeConfigRunnerModeDefault(t *testing.T) {
+	_, wc := runPipeline(t, "", nil, config.FlagValues{})
+	if wc.Runner.Mode != "local" {
+		t.Fatalf("Runner.Mode = %q, want default %q", wc.Runner.Mode, "local")
 	}
 }
 
@@ -384,7 +426,8 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"Directory": config.KeySourceCacheDirectory, "MaxAge": config.KeySourceCacheMaxAge, "MaxBytes": config.KeySourceCacheMaxBytes,
 		"RunnerMaxConcurrentRuns": config.KeyRunnerMaxConcurrentRuns, "RunHistoryLimit": config.KeyRunHistoryLimit,
 		"RunnerMaxOutputBytes": config.KeyRunnerMaxOutputBytes,
-		"MetricsEnabled":       config.KeyMetricsEnabled, "MetricsToken": config.KeyMetricsToken,
+		"RunnerExecutionMode":  config.KeyRunnerMode, "RunnerAllowLocal": config.KeyRunnerAllowLocal,
+		"MetricsEnabled": config.KeyMetricsEnabled, "MetricsToken": config.KeyMetricsToken,
 	}
 
 	var missing []string
@@ -421,7 +464,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 
 	// Config yaml keys, recursively.
 	fileAllow := map[string]bool{
-		"runner.mode": true, "dispatch.enabled": true,
+		"dispatch.enabled": true,
 		// logging.level: see the envAllow comment on LogLevel above.
 		"logging.level": true,
 	}
