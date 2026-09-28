@@ -25,6 +25,11 @@ services:
     ports:
       - "${KESTRIX_PORT:-18080}:8080"
     environment:
+      # Tasks execute on the `runner` service, not in this container - see
+      # safe-production-execution design.md D2/D3. Not KESTRIX_RUNNER_MODE:
+      # that name means `kestrix runner`'s own execution backend, set below
+      # on the runner service instead.
+      - KESTRIX_EXECUTION_MODE=remote
       - DATABASE_URL=${DATABASE_URL:-postgres://kestrix:${POSTGRES_PASSWORD}@postgres:5432/kestrix?sslmode=disable}
       # BREAKING: no default secret. Deliveries to /webhook are refused with
       # 401 until KESTRIX_WEBHOOK_SECRET or a per-project secret is set; see
@@ -87,6 +92,38 @@ services:
       retries: 3
     depends_on:
       postgres:
+        condition: service_healthy
+    # `default` keeps reaching postgres; `runners` is how the runner
+    # service below reaches this one at http://kestrix:8080 - see
+    # design.md D3. Declaring `networks` here means every OTHER service
+    # that omits its own `networks:` key still gets `default` automatically
+    # (Compose's behavior, not something set per-service below).
+    networks: [default, runners]
+    restart: unless-stopped
+
+  # Executes tasks for `remote`-mode projects (profile `runner`, so "Only
+  # Kestrix and its database start by default" still holds) - see
+  # design.md D3. Same image, no key volumes, no database variables: it
+  # never sees the master key, the signing key, or DATABASE_URL, and the
+  # `runners` network (not `default`) means it cannot reach `postgres`
+  # either. A runner token comes from Settings -> Runners; see
+  # docs/deployment.md.
+  runner:
+    image: ${KESTRIX_IMAGE:-registry.gitlab.com/kestrix/kestrix:latest}
+    profiles: [runner]
+    # The image's own ENTRYPOINT is ["/kestrix"]; `command` supplies only
+    # the args (["kestrix", "runner"] would run `/kestrix kestrix runner`).
+    command: ["runner"]
+    environment:
+      - KESTRIX_RUNNER_SERVER=http://kestrix:8080
+      # Not `:?`: Compose interpolates every service's environment eagerly,
+      # even one gated by an inactive profile, so a required guard here
+      # would break a plain `up -d` that never uses --profile runner.
+      # `kestrix runner` itself already refuses to start without a token.
+      - KESTRIX_RUNNER_TOKEN=${KESTRIX_RUNNER_TOKEN:-}
+    networks: [runners]
+    depends_on:
+      kestrix:
         condition: service_healthy
     restart: unless-stopped
 
@@ -162,6 +199,11 @@ services:
     depends_on:
       - kestrix
     restart: unless-stopped
+
+networks:
+  # Joins only `kestrix` and `runner`, so a task executing on the runner
+  # cannot reach `postgres` - see design.md D3.
+  runners:
 
 volumes:
   postgres_data:

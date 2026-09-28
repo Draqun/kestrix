@@ -148,7 +148,7 @@ hand. Delete the GitLab Release and the `vX.Y.Z` tag from the project (UI or
 also removes the published Release notes; the pushed image and package
 registry asset are left in the registry and can be deleted separately if
 needed. A deployment already pinned to that tag is unaffected until it next
-pulls. See [Production deployment](deployment.md#10-rollback) for rolling a
+pulls. See [Production deployment](deployment.md#11-rollback) for rolling a
 running deployment back to a previous tag.
 
 ## Docker deployment E2E test

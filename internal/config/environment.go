@@ -41,6 +41,17 @@ type Environment struct {
 	RunnerServer string
 	RunnerToken  string
 	RunnerMode   string
+	// RunnerAllowLocal backs runner.allow_local (KESTRIX_RUNNER_ALLOW_LOCAL,
+	// default false): whether Kestrix may execute a task in `local` mode
+	// inside its own process. See safe-production-execution design.md D1.
+	RunnerAllowLocal bool
+	// RunnerExecutionMode backs runner.mode's env form
+	// (KESTRIX_EXECUTION_MODE): the instance's default project execution
+	// backend ("local", "docker", or "remote"). Deliberately not named
+	// KESTRIX_RUNNER_MODE - that name already means `kestrix runner`'s own
+	// execution backend (RunnerMode above), a different setting on a
+	// different binary; see safe-production-execution design.md D2.
+	RunnerExecutionMode string
 	// IdentityCacheTTL bounds how long RequireAuth may serve an account's
 	// role and token version from cache before resolving it from the store
 	// again; see design.md D4. Zero disables the cache. Defaults to 5s.
@@ -483,6 +494,18 @@ func LoadEnvironment(environ []string) *Environment {
 		}
 	}
 
+	var runnerAllowLocal bool
+	if raw := values[Prefix+"RUNNER_ALLOW_LOCAL"]; raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			if validationErr == nil {
+				validationErr = fmt.Errorf("KESTRIX_RUNNER_ALLOW_LOCAL must be a boolean")
+			}
+		} else {
+			runnerAllowLocal = parsed
+		}
+	}
+
 	var metricsEnabled bool
 	if raw := values[Prefix+"METRICS_ENABLED"]; raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -516,6 +539,8 @@ func LoadEnvironment(environ []string) *Environment {
 		RunnerServer:          values[Prefix+"RUNNER_SERVER"],
 		RunnerToken:           values[Prefix+"RUNNER_TOKEN"],
 		RunnerMode:            values[Prefix+"RUNNER_MODE"],
+		RunnerAllowLocal:      runnerAllowLocal,
+		RunnerExecutionMode:   values[Prefix+"EXECUTION_MODE"],
 		TestDatabaseURL:       values[Prefix+"TEST_DATABASE_URL"],
 		DatabaseURL:           values["DATABASE_URL"],
 		MasterKeyPath:         values[Prefix+"MASTER_KEY_PATH"],

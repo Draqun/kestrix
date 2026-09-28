@@ -19,9 +19,14 @@ import (
 // A runner.PipelineExecutor is cheap and stateless besides its Mode field,
 // so building one per call needs no pooling or caching.
 type modeSelectingExecutor struct {
-	// defaultMode is used only when a caller leaves opts.Mode empty - every
-	// production call site sets it from the project's stored Mode, but
-	// direct RunService callers in tests may not.
+	// defaultMode is the instance's own runner.mode, applied through
+	// domain.ResolveMode whenever a caller leaves opts.Mode empty - every
+	// production call site sets opts.Mode from the project's stored Mode,
+	// but direct RunService callers in tests may not. It is also the value
+	// RunService.CheckLocalAllowed and Server.CountLocalModeProjects
+	// resolve an empty project Mode against (safe-production-execution
+	// design.md D1), so it is a first-class production input now, not
+	// just a test fallback.
 	defaultMode string
 }
 
@@ -29,11 +34,7 @@ var _ domain.PipelineRunner = modeSelectingExecutor{}
 var _ domain.TaskRunner = modeSelectingExecutor{}
 
 func (e modeSelectingExecutor) executorFor(opts domain.RunnerOptions) *runner.PipelineExecutor {
-	mode := opts.Mode
-	if mode == "" {
-		mode = e.defaultMode
-	}
-	return &runner.PipelineExecutor{Mode: mode}
+	return &runner.PipelineExecutor{Mode: domain.ResolveMode(opts.Mode, e.defaultMode)}
 }
 
 func (e modeSelectingExecutor) Run(ctx context.Context, project domain.Project, changed map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {

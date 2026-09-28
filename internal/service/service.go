@@ -48,6 +48,16 @@ type ProjectService struct {
 	// default) performs no type check, so callers that never wire a
 	// credential store keep their prior behavior.
 	credentialLookup func(ref string) (domain.CredentialMetadata, error)
+	// allowLocal mirrors runner.allow_local: false (the default) rejects a
+	// project explicitly registered with mode `local` - see
+	// safe-production-execution design.md D1.
+	allowLocal bool
+}
+
+// SetAllowLocal configures whether CreateValidated/UpdateValidated accept a
+// project registered with mode `local`. See runner.allow_local.
+func (s *ProjectService) SetAllowLocal(allow bool) {
+	s.allowLocal = allow
 }
 
 // SetCredentialLookup configures how CreateValidated and UpdateValidated
@@ -102,7 +112,7 @@ func (s *ProjectService) checkCIRepoCredentials(proj model.Project) error {
 // ErrValidation identifies invalid project configuration supplied by a client.
 var ErrValidation = errors.New("project validation failed")
 
-func validateProject(cfg *domain.ProjectConfig) error {
+func validateProject(cfg *domain.ProjectConfig, allowLocal bool) error {
 	if strings.TrimSpace(cfg.Name) == "" {
 		return fmt.Errorf("%w: project name is required", ErrValidation)
 	}
@@ -118,6 +128,13 @@ func validateProject(cfg *domain.ProjectConfig) error {
 	// (projectDefaults); see remote-runner-registration design.md D2.
 	if !domain.IsValidMode(cfg.Mode) {
 		return fmt.Errorf("%w: mode %q is not a recognized execution backend", ErrValidation, cfg.Mode)
+	}
+	// An empty mode is always fine here: if the server is running at all
+	// with allowLocal false, its own startup validation already guarantees
+	// the instance mode it would resolve to isn't `local` - see
+	// safe-production-execution design.md D1.
+	if cfg.Mode == "local" && !allowLocal {
+		return fmt.Errorf("%w: mode local: %s", ErrValidation, domain.LocalExecutionDisabledMessage())
 	}
 	return validateRepoURL(raw)
 }
@@ -345,7 +362,7 @@ type SourceValidator func(*domain.ProjectConfig) (model.Project, error)
 
 // CreateValidated validates the complete remote source before persistence.
 func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSource SourceValidator) error {
-	if err := validateProject(cfg); err != nil {
+	if err := validateProject(cfg, s.allowLocal); err != nil {
 		return err
 	}
 	if cfg.DefaultBranch == "" {
@@ -418,7 +435,7 @@ func (s *ProjectService) UpdateValidated(name string, cfg *domain.ProjectConfig,
 	if cfg.WebhookSecret == "" {
 		cfg.WebhookSecret = existing.WebhookSecret
 	}
-	if err := validateProject(cfg); err != nil {
+	if err := validateProject(cfg, s.allowLocal); err != nil {
 		return err
 	}
 	if err := s.checkRepoCredential(cfg); err != nil {
@@ -508,6 +525,39 @@ type RunService struct {
 	mu     sync.Mutex
 	active map[int]activeRun
 	done   map[int]chan struct{}
+
+	// allowLocal and defaultMode back CheckLocalAllowed - see
+	// safe-production-execution design.md D1. allowLocal mirrors
+	// runner.allow_local; defaultMode is the instance's configured
+	// runner.mode, used to resolve a project's empty Mode the same way the
+	// executor does.
+	allowLocal  bool
+	defaultMode string
+}
+
+// SetLocalExecutionPolicy configures CheckLocalAllowed: allowLocal mirrors
+// runner.allow_local, and defaultMode is the instance's runner.mode, used
+// to resolve an empty project Mode.
+func (s *RunService) SetLocalExecutionPolicy(allowLocal bool, defaultMode string) {
+	s.allowLocal = allowLocal
+	s.defaultMode = defaultMode
+}
+
+// CheckLocalAllowed fails a run before any source is acquired when it would
+// execute in `local` mode while runner.allow_local is false - see
+// safe-production-execution spec.md "Stored local project does not
+// execute". mode is normally a stored project's own Mode, already
+// populated by the store; an empty mode (e.g. a project lookup that failed
+// best-effort) resolves against the instance's configured default the same
+// way modeSelectingExecutor does.
+func (s *RunService) CheckLocalAllowed(mode string) error {
+	if s.allowLocal {
+		return nil
+	}
+	if domain.ResolveMode(mode, s.defaultMode) != "local" {
+		return nil
+	}
+	return fmt.Errorf("%s", domain.LocalExecutionDisabledMessage())
 }
 
 // NewRunService creates a RunService.

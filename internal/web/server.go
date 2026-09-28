@@ -134,6 +134,10 @@ type RunnerConfig struct {
 	// OfflineAfter is how long a runner holding no job may be silent before
 	// GET /api/runners reports it offline. Zero selects the 60s default.
 	OfflineAfter time.Duration
+	// AllowLocal opts the instance into `local` execution; see
+	// safe-production-execution design.md D1. False refuses `local` at
+	// startup, at project create/update, and at run time.
+	AllowLocal bool
 }
 
 // Server is the HTTP server.
@@ -195,6 +199,24 @@ type Server struct {
 // see design.md's "Redaction misses a field" risk.
 func (s *Server) knownSecrets() []string {
 	return []string{s.cfg.Signature.Secret, s.cfg.Dispatch.GitLabToken, s.cfg.Metrics.Token}
+}
+
+// CountLocalModeProjects reports how many stored projects resolve to
+// `local` execution - a project's own Mode, or the instance's runner.mode
+// when its Mode is empty. Used only for the runner.allow_local startup
+// warning; see safe-production-execution design.md D1.
+func (s *Server) CountLocalModeProjects() (int, error) {
+	projects, err := s.projectStore.Load()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, p := range projects {
+		if domain.ResolveMode(p.Mode, s.cfg.Runner.Mode) == "local" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // identityCacheMaxEntries bounds InMemoryIdentityCache regardless of how
@@ -342,10 +364,12 @@ func NewServerE(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	projectService := service.NewProjectService(projectStore)
+	projectService.SetAllowLocal(cfg.Runner.AllowLocal)
 	executor := modeSelectingExecutor{defaultMode: cfg.Runner.Mode}
 	pipelineRunner := domain.PipelineRunner(executor)
 	taskRunner := domain.TaskRunner(executor)
 	runService := service.NewRunService(runStore, pipelineRunner, taskRunner)
+	runService.SetLocalExecutionPolicy(cfg.Runner.AllowLocal, cfg.Runner.Mode)
 	runService.SetMaxConcurrentRuns(cfg.Runner.MaxConcurrentRuns)
 	runService.MaxOutputBytes = cfg.Runner.MaxOutputBytes
 	if remoteJobs, ok := runStore.(domain.RemoteJobStore); ok {

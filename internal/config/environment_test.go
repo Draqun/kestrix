@@ -148,6 +148,39 @@ func TestLoadEnvironmentTrustProxyHeaderRejectsNonBoolean(t *testing.T) {
 	}
 }
 
+// TestLoadEnvironmentRunnerAllowLocal pins safe-production-execution
+// design.md D1: KESTRIX_RUNNER_ALLOW_LOCAL parses as a boolean, defaults to
+// false when unset, and rejects a non-boolean value.
+func TestLoadEnvironmentRunnerAllowLocal(t *testing.T) {
+	if env := LoadEnvironment(nil); env.RunnerAllowLocal {
+		t.Fatal("RunnerAllowLocal defaults to true, want false")
+	}
+	if env := LoadEnvironment([]string{"KESTRIX_RUNNER_ALLOW_LOCAL=true"}); !env.RunnerAllowLocal {
+		t.Fatal("RunnerAllowLocal = false, want true")
+	}
+	env := LoadEnvironment([]string{"KESTRIX_RUNNER_ALLOW_LOCAL=nope"})
+	if err := env.ValidationError(); err == nil {
+		t.Fatal("ValidationError() = nil, want error for a non-boolean value")
+	}
+}
+
+// TestLoadEnvironmentRunnerExecutionMode pins design.md D2: the raw
+// KESTRIX_EXECUTION_MODE value passes through unvalidated (RunnerConfig.
+// Validate rejects an unsupported mode once reconciled), and is distinct
+// from KESTRIX_RUNNER_MODE (kestrix runner's own execution backend).
+func TestLoadEnvironmentRunnerExecutionMode(t *testing.T) {
+	if env := LoadEnvironment(nil); env.RunnerExecutionMode != "" {
+		t.Fatalf("RunnerExecutionMode = %q, want empty when unset", env.RunnerExecutionMode)
+	}
+	env := LoadEnvironment([]string{"KESTRIX_EXECUTION_MODE=remote", "KESTRIX_RUNNER_MODE=docker"})
+	if env.RunnerExecutionMode != "remote" {
+		t.Fatalf("RunnerExecutionMode = %q, want remote", env.RunnerExecutionMode)
+	}
+	if env.RunnerMode != "docker" {
+		t.Fatalf("RunnerMode = %q, want docker (unaffected by KESTRIX_EXECUTION_MODE)", env.RunnerMode)
+	}
+}
+
 func TestLoadEnvironmentContentSecurityPolicyDefaultsEmpty(t *testing.T) {
 	// Environment carries the raw operator value only; internal/web applies
 	// the bundled-UI default when this is empty - see design.md D8.

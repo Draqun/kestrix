@@ -46,12 +46,41 @@ default mode would leave `mode: local` one API call away.
 `docker` mode in-process is untouched. It needs the Docker socket, which is
 already a deliberate operator choice.
 
-### D2. The production compose runs tasks on a keyless runner
+### D2. `runner.mode` gets an env form: `KESTRIX_EXECUTION_MODE`
 
-- `kestrix` gets `KESTRIX_RUNNER_MODE=remote`.
+Today `cfg.Runner.Mode` (the instance's default project mode - `local`,
+`docker`, or `remote`) is config-file-only: `ApplyEnvironment` has no branch
+for it, so no environment variable can set it. `docker-compose.prod.yml`
+configures everything else through env vars; this setting needs the same
+path so the compose file can put the instance in `remote` mode without a
+mounted config file.
+
+The env var is `KESTRIX_EXECUTION_MODE`, added to `internal/config` as a new
+multi-form setting (`KeyRunnerMode` in `multiFormSettingKeys`) with the same
+precedence as every other setting: file wins, then env, then the `local`
+default. It is deliberately **not** named `KESTRIX_RUNNER_MODE`: that name
+already exists for `kestrix runner`'s own execution backend
+(`env.RunnerMode`, `local`/`docker`, checked in `cmd/kestrix/runner.go`) -
+a different setting on a different binary. Reusing the name would work by
+accident in Compose today (the `kestrix` and `runner` services each get
+their own environment), but a shared `.env` file or an operator typo would
+silently point the wrong process at the wrong value, and `remote` is not
+even a valid value for `kestrix runner`'s own mode. Two names keep the two
+settings from ever colliding, in Compose or anywhere else.
+
+`precedence_test.go` gets a `KeyRunnerMode` row like every other multi-form
+setting (not the `RunnerMode`/env-only allowlist entry, which stays and
+continues to describe `kestrix runner`'s own flag/env pair), plus a test
+that setting `KESTRIX_RUNNER_MODE` alone leaves the server's `cfg.Runner.Mode`
+untouched.
+
+### D3. The production compose runs tasks on a keyless runner
+
+- `kestrix` gets `KESTRIX_EXECUTION_MODE=remote` (see D2 - not
+  `KESTRIX_RUNNER_MODE`, which means something else on the `runner` service).
 - A `runner` service is added behind profile `runner`, so "Only Kestrix and
   its database start by default" still holds. It uses the same image, runs
-  `command: ["kestrix", "runner"]`, and gets `KESTRIX_RUNNER_SERVER=http://kestrix:8080`
+  `command: ["runner"]` (the image's own ENTRYPOINT is `["/kestrix"]`), and gets `KESTRIX_RUNNER_SERVER=http://kestrix:8080`
   and `KESTRIX_RUNNER_TOKEN`. It has no key volumes and no database variables.
 - A `runners` network joins `kestrix` and `runner` only, so the runner cannot
   reach `postgres`.
@@ -63,7 +92,7 @@ The operator flow goes into `docs/deployment.md`: first admin, then
 Settings → Runners → register, then token into `.env`, then
 `--profile runner up -d`.
 
-### D3. Development stays one command
+### D4. Development stays one command
 
 `docker/docker-compose.yml` (which mounts the Docker socket for `docker`
 mode), `make serve`/`make dev`, `scripts/docker-deployment-e2e.sh` and the

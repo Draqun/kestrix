@@ -175,20 +175,22 @@ pipeline: $(BINARY)
 	$(BINARY) run --changed kestrix ci/pipeline.tf
 
 ## serve: Start the webhook server
+# KESTRIX_RUNNER_ALLOW_LOCAL: local dev runs tasks in-process; see
+# safe-production-execution design.md D3.
 serve: $(BINARY)
-	$(BINARY) serve --addr $(or $(ADDR),:8080)
+	KESTRIX_RUNNER_ALLOW_LOCAL=true $(BINARY) serve --addr $(or $(ADDR),:8080)
 
 ## dev: Start development server with hot reload (air)
 dev:
 	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@v1.62.0; }
-	PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080)
+	KESTRIX_RUNNER_ALLOW_LOCAL=true PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080)
 
 ## dev-all: Start backend + frontend dev servers
 dev-all:
 	@command -v air >/dev/null 2>&1 || { echo "Installing air..."; $(GOENV) $(GO) install github.com/air-verse/air@v1.62.0; }
 	@cd ui && npm install --silent
 	@echo "Starting backend (air) on :8080 and frontend (vite) on :3000..."
-	PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080) &
+	KESTRIX_RUNNER_ALLOW_LOCAL=true PATH="$(GOBIN):$(PATH)" air -c .air.toml -- serve --addr $(or $(ADDR),:8080) &
 	@cd ui && npx vite --port 3000
 
 ## install-tools: Install development tools
@@ -229,7 +231,7 @@ ui-coverage: ui-install
 
 ## ui-serve: Build frontend + serve via Go (single binary, port 8080)
 ui-serve: ui-build $(BINARY)
-	$(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples/demo-mono) --static $(or $(STATIC),./ui/dist)
+	KESTRIX_RUNNER_ALLOW_LOCAL=true $(BINARY) serve --addr $(or $(ADDR),:8080) --dir $(or $(DIR),./examples/demo-mono) --static $(or $(STATIC),./ui/dist)
 
 ## docker-up: Start local development dependencies (PostgreSQL)
 docker-up:

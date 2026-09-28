@@ -50,14 +50,40 @@ func TestProjectService_Create_RejectsUnrecognizedMode(t *testing.T) {
 	}
 }
 
+// TestProjectService_Create_AcceptsEveryRecognizedMode covers every mode
+// except `local`, which safe-production-execution design.md D1 gates
+// behind allowLocal - see TestProjectService_Create_LocalModeGatedByAllowLocal.
 func TestProjectService_Create_AcceptsEveryRecognizedMode(t *testing.T) {
-	for _, mode := range []string{"", "local", "docker", "remote"} {
+	for _, mode := range []string{"", "docker", "remote"} {
 		mock := &mocks.MockProjectStore{}
 		svc := NewProjectService(mock)
 		err := svc.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: mode})
 		if err != nil {
 			t.Fatalf("mode %q: unexpected error: %v", mode, err)
 		}
+	}
+}
+
+// TestProjectService_Create_LocalModeGatedByAllowLocal pins
+// safe-production-execution design.md D1/spec.md "Local project rejected
+// without the opt-in": mode `local` is rejected as a validation error unless
+// SetAllowLocal(true) was called, and accepted once it is.
+func TestProjectService_Create_LocalModeGatedByAllowLocal(t *testing.T) {
+	mock := &mocks.MockProjectStore{}
+	svc := NewProjectService(mock)
+	err := svc.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: "local"})
+	if err == nil || !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for mode local without the opt-in, got %v", err)
+	}
+	if len(mock.UpsertCalls) != 0 {
+		t.Fatalf("expected Upsert not called, got %d calls", len(mock.UpsertCalls))
+	}
+
+	mock2 := &mocks.MockProjectStore{}
+	svc2 := NewProjectService(mock2)
+	svc2.SetAllowLocal(true)
+	if err := svc2.Create(&domain.ProjectConfig{Name: "x", RepoURL: "https://git.example/x.git", RepoRef: "main", Mode: "local"}); err != nil {
+		t.Fatalf("mode local with the opt-in: unexpected error: %v", err)
 	}
 }
 
@@ -89,7 +115,7 @@ func TestValidateRepoURL(t *testing.T) {
 	for _, url := range accepted {
 		t.Run("accept/"+url, func(t *testing.T) {
 			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
-			if err := validateProject(cfg); err != nil {
+			if err := validateProject(cfg, false); err != nil {
 				t.Fatalf("validateProject(%q) = %v, want nil", url, err)
 			}
 		})
@@ -106,7 +132,7 @@ func TestValidateRepoURL(t *testing.T) {
 	for _, url := range rejectedSchemes {
 		t.Run("reject-scheme/"+url, func(t *testing.T) {
 			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
-			if err := validateProject(cfg); !errors.Is(err, ErrValidation) {
+			if err := validateProject(cfg, false); !errors.Is(err, ErrValidation) {
 				t.Fatalf("validateProject(%q) = %v, want ErrValidation", url, err)
 			}
 		})
@@ -123,7 +149,7 @@ func TestValidateRepoURL(t *testing.T) {
 	for _, url := range rejectedHosts {
 		t.Run("reject-host/"+url, func(t *testing.T) {
 			cfg := &domain.ProjectConfig{Name: "x", RepoURL: url, RepoRef: "main"}
-			if err := validateProject(cfg); !errors.Is(err, ErrValidation) {
+			if err := validateProject(cfg, false); !errors.Is(err, ErrValidation) {
 				t.Fatalf("validateProject(%q) = %v, want ErrValidation", url, err)
 			}
 		})
@@ -227,7 +253,7 @@ func TestIsDisallowedRepoHostLegacyEncodings(t *testing.T) {
 // a legacy-encoded loopback literal fails exactly like its canonical form.
 func TestValidateRepoURLRejectsLegacyIPEncodings(t *testing.T) {
 	canonical := &domain.ProjectConfig{Name: "x", RepoURL: "https://127.0.0.1/x.git", RepoRef: "main"}
-	canonicalErr := validateProject(canonical)
+	canonicalErr := validateProject(canonical, false)
 	if !errors.Is(canonicalErr, ErrValidation) {
 		t.Fatalf("validateProject(canonical) = %v, want ErrValidation", canonicalErr)
 	}
@@ -236,7 +262,7 @@ func TestValidateRepoURLRejectsLegacyIPEncodings(t *testing.T) {
 		"https://0x7f000001/x.git",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			err := validateProject(&domain.ProjectConfig{Name: "x", RepoURL: raw, RepoRef: "main"})
+			err := validateProject(&domain.ProjectConfig{Name: "x", RepoURL: raw, RepoRef: "main"}, false)
 			if !errors.Is(err, ErrValidation) {
 				t.Fatalf("validateProject(%q) = %v, want ErrValidation", raw, err)
 			}

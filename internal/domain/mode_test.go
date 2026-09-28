@@ -2,6 +2,7 @@ package domain
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,37 @@ func TestModesReturnsACopy(t *testing.T) {
 	got[0] = "changed"
 	if !IsValidMode("local") {
 		t.Fatal("mutating the Modes() result changed the valid set")
+	}
+}
+
+// TestResolveMode pins the one fallback chain every mode-aware call site
+// shares: mode wins when set, instanceDefault wins when mode is empty, and
+// "local" is the final fallback when both are empty.
+func TestResolveMode(t *testing.T) {
+	cases := []struct {
+		mode, instanceDefault, want string
+	}{
+		{"docker", "remote", "docker"},
+		{"", "remote", "remote"},
+		{"", "", "local"},
+		{"remote", "", "remote"},
+	}
+	for _, tc := range cases {
+		if got := ResolveMode(tc.mode, tc.instanceDefault); got != tc.want {
+			t.Errorf("ResolveMode(%q, %q) = %q, want %q", tc.mode, tc.instanceDefault, got, tc.want)
+		}
+	}
+}
+
+// TestLocalExecutionDisabledMessage pins that the shared explanation names
+// the key-file exposure, remote, and the opt-in - see
+// safe-production-execution spec.md "Local instance mode without the
+// opt-in".
+func TestLocalExecutionDisabledMessage(t *testing.T) {
+	msg := LocalExecutionDisabledMessage()
+	for _, want := range []string{"master key", "JWT signing key", "remote", "KESTRIX_RUNNER_ALLOW_LOCAL"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("LocalExecutionDisabledMessage() = %q, want it to contain %q", msg, want)
+		}
 	}
 }

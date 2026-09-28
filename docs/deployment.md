@@ -83,7 +83,36 @@ docker compose -f docker-compose.prod.yml exec kestrix \
   kestrix user create --role admin <name>
 ```
 
-## 5. Expose webhooks
+## 5. Task execution
+
+Kestrix itself never runs a pipeline task: `docker-compose.prod.yml` sets
+`kestrix` to `remote` mode, so a project's tasks wait for a runner to claim
+them. Start one, in the same Compose file, behind its own profile:
+
+1. Sign in as the administrator created in step 4, then **Settings ->
+   Runners -> Register runner**. Name it and copy the token shown once (or
+   use `POST /api/runners`, admin-only - see
+   [`remote-runners.md`](remote-runners.md#1-register-a-runner)).
+2. Set `KESTRIX_RUNNER_TOKEN` in `.env` to that token.
+3. Start the runner:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml --profile runner up -d
+   ```
+
+This `runner` service uses the same image, holds no key file and no
+database credential, and reaches `kestrix` over a network it does not
+share with `postgres`. It is a sibling container on this same host; for
+executing tasks on a *separate* machine instead, see
+[`remote-runners.md`](remote-runners.md).
+
+**Single-user machine only:** to run tasks inside the `kestrix` container
+itself instead of starting a runner, set `KESTRIX_RUNNER_ALLOW_LOCAL=true`
+in `.env`. This lets every pipeline task read the master key and the JWT
+signing key mounted into that container - never set it on a deployment any
+other account can reach.
+
+## 6. Expose webhooks
 
 Register a webhook in your Git host (GitLab → Settings → Webhooks) pointing
 at `http://<host or domain>:<port>/webhook`, with a per-project secret (set
@@ -92,7 +121,7 @@ via `PUT /api/projects/{name}` or the Settings UI) or the global
 matching neither is rejected with `401` and nothing is recorded. See
 [Webhook receiver](webhook-receiver.md) for resolution and fan-out.
 
-## 6. TLS profile vs. plain-HTTP evaluation
+## 7. TLS profile vs. plain-HTTP evaluation
 
 **TLS (recommended for anything beyond a LAN evaluation).** Set
 `KESTRIX_DOMAIN` in `.env` to your domain, **and also set
@@ -131,7 +160,7 @@ and restart (`docker compose -f docker-compose.prod.yml up -d`). Do not use
 this setting on a deployment reachable from the internet: the session cookie
 travels unencrypted.
 
-## 7. Optional: expose the database
+## 8. Optional: expose the database
 
 Off by default. To reach PostgreSQL from the host (a local GUI client,
 `pg_dump` from outside the container), set `POSTGRES_PORT` in `.env` and
@@ -153,7 +182,7 @@ healthcheck passes (a few seconds after `up -d`, not immediately), and it
 caps concurrent connections (10) rather than deferring to PostgreSQL's own
 `max_connections`.
 
-## 8. Upgrade
+## 9. Upgrade
 
 ```bash
 docker compose -f docker-compose.prod.yml exec postgres \
@@ -167,7 +196,7 @@ Read `CHANGELOG.md` for the version range you are crossing before upgrading -
 entries marked **BREAKING** may need a one-time action first (an existing
 `POSTGRES_PASSWORD` you must add to `.env` before this change, for example).
 
-## 9. Backup and restore
+## 10. Backup and restore
 
 Backup (the database is the only state that must survive a host loss; the
 master and signing keys are provisioned separately and must be backed up
@@ -188,7 +217,7 @@ docker compose -f docker-compose.prod.yml exec -T postgres \
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-## 10. Rollback
+## 11. Rollback
 
 Pin `KESTRIX_IMAGE` to the previous release tag and restart; volumes are
 untouched, so this is safe as long as no forward-only database migration ran

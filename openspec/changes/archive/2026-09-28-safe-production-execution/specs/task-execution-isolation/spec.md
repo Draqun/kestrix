@@ -5,7 +5,12 @@
 Kestrix SHALL execute a task in `local` mode inside its own process only when
 the instance setting `runner.allow_local` (environment variable
 `KESTRIX_RUNNER_ALLOW_LOCAL`) is true. The setting SHALL default to false and
-follow the configuration precedence rule. When it is false:
+follow the configuration precedence rule. The instance runner mode itself
+(`runner.mode`) SHALL be settable via the environment variable
+`KESTRIX_EXECUTION_MODE`, following the same precedence rule; this is
+distinct from `KESTRIX_RUNNER_MODE`, which configures only `kestrix
+runner`'s own execution backend and has no effect on the server. When the
+opt-in is false:
 - startup SHALL fail if the instance runner mode is `local` or unset, with a
   message stating that `local` tasks can read Kestrix's key files and naming
   `remote` and the opt-in as the alternatives;

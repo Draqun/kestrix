@@ -50,10 +50,17 @@ A finding in one of these areas is the highest priority to report privately:
 
 ## Known limitations (not vulnerabilities)
 
-- **`local` runner mode** runs task scripts as the Kestrix service account
-  on the host. The environment allowlist removes obvious secrets, but this
-  does not make `local` mode safe for mutually untrusted pipelines — `docker`
-  mode's container isolation is the boundary to rely on for that. Running
-  untrusted pipeline definitions under `local` mode and reporting the
-  resulting host access as a vulnerability is not necessary; it's documented
-  behavior. See [CI Tools: Runner](docs/ci-tools.md#runner).
+- **`local` runner mode** runs task scripts as the Kestrix service account,
+  in the same process that holds the master key and the JWT signing key -
+  a pipeline script can read both. It is disabled by default
+  (`runner.allow_local` / `KESTRIX_RUNNER_ALLOW_LOCAL`, opt-in only) and the
+  shipped production Compose file never enables it; startup fails naming
+  the exposure if the instance mode resolves to `local` without it. The
+  environment allowlist removes obvious secrets, but this does not make
+  `local` mode safe for mutually untrusted pipelines even with the opt-in -
+  `docker` mode's container isolation, or a registered `remote` runner
+  (which never receives the keys either), are the boundaries to rely on for
+  that. Running untrusted pipeline definitions under `local` mode with the
+  opt-in set and reporting the resulting host/key access as a vulnerability
+  is not necessary; it's documented, opt-in behavior. See
+  [CI Tools: Runner](docs/ci-tools.md#runner).
