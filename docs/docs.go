@@ -1423,6 +1423,10 @@ const docTemplate = `{
                 "project_name": {
                     "type": "string"
                 },
+                "rerun_task": {
+                    "description": "RerunTask is the task a single-task re-run was started for; empty for\nevery other run, including runs stored before the field existed.",
+                    "type": "string"
+                },
                 "sources": {
                     "type": "array",
                     "items": {

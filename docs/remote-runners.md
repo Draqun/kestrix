@@ -78,9 +78,9 @@ curl -X DELETE http://localhost:8080/api/runners/3 \
   -H 'Authorization: Bearer <admin session token>'
 ```
 
-A revoked runner's token stops authenticating immediately; any job it had
-claimed is recovered by silent-runner recovery (see below) once it goes
-quiet.
+A revoked runner's token stops authenticating immediately, and the running
+`kestrix runner` exits on its next poll. Any job it had claimed is recovered
+by silent-runner recovery (see below) once it goes quiet.
 
 The runner-job endpoints (`/api/runner-jobs/*`) sit outside the `/api`
 route group your session token authenticates: a runner's own bearer token
@@ -124,8 +124,13 @@ the same `KESTRIX_RUNNER_DOCKER_*` settings on the runner machine's own
 environment control it, since the job payload names no image or engine.
 
 The runner keeps polling until you stop it (Ctrl-C, or your process
-supervisor's stop signal). It logs each claimed job and its outcome to
-stderr. When a task fails before producing any output (for example its
+supervisor's stop signal) or the server rejects its token. A `401` - `invalid
+or revoked runner token`, for example after an administrator revoked the
+runner - makes `kestrix runner` print the server's message and exit with a
+non-zero status, because no retry can succeed; register a new runner and start
+it with the new token. Any other poll failure, such as a `500` or a dropped
+connection, is logged and retried every 5 seconds. It logs each claimed job
+and its outcome to stderr. When a task fails before producing any output (for example its
 shell is missing), the runner sends the reason with its completion report
 and the run detail view shows it as the task's error.
 
@@ -197,6 +202,31 @@ running on the Kestrix host - including a single-task re-run and an
 approved manual gate (see [`ci-tools.md`](ci-tools.md#runner) for how those
 two differ from every other mode once a project is on `remote`).
 
+### Task output
+
+The run detail shows each task's own output. For a remote task that is
+everything its runner streamed with `PATCH .../trace`, in order, followed by
+any `output` in the completion report. Kestrix redacts it and bounds it per
+task by `KESTRIX_RUNNER_MAX_OUTPUT_BYTES`, the way an in-process task's output
+is: past the bound it is cut and ends with the truncation marker. It appears
+when the task completes, not while it runs; the run's aggregate output stays
+live.
+
+### Re-running one task
+
+A single-task re-run dispatches one job, for that task, and nothing else.
+Completing it does not dispatch, skip, or record any other task of the run,
+whatever the pipeline's triggers say: a negated trigger such as
+`!repo.docs.changed` holds for any set of changes, which is why a re-run of
+`build` used to start `lint` and `deploy` as well. Approving a manual task
+inside a whole run still resumes that run's dependents. Kestrix resumes only
+runs that were started with a source snapshot, and a re-run has none.
+
+The run is recorded with `rerun_task` set to the task's name and an empty
+`changed`, and is labelled **Re-run: build** in the run list and the run
+detail. Re-runs recorded before this label existed keep showing
+**Changed: build**.
+
 ## Runner-job protocol
 
 For anyone writing their own runner. Every call sends the runner's token as
@@ -227,7 +257,14 @@ success, `409` when the epoch is stale or the job is not yours.
 is fenced out.
 
 Kestrix redacts known secrets from every chunk, `output`, and `error` again
-before storing them.
+before storing them. The task's result shows the accepted trace chunks
+followed by `output`.
+
+A request with a missing or non-bearer `Authorization` header is rejected
+`401 missing or malformed Authorization header`. A bearer token Kestrix does
+not accept, unknown or revoked alike, is rejected `401 invalid or revoked
+runner token`: stop, because retrying cannot help. Kestrix answers `500`
+when it cannot check the token at all; that is transient, so retry.
 
 ## Settings
 

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +27,11 @@ var (
 	runnerLongPollInterval = 20 * time.Second
 	runnerLongPollTick     = 500 * time.Millisecond
 )
+
+// invalidRunnerTokenMessage is the 401 for a well-formed bearer token the
+// runner store does not accept. It is the same for an unknown and a revoked
+// token, so it does not reveal whether a token ever existed.
+const invalidRunnerTokenMessage = "invalid or revoked runner token"
 
 // runnerIDContextKey is the context key requireRunnerAuth stores an
 // authenticated runner's ID under.
@@ -76,6 +82,11 @@ func (l *runnerPollLimiter) release(runnerID int) {
 // spec's "Runner token does not authenticate /api"): it never calls
 // RequireAuth, never resolves an account or role, and a user session
 // presented here is rejected the same as any other unrecognized value.
+//
+// The response says what failed (remote-run-ux design.md D4): a missing or
+// non-bearer header is missingCredentialMessage, a rejected token is
+// invalidRunnerTokenMessage, and a store failure is a 500 - `kestrix runner`
+// exits on 401, so a database blip must never look like a revoked token.
 func (s *Server) requireRunnerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
@@ -86,8 +97,13 @@ func (s *Server) requireRunnerAuth(next http.Handler) http.Handler {
 		}
 		token := header[len(prefix):]
 		runnerID, ok, err := s.runnerStore.AuthenticateRunner(token)
-		if err != nil || !ok {
-			writeError(w, http.StatusUnauthorized, missingCredentialMessage)
+		if err != nil {
+			slog.Warn("could not check runner token", "err", redact.Err(err, s.knownSecrets()))
+			writeError(w, http.StatusInternalServerError, "could not check runner token")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusUnauthorized, invalidRunnerTokenMessage)
 			return
 		}
 		ctx := context.WithValue(r.Context(), runnerIDContextKey{}, runnerID)

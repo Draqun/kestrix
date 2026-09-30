@@ -172,7 +172,9 @@ type ProjectSource struct {
 // RunStore is the port for run lifecycle persistence.
 // Only PostgreSQL implements this.
 type RunStore interface {
-	CreateRun(projectName string, changed []string, includeManual bool, snap *Project, startedBy string) (int, error)
+	// CreateRun records a new run. rerunTask names the task of a single-task
+	// re-run (whose changed is empty); it is "" for every other run.
+	CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *Project, startedBy string) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
@@ -363,8 +365,9 @@ type RemoteJobStore interface {
 	// re-resolving secrets (design.md D6/D7). Called once, at run creation.
 	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error
 	// GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a
-	// nil archive and empty map if none was ever set (a non-remote run, or
-	// one that dispatched no eligible task at all - see startRemote).
+	// nil archive and empty map if none was ever set (a non-remote run, a
+	// single-task re-run, or one that dispatched no eligible task at all -
+	// see startRemote). resumeRemoteRun resumes only runs that have one.
 	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, secretValues []string, err error)
 	// RemoteJobSecretValues returns the resolved runtime-secret values of a
 	// job's run, for redacting what its runner sends back (trace and
@@ -710,4 +713,7 @@ type Run struct {
 	// was canceled while running or queued - see run-attribution D3 and
 	// run-concurrency-and-retention design.md D2.
 	CanceledBy string `json:"canceled_by,omitempty"`
+	// RerunTask is the task a single-task re-run was started for; empty for
+	// every other run, including runs stored before the field existed.
+	RerunTask string `json:"rerun_task"`
 }

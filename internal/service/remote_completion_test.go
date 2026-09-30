@@ -30,12 +30,12 @@ func newFakeStatefulRunStore() *fakeStatefulRunStore {
 	return &fakeStatefulRunStore{MockRunStore: &mocks.MockRunStore{}, nextID: 1, runs: make(map[int]*domain.Run)}
 }
 
-func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
+func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := f.nextID
 	f.nextID++
-	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, PipelineDef: snap, Status: "running", StartedBy: startedBy}
+	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, RerunTask: rerunTask, PipelineDef: snap, Status: "running", StartedBy: startedBy}
 	return id, nil
 }
 
@@ -536,7 +536,7 @@ func TestResumeRemoteRun_NoRunOrNoPipelineDefIsNoOp(t *testing.T) {
 
 func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, false, &model.Project{
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{{Name: "t", Trigger: "not a valid ( expression"}},
 	}, "")
@@ -544,6 +544,7 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 		t.Fatal(err)
 	}
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "t"}}, CompleteJobOK: true}
+	seedSnapshot(t, remoteJobs, runID)
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
@@ -558,7 +559,7 @@ func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
 		{Name: "unrelated", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,6 +569,7 @@ func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
 	runStore.runs[runID].TaskResults = append(runStore.runs[runID].TaskResults, domain.TaskResult{Name: "build", Status: "failed"})
 
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "unrelated"}}, CompleteJobOK: true}
+	seedSnapshot(t, remoteJobs, runID)
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	runStore.MockRunStore.ApplyTaskErr = fmt.Errorf("write failed")
@@ -583,7 +585,7 @@ func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +607,7 @@ func TestResumeRemoteRun_CreateRemoteJobErrorPropagates(t *testing.T) {
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,6 +618,7 @@ func TestResumeRemoteRun_CreateRemoteJobErrorPropagates(t *testing.T) {
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	remoteJobs.CreateRemoteJobErr = context.DeadlineExceeded
+	seedSnapshot(t, remoteJobs, runID)
 
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected CreateRemoteJob's error (dispatching deploy) to propagate")
@@ -648,5 +651,98 @@ func TestResumeRemoteRun_ManualTaskNotDispatchedUntilApproved(t *testing.T) {
 		if c.TaskName == "deploy" {
 			t.Fatalf("manual task deploy must not be auto-dispatched, got %+v", remoteJobs.CreateRemoteJobCalls)
 		}
+	}
+}
+
+// ── single-task re-runs never resume (remote-run-ux design.md D2) ───────
+
+// seedSnapshot gives runID the snapshot startRemote stores for a whole run;
+// resumeRemoteRun resumes only runs that have one (D2).
+func seedSnapshot(t *testing.T, remoteJobs *mocks.MockRemoteJobStore, runID int) {
+	t.Helper()
+	if err := remoteJobs.SetRemoteRunSnapshot(runID, []byte("archive"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// rerunProject is the pipeline from remote-run-ux's proposal: lint's negated
+// trigger holds for any changed set, so resolving the DAG against a re-run's
+// task name makes lint (and, once build passes, deploy) eligible.
+func rerunProject() *model.Project {
+	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
+	return &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+		{Name: "lint", Trigger: "!repo.docs.changed", Execute: spec},
+		{Name: "build", Trigger: "!repo.docs.changed", Execute: spec},
+		{Name: "deploy", Trigger: "!repo.docs.changed", DependsOn: []string{"build"}, Execute: spec},
+	}}
+}
+
+// A single-task re-run dispatches one job from its own workspace and stores
+// no remote snapshot. Completing that job must not dispatch, skip, or record
+// any other task, whatever the re-run's own outcome.
+func TestResumeRemoteRun_RunWithoutSnapshotDispatchesNothing(t *testing.T) {
+	for _, status := range []string{"passed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			runStore := newFakeStatefulRunStore()
+			runID, err := runStore.CreateRun("proj", nil, "build", false, rerunProject(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			remoteJobs := &mocks.MockRemoteJobStore{
+				Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
+				CompleteJobOK: true,
+			}
+			svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+			svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+
+			if _, err := svc.CompleteRemoteJob(1, 1, status, "", "", nil); err != nil {
+				t.Fatalf("CompleteRemoteJob: %v", err)
+			}
+			if len(remoteJobs.CreateRemoteJobCalls) != 0 {
+				t.Fatalf("no job may be dispatched for a run without a snapshot, got %+v", remoteJobs.CreateRemoteJobCalls)
+			}
+			run, _ := runStore.GetRun(runID)
+			if len(run.TaskResults) != 1 || run.TaskResults[0].Name != "build" {
+				t.Fatalf("task results must name only build, got %+v", run.TaskResults)
+			}
+		})
+	}
+}
+
+// The guard is about the snapshot, not about who approved what: a whole run
+// has one, so approving a manual task still resumes that run's dependents.
+func TestResumeRemoteRun_ApprovedManualTaskInWholeRunStillDispatchesDependents(t *testing.T) {
+	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
+		{Name: "deploy", Trigger: "repo.app.changed", Manual: true, DependsOn: []string{"build"}, Execute: spec},
+		{Name: "notify", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+	opts := domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New()}
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, opts)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "build"}
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("complete build: %v", err)
+	}
+
+	// Approving deploy dispatches it (job 2); its completion must resume notify.
+	if _, dispatched, err := svc.RunTask(context.Background(), runID, "proj", proj, "deploy", opts); err != nil || !dispatched {
+		t.Fatalf("RunTask deploy = dispatched %v, err %v", dispatched, err)
+	}
+	remoteJobs.Jobs[2] = &domain.RemoteJob{ID: 2, RunID: runID, TaskName: "deploy"}
+	if _, err := svc.CompleteRemoteJob(2, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("complete deploy: %v", err)
+	}
+	calls := remoteJobs.CreateRemoteJobCalls
+	if len(calls) != 3 || calls[2].TaskName != "notify" {
+		t.Fatalf("expected notify dispatched after deploy was approved and passed, got %+v", calls)
 	}
 }

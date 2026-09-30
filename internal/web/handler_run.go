@@ -61,7 +61,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
 	if err != nil {
 		primary.Cleanup()
-		s.failRunOnSecretError(name, &proj, executionChanged, req.IncludeManual, actor, err)
+		s.failRunOnSecretError(name, &proj, executionChanged, "", req.IncludeManual, actor, err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -152,14 +152,14 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
 	if err != nil {
 		primary.Cleanup()
-		s.failRunOnSecretError(name, &proj, []string{taskName}, false, actor, err)
+		s.failRunOnSecretError(name, &proj, nil, taskName, false, actor, err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	var runID int
 	snap := &proj
-	runID, err = s.runStore.CreateRun(name, []string{taskName}, false, snap, actor)
+	runID, err = s.runStore.CreateRun(name, nil, taskName, false, snap, actor)
 	if err != nil {
 		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -424,12 +424,12 @@ func (s *Server) handleListAllRuns(w http.ResponseWriter, r *http.Request) {
 // secretErr's message - so the failure is visible in run history and not
 // only in this request's 400 response, and the pipeline runner is never
 // invoked.
-func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, changed []string, includeManual bool, actor string, secretErr error) {
+func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, changed []string, rerunTask string, includeManual bool, actor string, secretErr error) {
 	if s.runStore == nil {
 		return
 	}
 	startedAt := time.Now()
-	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj, actor)
+	runID, err := s.runStore.CreateRun(projectName, changed, rerunTask, includeManual, proj, actor)
 	if err != nil {
 		slog.Warn("could not record run for secret resolution failure", "project", projectName, "err", redact.Err(err, s.knownSecrets()))
 		return

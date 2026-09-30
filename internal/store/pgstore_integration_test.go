@@ -82,7 +82,7 @@ func mustUpsert(t *testing.T, pg *PGStore, name, _ string) {
 // mustCreateRun creates a run and fails the test on error.
 func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *model.Project) int {
 	t.Helper()
-	id, err := pg.CreateRun(projectName, nil, false, snap, "")
+	id, err := pg.CreateRun(projectName, nil, "", false, snap, "")
 	if err != nil {
 		t.Fatalf("CreateRun(%q): %v", projectName, err)
 	}
@@ -481,7 +481,7 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rp2", "/rp2")
 	snap := &model.Project{Name: "rp2"}
-	id, err := pg.CreateRun("rp2", []string{"main"}, false, snap, "user:alice")
+	id, err := pg.CreateRun("rp2", []string{"main"}, "", false, snap, "user:alice")
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}

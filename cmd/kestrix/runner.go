@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,7 +48,10 @@ func cmdRunner(args []string) {
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "kestrix runner: polling %s (mode=%s)\n", resolvedServer, resolvedMode)
-	runPollLoop(context.Background(), client, resolvedServer, resolvedToken, resolvedMode)
+	if err := runPollLoop(context.Background(), client, resolvedServer, resolvedToken, resolvedMode); err != nil {
+		fmt.Fprintf(os.Stderr, "kestrix runner: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // resolveRunnerFlags applies --server/--token/--mode's precedence over
@@ -80,18 +84,28 @@ func resolveRunnerFlags(server, token, mode string, env *config.Environment) (re
 // internal/web's runnerLongPollInterval uses.
 var pollErrorRetryDelay = 5 * time.Second
 
-// runPollLoop polls GET /api/runner-jobs/next forever. The server itself
-// does the bounded long-poll wait (tasks.md 3.2), so a 204 here means
-// "nothing pending right now" and the loop re-polls immediately rather than
-// sleeping - it already just spent up to that long-poll interval waiting.
-func runPollLoop(ctx context.Context, client *http.Client, baseURL, token, mode string) {
+// errRunnerRejected marks a poll the server answered 401: the runner's token
+// is unknown or revoked, so no retry can succeed (remote-run-ux design.md D4).
+// Its message carries the server's own.
+var errRunnerRejected = errors.New("server rejected the runner token")
+
+// runPollLoop polls GET /api/runner-jobs/next until ctx is done (nil) or the
+// server rejects the runner's token (errRunnerRejected); every other poll
+// failure is logged and retried. The server itself does the bounded
+// long-poll wait (tasks.md 3.2), so a 204 here means "nothing pending right
+// now" and the loop re-polls immediately rather than sleeping - it already
+// just spent up to that long-poll interval waiting.
+func runPollLoop(ctx context.Context, client *http.Client, baseURL, token, mode string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		default:
 		}
 		job, status, err := pollNextJob(ctx, client, baseURL, token)
+		if errors.Is(err, errRunnerRejected) {
+			return err
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "kestrix runner: poll error: %v\n", err)
 			time.Sleep(pollErrorRetryDelay)
@@ -122,6 +136,9 @@ func pollNextJob(ctx context.Context, client *http.Client, baseURL, token string
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, resp.StatusCode, fmt.Errorf("%w: %s", errRunnerRejected, serverMessage(body))
+		}
 		return nil, resp.StatusCode, fmt.Errorf("unexpected status %s: %s", resp.Status, string(body))
 	}
 	var job domain.RemoteJob
@@ -129,6 +146,18 @@ func pollNextJob(ctx context.Context, client *http.Client, baseURL, token string
 		return nil, resp.StatusCode, fmt.Errorf("decode job: %w", err)
 	}
 	return &job, resp.StatusCode, nil
+}
+
+// serverMessage is the "error" of a JSON error body as the control plane
+// writes it, or the trimmed body itself when it is not one.
+func serverMessage(body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Error != "" {
+		return e.Error
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // runJob unpacks job's source archive, executes its one task through

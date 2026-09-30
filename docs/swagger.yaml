@@ -243,6 +243,11 @@ definitions:
         $ref: '#/definitions/domain.Project'
       project_name:
         type: string
+      rerun_task:
+        description: |-
+          RerunTask is the task a single-task re-run was started for; empty for
+          every other run, including runs stored before the field existed.
+        type: string
       sources:
         items:
           $ref: '#/definitions/domain.AcquiredSource'
