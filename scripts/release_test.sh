@@ -69,7 +69,10 @@ else
 fi
 
 # The old Unreleased content must now live under the new version heading.
-if awk '/^## \[v0.3.0\]/{f=1;next} /^## \[/{f=0} f' "$work1/CHANGELOG.md" | grep -q "Something worth shipping"; then
+# One awk and no pipe: with `awk | grep -q` under pipefail, grep exits on its
+# first match and awk can die of SIGPIPE writing the rest of the section, which
+# failed this assertion on slow CI runners.
+if awk '/^## \[v0.3.0\]/{f=1;next} /^## \[/{f=0} f && /Something worth shipping/{found=1} END{exit !found}' "$work1/CHANGELOG.md"; then
   pass "old Unreleased content moves under the new version heading"
 else
   fail "old Unreleased content moves under the new version heading"
