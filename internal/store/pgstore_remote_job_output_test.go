@@ -363,3 +363,51 @@ func TestPG_CancelJobsForRun_ClearsTheOutputOfAReclaimedJob(t *testing.T) {
 		t.Fatalf("remote_jobs.output = %q after cancelling, want it cleared", got)
 	}
 }
+
+// Past the bound a chunk is dropped, but the stream must still advance: the
+// next chunk's offset is checked against trace_offset (a miss is rejected as a
+// gap), and silent-runner recovery treats updated_at as the runner's
+// heartbeat, so a healthy runner that keeps printing must not look silent.
+func TestPG_AppendJobTrace_ChunksPastTheBoundStillAdvanceTheStream(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-past-bound", "")
+	runID := mustCreateRun(t, pg, "proj-past-bound", nil)
+	jobID := mustCreateRemoteJob(t, pg, runID, "build")
+	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-past-bound"))
+
+	const bound = 4
+	offset := 0
+	send := func(chunk string) {
+		t.Helper()
+		if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
+			t.Fatalf("AppendJobTrace(%q at offset %d) = (%v, %v)", chunk, offset, ok, err)
+		}
+		offset += len(chunk)
+	}
+	send("abcdef") // crosses the bound: "abcd" and the marker
+	want := "abcd" + remoteJobTruncationMarker
+
+	for _, chunk := range []string{"ghi", "jkl"} { // both dropped
+		if _, err := pg.db.Exec(`UPDATE remote_jobs SET updated_at = now() - interval '1 hour' WHERE id = $1`, jobID); err != nil {
+			t.Fatal(err)
+		}
+		send(chunk)
+
+		var fresh bool
+		var traceOffset int
+		if err := pg.db.QueryRow(
+			`SELECT now() - updated_at < interval '1 minute', trace_offset FROM remote_jobs WHERE id = $1`, jobID,
+		).Scan(&fresh, &traceOffset); err != nil {
+			t.Fatal(err)
+		}
+		if !fresh {
+			t.Fatalf("updated_at was not refreshed by the dropped chunk %q", chunk)
+		}
+		if traceOffset != offset {
+			t.Fatalf("trace_offset = %d after the dropped chunk %q, want %d", traceOffset, chunk, offset)
+		}
+		if got := storedJobOutput(t, pg, jobID); got != want {
+			t.Fatalf("remote_jobs.output = %q after the dropped chunk %q, want it unchanged: %q", got, chunk, want)
+		}
+	}
+}
