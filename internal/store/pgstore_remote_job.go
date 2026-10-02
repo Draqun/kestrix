@@ -413,7 +413,7 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		// see design.md D9 and tasks.md 3.4. Mark this job terminal so it
 		// stops being reclaimed or re-offered, and still append its
 		// trailing output for visibility, but touch nothing else.
-		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE id = $2`, status, jobID); err != nil {
+		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
 			return false, fmt.Errorf("finalize fenced job: %w", err)
 		}
 		if toAppend := boundAppendChunk(runOutput, output, maxOutputBytes); toAppend != "" {
@@ -458,7 +458,9 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		}
 	}
 
-	if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE id = $2`, status, jobID); err != nil {
+	// The job-row copy of the output has done its job once the task result
+	// carries it (remote-run-ux design.md D1), so a finished job keeps none.
+	if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
 		return false, fmt.Errorf("finalize completed job: %w", err)
 	}
 

@@ -202,3 +202,43 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 		t.Fatalf("task output = %q, want only the completing claim's %q", got, "second claim")
 	}
 }
+
+// remote-run-ux design.md: the job-row copy of the output exists only until the
+// task result is written, so a finished job must not keep up to
+// max_output_bytes in its row - on the recorded path or the fenced one.
+func TestPG_CompleteJob_ClearsTheJobsOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		runIsOver bool // FailInterruptedRuns finalized the run before the report arrived
+	}{
+		{"result recorded", false},
+		{"run already terminal (fenced)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := testPG(t)
+			mustUpsert(t, pg, "proj-job-output-cleared", "")
+			runID := mustCreateRun(t, pg, "proj-job-output-cleared", nil)
+			jobID := mustCreateRemoteJob(t, pg, runID, "build")
+			job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-job-output-cleared"))
+			if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "streamed output", 0, nil); err != nil || !ok {
+				t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
+			}
+			if got := storedJobOutput(t, pg, jobID); got != "streamed output" {
+				t.Fatalf("remote_jobs.output = %q before completion, want the trace", got)
+			}
+			if tc.runIsOver {
+				if _, err := pg.FailInterruptedRuns("interrupted"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0)
+			if err != nil || ok == tc.runIsOver {
+				t.Fatalf("CompleteJob = (%v, %v), want ok=%v", ok, err, !tc.runIsOver)
+			}
+			if got := storedJobOutput(t, pg, jobID); got != "" {
+				t.Fatalf("remote_jobs.output = %q after completion, want it cleared", got)
+			}
+		})
+	}
+}
