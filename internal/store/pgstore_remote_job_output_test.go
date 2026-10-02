@@ -311,3 +311,25 @@ func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
 		})
 	}
 }
+
+// The bound is in bytes, not characters: with 6 bytes of "€€" in the column and
+// a bound of 7, one more byte fits and the second does not.
+func TestPG_AppendJobTrace_JobOutputBoundCountsBytes(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-job-output-bytes", "")
+	runID := mustCreateRun(t, pg, "proj-job-output-bytes", nil)
+	jobID := mustCreateRemoteJob(t, pg, runID, "build")
+	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-job-output-bytes"))
+
+	const bound = 7
+	offset := 0
+	for _, chunk := range []string{"€€", "ab", "more"} {
+		if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
+			t.Fatalf("AppendJobTrace(%q) = (%v, %v)", chunk, ok, err)
+		}
+		offset += len(chunk)
+	}
+	if got, want := storedJobOutput(t, pg, jobID), "€€a"+remoteJobTruncationMarker; got != want {
+		t.Fatalf("remote_jobs.output = %q, want %q", got, want)
+	}
+}

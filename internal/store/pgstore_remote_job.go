@@ -278,11 +278,19 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	}
 	defer tx.Rollback()
 
-	var runID, claimEpoch, traceOffset int
-	var jobStatus, jobOutput string
+	var runID, claimEpoch, traceOffset, jobOutputLen int
+	var jobStatus string
+	var jobTruncated bool
 	var runnerID sql.NullInt64
-	err = tx.QueryRow(`SELECT run_id, claim_epoch, status, trace_offset, runner_id, output FROM remote_jobs WHERE id = $1 FOR UPDATE`, jobID).
-		Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutput)
+	// The job's own output is measured in the database, not loaded: the bound
+	// check needs only its length and whether the truncation marker is already
+	// there, and loading up to max_output_bytes on every chunk made a long task
+	// quadratic.
+	err = tx.QueryRow(
+		`SELECT run_id, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
+		 FROM remote_jobs WHERE id = $1 FOR UPDATE`,
+		jobID, len(remoteJobTruncationMarker), remoteJobTruncationMarker,
+	).Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -320,11 +328,16 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	}
 	// The job's own output is bounded against itself, not the run's
 	// aggregate: a sibling that used up the aggregate's budget must not
-	// shorten this task's output (remote-run-ux design.md D1).
-	if _, err := tx.Exec(
-		`UPDATE remote_jobs SET status = $1, trace_offset = $2, output = output || $3, updated_at = now() WHERE id = $4`,
-		newStatus, offset+len(chunk), boundAppendChunk(jobOutput, chunk, maxOutputBytes), jobID,
-	); err != nil {
+	// shorten this task's output (remote-run-ux design.md D1). The column is
+	// rewritten only when something is appended, so a chunk past the bound
+	// leaves it alone.
+	jobUpdate := `UPDATE remote_jobs SET status = $1, trace_offset = $2, updated_at = now() WHERE id = $3`
+	jobArgs := []any{newStatus, offset + len(chunk), jobID}
+	if jobAppend := boundAppend(jobOutputLen, jobTruncated, chunk, maxOutputBytes); jobAppend != "" {
+		jobUpdate = `UPDATE remote_jobs SET status = $1, trace_offset = $2, output = output || $4, updated_at = now() WHERE id = $3`
+		jobArgs = append(jobArgs, jobAppend)
+	}
+	if _, err := tx.Exec(jobUpdate, jobArgs...); err != nil {
 		return false, fmt.Errorf("advance trace offset: %w", err)
 	}
 
@@ -346,15 +359,22 @@ const remoteJobTruncationMarker = "\n[output truncated: exceeded maximum size]"
 // truncation marker the one time the bound is crossed, or "" once the
 // bound (marker included) has already been reached - see design.md D9.
 func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
+	return boundAppend(len(currentOutput), strings.HasSuffix(currentOutput, remoteJobTruncationMarker), chunk, maxOutputBytes)
+}
+
+// boundAppend is boundAppendChunk for a caller that knows only how many bytes
+// the current output occupies and whether it already ends with the truncation
+// marker, so it need not load the output itself.
+func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes int) string {
 	if maxOutputBytes <= 0 || chunk == "" {
 		return chunk
 	}
-	if strings.HasSuffix(currentOutput, remoteJobTruncationMarker) {
+	if truncated {
 		// The marker was already appended by an earlier chunk; every later
 		// chunk for this run is discarded.
 		return ""
 	}
-	remaining := maxOutputBytes - len(currentOutput)
+	remaining := maxOutputBytes - currentLen
 	if remaining <= 0 {
 		return remoteJobTruncationMarker
 	}
