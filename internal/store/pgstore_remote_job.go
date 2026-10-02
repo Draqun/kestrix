@@ -234,8 +234,12 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 		return nil, fmt.Errorf("select next pending job: %w", err)
 	}
 
+	// A claim's runner traces from offset 0 with a fresh traceWriter, so a
+	// re-claimed job drops the superseded claim's trace position and output
+	// with it: the task's result comes only from the claim that completes.
 	row := tx.QueryRow(
-		`UPDATE remote_jobs SET status = $1, runner_id = $2, claim_epoch = claim_epoch + 1, claimed_at = now(), updated_at = now()
+		`UPDATE remote_jobs SET status = $1, runner_id = $2, claim_epoch = claim_epoch + 1, claimed_at = now(), updated_at = now(),
+		   trace_offset = 0, output = ''
 		 WHERE id = $3 RETURNING `+remoteJobColumns,
 		domain.RemoteJobStatusClaimed, runnerID, jobID,
 	)

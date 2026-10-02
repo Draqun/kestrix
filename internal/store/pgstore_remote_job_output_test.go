@@ -2,6 +2,7 @@ package store
 
 import (
 	"testing"
+	"time"
 
 	"kestrix/internal/domain"
 )
@@ -163,5 +164,41 @@ func TestPG_CompleteJob_AggregateOutputUnchangedByTaskOutput(t *testing.T) {
 	}
 	if run.Output != "abc\ndef" {
 		t.Fatalf("run.Output = %q, want %q", run.Output, "abc\ndef")
+	}
+}
+
+// A reclaimed job's replacement claim starts its own trace at offset 0 (a
+// fresh traceWriter), and the task's result comes only from the claim that
+// completes, never from what the superseded claim had streamed.
+func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-reclaim-trace", "")
+	runID := mustCreateRun(t, pg, "proj-reclaim-trace", nil)
+	jobID := mustCreateRemoteJob(t, pg, runID, "build")
+	first := mustCreateRunner(t, pg, "r-reclaim-trace-1")
+	claim1, _ := pg.ClaimNextJob(first)
+	if ok, err := pg.AppendJobTrace(jobID, claim1.ClaimEpoch, 0, "partial output of the first claim", 0, &first); err != nil || !ok {
+		t.Fatalf("first claim AppendJobTrace = (%v, %v)", ok, err)
+	}
+	// The first runner goes silent: silent-runner recovery returns the job to pending.
+	if reclaimed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
+		t.Fatalf("ReclaimStaleJobs reclaimed %d, err %v; want 1", reclaimed, err)
+	}
+
+	second := mustCreateRunner(t, pg, "r-reclaim-trace-2")
+	claim2, _ := pg.ClaimNextJob(second)
+	for _, c := range []struct {
+		offset int
+		chunk  string
+	}{{0, "second "}, {7, "claim"}} {
+		if ok, err := pg.AppendJobTrace(jobID, claim2.ClaimEpoch, c.offset, c.chunk, 0, &second); err != nil || !ok {
+			t.Fatalf("second claim AppendJobTrace(offset %d) = (%v, %v)", c.offset, ok, err)
+		}
+	}
+	if ok, err := pg.CompleteJob(jobID, claim2.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", &second, 0); err != nil || !ok {
+		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
+	}
+	if got := latestTaskOutput(t, pg, runID, "build"); got != "second claim" {
+		t.Fatalf("task output = %q, want only the completing claim's %q", got, "second claim")
 	}
 }
