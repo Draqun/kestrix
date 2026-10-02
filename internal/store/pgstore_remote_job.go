@@ -447,7 +447,8 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		// was still in flight. Recording a fresh task result here would let
 		// computeRunStatus revive a run that is supposed to stay terminal -
 		// see design.md D9 and tasks.md 3.4. Mark this job terminal so it
-		// stops being reclaimed or re-offered, and still append its
+		// stops being reclaimed or re-offered (dropping its own copy of the
+		// trace: the run's output already has it), and still append its
 		// trailing output for visibility, but touch nothing else.
 		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
 			return false, fmt.Errorf("finalize fenced job: %w", err)
@@ -527,10 +528,12 @@ func (s *PGStore) PendingOrClaimedJobIDsForRun(runID int) ([]int, error) {
 // CancelJobsForRun marks runID's still-"pending" jobs "canceled" outright.
 // A "claimed"/"running" job is left alone - no stop signal exists (D8) - and
 // relies on CompleteJob's terminal-run fencing once its runner eventually
-// reports back.
+// reports back. A cancelled job keeps no output: one that streamed some and
+// was returned to pending by ReclaimStaleJobs still holds it until it is
+// claimed again.
 func (s *PGStore) CancelJobsForRun(runID int) error {
 	_, err := s.db.Exec(
-		`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE run_id = $2 AND status = $3`,
+		`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE run_id = $2 AND status = $3`,
 		domain.RemoteJobStatusCanceled, runID, domain.RemoteJobStatusPending,
 	)
 	return err

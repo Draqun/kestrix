@@ -334,3 +334,32 @@ func TestPG_AppendJobTrace_JobOutputBoundCountsBytes(t *testing.T) {
 		t.Fatalf("remote_jobs.output = %q, want %q", got, want)
 	}
 }
+
+// Cancelling is a third way a job ends. A job that streamed output, was
+// returned to pending by silent-runner recovery (which keeps the output until
+// the next claim) and is cancelled before any runner re-claims it must not
+// keep that output either.
+func TestPG_CancelJobsForRun_ClearsTheOutputOfAReclaimedJob(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-cancel-reclaimed", "")
+	runID := mustCreateRun(t, pg, "proj-cancel-reclaimed", nil)
+	jobID := mustCreateRemoteJob(t, pg, runID, "build")
+	runner := mustCreateRunner(t, pg, "r-cancel-reclaimed")
+	claim, _ := pg.ClaimNextJob(runner)
+	if ok, err := pg.AppendJobTrace(jobID, claim.ClaimEpoch, 0, "partial output", 0, &runner); err != nil || !ok {
+		t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
+	}
+	if reclaimed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
+		t.Fatalf("ReclaimStaleJobs reclaimed %d, err %v; want 1", reclaimed, err)
+	}
+
+	if err := pg.CancelJobsForRun(runID); err != nil {
+		t.Fatalf("CancelJobsForRun: %v", err)
+	}
+	if job, _ := pg.GetRemoteJob(jobID); job.Status != domain.RemoteJobStatusCanceled {
+		t.Fatalf("job status = %q, want canceled", job.Status)
+	}
+	if got := storedJobOutput(t, pg, jobID); got != "" {
+		t.Fatalf("remote_jobs.output = %q after cancelling, want it cleared", got)
+	}
+}
