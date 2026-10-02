@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
@@ -360,7 +361,13 @@ func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
 	if len(chunk) <= remaining {
 		return chunk
 	}
-	return chunk[:remaining] + remoteJobTruncationMarker
+	// Never cut inside a multi-byte character: PostgreSQL rejects the invalid
+	// UTF-8 a byte cut would leave, which failed the whole request.
+	cut := remaining
+	for cut > 0 && !utf8.RuneStart(chunk[cut]) {
+		cut--
+	}
+	return chunk[:cut] + remoteJobTruncationMarker
 }
 
 // CompleteJob records a job's terminal report. See domain.RemoteJobStore's

@@ -3,6 +3,7 @@ package store
 import (
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"kestrix/internal/domain"
 )
@@ -238,6 +239,74 @@ func TestPG_CompleteJob_ClearsTheJobsOutput(t *testing.T) {
 			}
 			if got := storedJobOutput(t, pg, jobID); got != "" {
 				t.Fatalf("remote_jobs.output = %q after completion, want it cleared", got)
+			}
+		})
+	}
+}
+
+// boundAppendChunk cuts on a byte count, but the text is UTF-8 and PostgreSQL
+// rejects an invalid sequence in a text parameter, so a cut must never split a
+// character.
+func TestBoundAppendChunk_NeverSplitsACharacter(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, chunk string
+		max                  int
+		want                 string
+	}{
+		{"cut inside a 3-byte character backs off to its start", "", "€€€", 4, "€" + remoteJobTruncationMarker},
+		{"cut on a character boundary is kept", "", "€€€", 6, "€€" + remoteJobTruncationMarker},
+		{"4-byte character", "", "😀😀", 5, "😀" + remoteJobTruncationMarker},
+		{"budget smaller than the first character leaves only the marker", "", "€", 2, remoteJobTruncationMarker},
+		{"budget left by earlier output", "ab", "€€", 4, remoteJobTruncationMarker},
+		{"fits exactly", "", "€€", 6, "€€"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := boundAppendChunk(tc.current, tc.chunk, tc.max)
+			if got != tc.want {
+				t.Fatalf("boundAppendChunk(%q, %q, %d) = %q, want %q", tc.current, tc.chunk, tc.max, got, tc.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("result %q is not valid UTF-8", got)
+			}
+		})
+	}
+}
+
+// The cut has to survive the database too: an append that crossed the bound
+// inside a multi-byte character used to fail the whole request.
+func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
+	for _, tc := range []struct {
+		name, trace, remainder string
+	}{
+		{"trace chunk", "€€€", ""},
+		{"completion remainder", "", "€€€"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := testPG(t)
+			mustUpsert(t, pg, "proj-multibyte-bound", "")
+			runID := mustCreateRun(t, pg, "proj-multibyte-bound", nil)
+			jobID := mustCreateRemoteJob(t, pg, runID, "build")
+			job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-multibyte-bound"))
+			const bound = 4
+			want := "€" + remoteJobTruncationMarker
+
+			if tc.trace != "" {
+				if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.trace, bound, nil); err != nil || !ok {
+					t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
+				}
+				if got := storedJobOutput(t, pg, jobID); got != want {
+					t.Fatalf("remote_jobs.output = %q, want %q", got, want)
+				}
+			}
+			if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, bound); err != nil || !ok {
+				t.Fatalf("CompleteJob = (%v, %v)", ok, err)
+			}
+			if got := latestTaskOutput(t, pg, runID, "build"); got != want {
+				t.Fatalf("task output = %q, want %q", got, want)
+			}
+			run, err := pg.GetRun(runID)
+			if err != nil || run.Output != want {
+				t.Fatalf("run.Output = %q (err %v), want %q", run.Output, err, want)
 			}
 		})
 	}
