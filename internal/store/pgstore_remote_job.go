@@ -285,11 +285,12 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	// The job's own output is measured in the database, not loaded: the bound
 	// check needs only its length and whether the truncation marker is already
 	// there, and loading up to max_output_bytes on every chunk made a long task
-	// quadratic.
+	// quadratic. right() counts characters, not bytes, so it is given the
+	// marker's length in characters: the check then holds for any marker.
 	err = tx.QueryRow(
 		`SELECT run_id, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
 		 FROM remote_jobs WHERE id = $1 FOR UPDATE`,
-		jobID, len(remoteJobTruncationMarker), remoteJobTruncationMarker,
+		jobID, utf8.RuneCountInString(remoteJobTruncationMarker), remoteJobTruncationMarker,
 	).Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
 	if err == sql.ErrNoRows {
 		return false, nil
