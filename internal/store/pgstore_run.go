@@ -401,11 +401,7 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 			final = append(final, tr)
 		}
 
-		out := r.output
-		if out != "" && !strings.HasSuffix(out, "\n") {
-			out += "\n"
-		}
-		out += reason
+		out := r.output + lineBreakBefore(r.output, reason)
 
 		b, _ := json.Marshal(final)
 		if _, err := tx.Exec(
@@ -467,6 +463,15 @@ func computeRunStatus(results []TaskResult) (status, errMsg string) {
 	return status, errMsg
 }
 
+// lineBreakBefore returns chunk on a line of its own: prefixed with a newline
+// when existing is not empty and does not already end with one.
+func lineBreakBefore(existing, chunk string) string {
+	if chunk != "" && existing != "" && !strings.HasSuffix(existing, "\n") {
+		return "\n" + chunk
+	}
+	return chunk
+}
+
 // ApplyTaskResult appends a task result and recomputes overall run status,
 // returning that status so the caller can detect a terminal outcome
 // (passed/failed/canceled) without a separate GetRun call - see REVIEW.md R1.
@@ -477,13 +482,7 @@ func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (st
 	}
 	results := append(run.TaskResults, tr)
 	status, errMsg := computeRunStatus(results)
-	out := run.Output
-	if outputExtra != "" {
-		if out != "" && !strings.HasSuffix(out, "\n") {
-			out += "\n"
-		}
-		out += outputExtra
-	}
+	out := run.Output + lineBreakBefore(run.Output, outputExtra)
 	b, _ := json.Marshal(results)
 	finished := status == "passed" || status == "failed" || status == "canceled"
 	if finished {

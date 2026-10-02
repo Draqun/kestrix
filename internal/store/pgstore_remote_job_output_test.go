@@ -411,3 +411,72 @@ func TestPG_AppendJobTrace_ChunksPastTheBoundStillAdvanceTheStream(t *testing.T)
 		}
 	}
 }
+
+// lineBreakBefore is the one place for "this text goes on its own line": the
+// run aggregate, a task's output, an interrupted run's reason and an applied
+// task result's extra output all use it.
+func TestLineBreakBefore(t *testing.T) {
+	for _, tc := range []struct{ name, existing, chunk, want string }{
+		{"nothing before it", "", "x", "x"},
+		{"existing output ends mid-line", "abc", "x", "\nx"},
+		{"existing output ends in a newline", "abc\n", "x", "x"},
+		{"nothing to add", "abc", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := lineBreakBefore(tc.existing, tc.chunk); got != tc.want {
+				t.Fatalf("lineBreakBefore(%q, %q) = %q, want %q", tc.existing, tc.chunk, got, tc.want)
+			}
+		})
+	}
+}
+
+// ApplyTaskResult puts a task's extra output on its own line after an
+// aggregate that ends mid-line, and adds no blank line after one that does not.
+func TestPG_ApplyTaskResult_PutsExtraOutputOnItsOwnLine(t *testing.T) {
+	for _, tc := range []struct{ name, existing, extra, want string }{
+		{"aggregate ends mid-line", "abc", "extra", "abc\nextra"},
+		{"aggregate ends in a newline", "abc\n", "extra", "abc\nextra"},
+		{"no extra output", "abc", "", "abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := testPG(t)
+			mustUpsert(t, pg, "proj-apply-line", "")
+			runID := mustCreateRun(t, pg, "proj-apply-line", nil)
+			if err := pg.FlushRunOutput(runID, tc.existing); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pg.ApplyTaskResult(runID, TaskResult{Name: "build", Status: "running"}, tc.extra); err != nil {
+				t.Fatalf("ApplyTaskResult: %v", err)
+			}
+			run, err := pg.GetRun(runID)
+			if err != nil || run.Output != tc.want {
+				t.Fatalf("run.Output = %q (err %v), want %q", run.Output, err, tc.want)
+			}
+		})
+	}
+}
+
+// FailInterruptedRuns names the interruption on a line of its own.
+func TestPG_FailInterruptedRuns_PutsTheReasonOnItsOwnLine(t *testing.T) {
+	for _, tc := range []struct{ name, existing, want string }{
+		{"output ends mid-line", "abc", "abc\ninterrupted"},
+		{"output ends in a newline", "abc\n", "abc\ninterrupted"},
+		{"no output yet", "", "interrupted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := testPG(t)
+			mustUpsert(t, pg, "proj-interrupted-line", "")
+			runID := mustCreateRun(t, pg, "proj-interrupted-line", nil)
+			if err := pg.FlushRunOutput(runID, tc.existing); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := pg.FailInterruptedRuns("interrupted"); err != nil || n != 1 {
+				t.Fatalf("FailInterruptedRuns = (%d, %v), want (1, nil)", n, err)
+			}
+			run, err := pg.GetRun(runID)
+			if err != nil || run.Output != tc.want {
+				t.Fatalf("run.Output = %q (err %v), want %q", run.Output, err, tc.want)
+			}
+		})
+	}
+}
