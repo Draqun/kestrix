@@ -290,7 +290,11 @@ type RemoteJobStore interface {
 	GetRemoteJob(jobID int) (*RemoteJob, error)
 	// AppendJobTrace appends chunk to the job's run's output (a database-side
 	// append, never FlushRunOutput's whole-column overwrite - D9), bounded by
-	// maxOutputBytes the same way the in-process boundedWriter is. offset is
+	// maxOutputBytes the same way the in-process boundedWriter is. The same
+	// chunk is also appended to the job's own output, bounded against that
+	// output and not the run's, so a sibling that used up the aggregate's
+	// budget does not shorten this task's output; a new claim of the job
+	// starts that output, and its trace stream, from empty. offset is
 	// the byte position, in the job's own trace stream, chunk begins at: it
 	// must equal the job's current stored trace_offset to be applied. A
 	// lower offset is a runner's own safe retry (for example after a
@@ -321,7 +325,11 @@ type RemoteJobStore interface {
 	// for system-initiated calls (ReclaimStaleJobs's own fail-a-stale-job
 	// path); every HTTP-driven call passes the authenticated runner's ID.
 	// output is bounded by maxOutputBytes the same way AppendJobTrace's
-	// chunk is - a non-positive value means unbounded. taskError, when
+	// chunk is - a non-positive value means unbounded. The recorded task
+	// result's Output is the job's accumulated trace followed by output (on
+	// its own line when the trace ended mid-line), bounded against the job's
+	// own budget; the job's copy of the trace is then cleared, and the run's
+	// aggregate output is built separately. taskError, when
 	// non-empty, is stored as the task result's Error (remote-runner-fixes
 	// design.md D4).
 	CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
