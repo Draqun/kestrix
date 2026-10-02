@@ -390,6 +390,15 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 	return chunk[:cut] + remoteJobTruncationMarker
 }
 
+// lineBreakBefore returns chunk on a line of its own: prefixed with a newline
+// when existing is not empty and does not already end with one.
+func lineBreakBefore(existing, chunk string) string {
+	if chunk != "" && existing != "" && !strings.HasSuffix(existing, "\n") {
+		return "\n" + chunk
+	}
+	return chunk
+}
+
 // CompleteJob records a job's terminal report. See domain.RemoteJobStore's
 // doc for the full fencing contract; in short: the epoch check, the job's
 // own terminal check, and the parent run's terminal check all happen under
@@ -455,15 +464,12 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 	json.Unmarshal([]byte(taskResultsJSON), &results)
 	// The task's output is everything its trace carried plus the completion's
 	// remainder, bounded like an in-process task's - remote-run-ux design.md D1.
-	taskOutput := jobOutput + boundAppendChunk(jobOutput, output, maxOutputBytes)
+	// The remainder goes on its own line, as it does in the run's aggregate.
+	taskOutput := jobOutput + boundAppendChunk(jobOutput, lineBreakBefore(jobOutput, output), maxOutputBytes)
 	results = append(results, TaskResult{Name: taskName, Status: status, Output: taskOutput, Error: taskError})
 	newStatus, errMsg := computeRunStatus(results)
 
-	chunk := output
-	if chunk != "" && runOutput != "" && !strings.HasSuffix(runOutput, "\n") {
-		chunk = "\n" + chunk
-	}
-	out := runOutput + boundAppendChunk(runOutput, chunk, maxOutputBytes)
+	out := runOutput + boundAppendChunk(runOutput, lineBreakBefore(runOutput, output), maxOutputBytes)
 	resultsJSON, _ := json.Marshal(results)
 	finished := newStatus == "passed" || newStatus == "failed" || newStatus == "canceled"
 	if finished {

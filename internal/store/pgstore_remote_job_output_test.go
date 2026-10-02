@@ -115,10 +115,11 @@ func TestPG_CompleteJob_TaskOutput(t *testing.T) {
 		want      string
 	}{
 		{"trace only", []string{"stream", "ed"}, "", 0, "streamed"},
-		{"trace then remainder", []string{"abc"}, "def", 0, "abcdef"},
+		{"remainder goes on its own line after a trace that ends mid-line", []string{"abc"}, "def", 0, "abc\ndef"},
+		{"no extra line break after a trace that ends in one", []string{"abc\n"}, "def", 0, "abc\ndef"},
 		{"remainder only", nil, "done", 0, "done"},
 		{"trace over the bound", []string{"0123456789ABC"}, "", 10, "0123456789" + remoteJobTruncationMarker},
-		{"remainder crosses the bound", []string{"abc"}, "0123456789", 10, "abc0123456" + remoteJobTruncationMarker},
+		{"remainder crosses the bound", []string{"abc"}, "0123456789", 10, "abc\n012345" + remoteJobTruncationMarker},
 		{"remainder after the marker is dropped", []string{"0123456789ABC"}, "MORE", 10, "0123456789" + remoteJobTruncationMarker},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
