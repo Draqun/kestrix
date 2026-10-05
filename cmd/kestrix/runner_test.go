@@ -373,11 +373,28 @@ func TestPollNextJob_401IsReportedDistinctly(t *testing.T) {
 			if !errors.Is(err, errRunnerRejected) {
 				t.Fatalf("error = %v, want errRunnerRejected", err)
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error = %q, want it to carry the server's message %q", err, tc.want)
+			if want := errRunnerRejected.Error() + ": " + tc.want; err.Error() != want {
+				t.Fatalf("error = %q, want %q", err, want)
 			}
 			if status != http.StatusUnauthorized || job != nil {
 				t.Fatalf("got (%v, %d), want (nil, 401)", job, status)
+			}
+		})
+	}
+}
+
+// serverMessage is what the runner prints when its token is rejected: the
+// "error" of a JSON body, otherwise the body itself, trimmed.
+func TestServerMessage(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"json error", `{"error":"invalid or revoked runner token"}`, "invalid or revoked runner token"},
+		{"json with an empty error", `{"error":""}`, `{"error":""}`},
+		{"not json, trimmed", "  not json\n", "not json"},
+		{"empty body", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := serverMessage([]byte(tc.body)); got != tc.want {
+				t.Fatalf("serverMessage(%q) = %q, want %q", tc.body, got, tc.want)
 			}
 		})
 	}
@@ -567,8 +584,8 @@ func TestRunPollLoop_ReturnsWhenTokenRejected(t *testing.T) {
 
 	select {
 	case err := <-result:
-		if !errors.Is(err, errRunnerRejected) || !strings.Contains(err.Error(), "invalid or revoked runner token") {
-			t.Fatalf("runPollLoop = %v, want errRunnerRejected carrying the server's message", err)
+		if want := errRunnerRejected.Error() + ": invalid or revoked runner token"; !errors.Is(err, errRunnerRejected) || err.Error() != want {
+			t.Fatalf("runPollLoop = %v, want errRunnerRejected as %q", err, want)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runPollLoop did not return after a 401")
