@@ -279,7 +279,7 @@ func TestPG_AppendJobTrace_BoundedTruncatesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "0123456789" + remoteJobTruncationMarker
+	want := "0123456789" + domain.TruncationMarker(bound)
 	if run.Output != want {
 		t.Fatalf("run.Output = %q, want %q", run.Output, want)
 	}
@@ -452,7 +452,7 @@ func TestPG_CompleteJob_OutputBoundedByMaxOutputBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Output != "0123456789"+remoteJobTruncationMarker {
+	if run.Output != "0123456789"+domain.TruncationMarker(bound) {
 		t.Fatalf("run.Output = %q, want the output cut at the bound plus the truncation marker", run.Output)
 	}
 }
@@ -487,7 +487,7 @@ func TestPG_CompleteJob_FencedRunOutputAlsoBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := priorOutput.Output + "01234" + remoteJobTruncationMarker
+	want := priorOutput.Output + "01234" + domain.TruncationMarker(bound)
 	if run.Output != want {
 		t.Fatalf("run.Output = %q, want %q (the fenced-path append bounded too)", run.Output, want)
 	}

@@ -288,10 +288,11 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	// there, and loading up to max_output_bytes on every chunk made a long task
 	// quadratic. right() counts characters, not bytes, so it is given the
 	// marker's length in characters: the check then holds for any marker.
+	marker := domain.TruncationMarker(maxOutputBytes)
 	err = tx.QueryRow(
 		`SELECT run_id, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
 		 FROM remote_jobs WHERE id = $1 FOR UPDATE`,
-		jobID, utf8.RuneCountInString(remoteJobTruncationMarker), remoteJobTruncationMarker,
+		jobID, utf8.RuneCountInString(marker), marker,
 	).Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -349,20 +350,17 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	return true, nil
 }
 
-// remoteJobTruncationMarker ends a remote output - a job's own or the run's
-// aggregate - once it is cut at the bound. The in-process path appends a
-// different text (internal/service/bounded_writer.go), so the stored output of
-// the two paths can be told apart.
-const remoteJobTruncationMarker = "\n[output truncated: exceeded maximum size]"
-
 // boundAppendChunk returns the slice of chunk that should still be appended
 // given currentOutput already occupies len(currentOutput) bytes of a
 // maxOutputBytes budget (a non-positive budget means unbounded): the whole
 // chunk while under the bound, the chunk cut at the bound plus the
 // truncation marker the one time the bound is crossed, or "" once the
-// bound (marker included) has already been reached - see design.md D9.
+// bound (marker included) has already been reached - see design.md D9. The
+// marker is domain.TruncationMarker, the line in-process output ends with. It
+// names the bound, so an output cut under a different limit is not recognised
+// as cut and gets one more marker at its next chunk.
 func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
-	return boundAppend(len(currentOutput), strings.HasSuffix(currentOutput, remoteJobTruncationMarker), chunk, maxOutputBytes)
+	return boundAppend(len(currentOutput), strings.HasSuffix(currentOutput, domain.TruncationMarker(maxOutputBytes)), chunk, maxOutputBytes)
 }
 
 // boundAppend is boundAppendChunk for a caller that knows only how many bytes
@@ -379,7 +377,7 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 	}
 	remaining := maxOutputBytes - currentLen
 	if remaining <= 0 {
-		return remoteJobTruncationMarker
+		return domain.TruncationMarker(maxOutputBytes)
 	}
 	if len(chunk) <= remaining {
 		return chunk
@@ -390,7 +388,7 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 	for cut > 0 && !utf8.RuneStart(chunk[cut]) {
 		cut--
 	}
-	return chunk[:cut] + remoteJobTruncationMarker
+	return chunk[:cut] + domain.TruncationMarker(maxOutputBytes)
 }
 
 // CompleteJob records a job's terminal report. See domain.RemoteJobStore's

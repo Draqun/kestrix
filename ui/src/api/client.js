@@ -284,16 +284,6 @@ export async function runTask(name, task) {
   return data;
 }
 
-export async function listRuns(name, limit = 25, offset = 0) {
-  const params = new URLSearchParams();
-  if (limit) params.append('limit', limit);
-  if (offset) params.append('offset', offset);
-  const query = params.toString() ? `?${params.toString()}` : '';
-  const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs${query}`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
 export async function getRun(name, runID) {
   const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}`);
   if (!res.ok) throw new Error(`Get run failed: ${res.statusText}`);
