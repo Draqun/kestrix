@@ -374,8 +374,10 @@ type RemoteJobStore interface {
 	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error
 	// GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a
 	// nil archive and empty map if none was ever set (a non-remote run, a
-	// single-task re-run, or one that dispatched no eligible task at all -
-	// see startRemote). resumeRemoteRun resumes only runs that have one.
+	// single-task re-run, or a run with no triggered task at all - see
+	// startRemote, which stores one whenever any task is triggered, even when
+	// every triggered task is manual and nothing is dispatched at Start).
+	// resumeRemoteRun resumes only runs that have one.
 	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, secretValues []string, err error)
 	// RemoteJobSecretValues returns the resolved runtime-secret values of a
 	// job's run, for redacting what its runner sends back (trace and
