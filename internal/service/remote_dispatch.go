@@ -338,17 +338,6 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 	if run == nil || run.PipelineDef == nil {
 		return nil
 	}
-	archive, variables, secretValues, err := s.remoteJobStore.GetRemoteRunSnapshot(runID)
-	if err != nil {
-		return fmt.Errorf("load remote run snapshot: %w", err)
-	}
-	if archive == nil {
-		// No snapshot means a single-task re-run (dispatchSingleTask stores
-		// none): every dispatch below needs the archive and variables, and
-		// resolving the DAG against such a run would dispatch or skip tasks
-		// nobody asked for - remote-run-ux design.md D2.
-		return nil
-	}
 	changedSet := make(map[string]bool, len(run.Changed))
 	for _, c := range run.Changed {
 		changedSet[c] = true
@@ -360,6 +349,22 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 
 	latest := taskResultsByName(run)
 	eligible, newlySkipped := eligibleForDispatch(nodes, latest)
+	if len(eligible) == 0 && len(newlySkipped) == 0 {
+		// Nothing to dispatch or skip, so skip the snapshot too: it holds the
+		// run's whole source archive, and most completions unblock nothing.
+		return nil
+	}
+	archive, variables, secretValues, err := s.remoteJobStore.GetRemoteRunSnapshot(runID)
+	if err != nil {
+		return fmt.Errorf("load remote run snapshot: %w", err)
+	}
+	if archive == nil {
+		// No snapshot means a single-task re-run (dispatchSingleTask stores
+		// none): every dispatch below needs the archive and variables, and
+		// what was computed above would dispatch or skip tasks nobody asked
+		// for. Return before the first write - remote-run-ux design.md D2.
+		return nil
+	}
 	for _, skip := range newlySkipped {
 		if _, err := s.runStore.ApplyTaskResult(runID, skip, ""); err != nil {
 			return fmt.Errorf("record blocked task %q: %w", skip.Name, err)

@@ -544,7 +544,6 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 		t.Fatal(err)
 	}
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "t"}}, CompleteJobOK: true}
-	seedSnapshot(t, remoteJobs, runID)
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
@@ -598,6 +597,40 @@ func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
 	svc.SetRemoteJobStore(remoteJobs)
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
 		t.Fatal("expected GetRemoteRunSnapshot's error to propagate")
+	}
+}
+
+// The snapshot holds the run's whole source archive, so resumeRemoteRun reads
+// it only once a task is due to be dispatched or skipped: completing a job
+// that unblocks nothing (a parallel sibling is still running) must not pay
+// for it.
+func TestResumeRemoteRun_NothingToDispatchDoesNotLoadSnapshot(t *testing.T) {
+	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "lint", Trigger: "repo.app.changed", Execute: spec},
+		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "lint"}
+
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("CompleteRemoteJob: %v", err)
+	}
+	if got := remoteJobs.GetRemoteRunSnapshotCalls; got != 0 {
+		t.Fatalf("GetRemoteRunSnapshot called %d times for a completion that dispatches nothing, want 0", got)
+	}
+	if got := len(remoteJobs.CreateRemoteJobCalls); got != 2 {
+		t.Fatalf("jobs created = %d, want only the 2 from Start: %+v", got, remoteJobs.CreateRemoteJobCalls)
 	}
 }
 

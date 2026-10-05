@@ -615,6 +615,7 @@ type MockRemoteJobStore struct {
 	SetRemoteRunSnapshotErr   error
 	SetRemoteRunSnapshotCalls int
 	GetRemoteRunSnapshotErr   error
+	GetRemoteRunSnapshotCalls int
 }
 
 // CreateRemoteJobCall records one CreateRemoteJob invocation.
@@ -748,6 +749,7 @@ func (m *MockRemoteJobStore) SetRemoteRunSnapshot(runID int, archive []byte, var
 func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.GetRemoteRunSnapshotCalls++
 	if m.GetRemoteRunSnapshotErr != nil {
 		return nil, nil, nil, m.GetRemoteRunSnapshotErr
 	}
