@@ -1,6 +1,6 @@
 ## 1. Single-task re-runs never resume (fix first: it dispatches unrequested tasks)
 
-- [x] 1.1 `resumeRemoteRun` returns before resolving the DAG when `GetRemoteRunSnapshot` returns no snapshot (design D2). Unit test: a run with no snapshot whose single task completes dispatches nothing and records no other task result. Unit test: an approved manual task in a run with a snapshot still dispatches its dependents.
+- [x] 1.1 `resumeRemoteRun` works out which tasks are due first and returns when none is; when something is due it loads the snapshot, and returns before any write when there is none (design D2). Unit test: a run with no snapshot whose single task completes dispatches nothing and records no other task result. Unit test: an approved manual task in a run with a snapshot still dispatches its dependents, also when the run's first task is manual and nothing was dispatched at start. Unit test: a completion that unblocks nothing does not load the snapshot.
 - [x] 1.2 Integration test through `CompleteRemoteJob` against Postgres: the `lint` (`!repo.docs.changed`) / `build` / `deploy` pipeline from the proposal. After re-running `build` and completing it, `remote_jobs` holds only the `build` job.
 
 ## 2. Re-run label
@@ -9,10 +9,11 @@
 - [x] 2.2 The task-run handler and its secret-error path (`internal/web/handler_run.go`) create the run with `rerun_task` set and an empty `changed`. Handler test asserts both fields. Regenerate Swagger if the run schema is annotated.
 - [x] 2.3 UI: `Pipelines.jsx` (run list and run detail) and `PipelineEditor.jsx` show "Re-run: <task>" when `rerun_task` is set, and otherwise keep the `changed` rendering. Component tests for both cases. Run vitest memory-capped, one file at a time. Compare booleans, never DOM nodes, inside `waitFor`.
 
-## 3. Task output from the whole job
+## 3. Task output from the completing claim
 
-- [x] 3.1 Idempotent migration `remote_jobs.output TEXT NOT NULL DEFAULT ''`. `AppendJobTrace` appends the redacted chunk to it with `boundAppendChunk` in the same transaction (design D1). Integration test: two appends accumulate, and a stale-epoch append stores nothing.
-- [x] 3.2 `CompleteJob` sets the task result's `output` to the job's accumulated output plus the completion's remainder, bounded by `max_output_bytes`. Integration tests: trace-only output lands on the task; over-bound output ends with the truncation marker; the aggregate `runs.output` is unchanged from today.
+- [x] 3.1 Idempotent migration `remote_jobs.output TEXT NOT NULL DEFAULT ''`. `AppendJobTrace` appends the redacted chunk to it with `boundAppend`, bounded against that column alone and measured in the database, in the same transaction (design D1). Integration tests: two appends accumulate; a stale-epoch append stores nothing; the job's bound is independent of the run's; a cut never splits a multi-byte character.
+- [x] 3.2 `CompleteJob` sets the task result's `output` to the claim's accumulated output plus the completion's remainder (on its own line when the trace ended mid-line), bounded by `max_output_bytes`, and empties the column when the job ends (completed, fenced out or cancelled). Integration tests: trace-only output lands on the task; over-bound output ends with the truncation marker; the column is empty once the job ends; the aggregate `runs.output` still gets every chunk.
+- [x] 3.3 `ClaimNextJob` resets `trace_offset` and `remote_jobs.output` (design D5). Integration test: a job returned to the queue by `ReclaimStaleJobs` and claimed again traces from offset 0; its task result holds only the replacement claim's output and the run's aggregate holds both claims'.
 
 ## 4. Runner credentials
 
