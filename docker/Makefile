@@ -5,7 +5,8 @@
 
 COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo docker-compose)
 
-# Deps-only targets do not start kestrix, so its required key paths get a placeholder.
+# Compose interpolates the whole file, required key paths included, for every subcommand,
+# so a target that does not start kestrix (deps, teardown, inspection) gets a placeholder.
 DEPS_ENV := KESTRIX_MASTER_KEY_PATH=$${KESTRIX_MASTER_KEY_PATH:-/dev/null} KESTRIX_JWT_SIGNING_KEY_PATH=$${KESTRIX_JWT_SIGNING_KEY_PATH:-/dev/null}
 
 .PHONY: help up up-d deps-up deps-up-d down restart logs rebuild clean ps shell
@@ -43,18 +44,18 @@ deps-up-d:
 
 ## down: Stop and remove all services
 down:
-	$(COMPOSE) down
+	$(DEPS_ENV) $(COMPOSE) down
 
 ## restart: Restart all services
 restart: down up
 
 ## logs: Follow logs from all services
 logs:
-	$(COMPOSE) logs -f
+	$(DEPS_ENV) $(COMPOSE) logs -f
 
 ## logs-kestrix: Follow only Kestrix logs
 logs-kestrix:
-	$(COMPOSE) logs -f kestrix
+	$(DEPS_ENV) $(COMPOSE) logs -f kestrix
 
 ## rebuild: Rebuild images and restart
 rebuild:
@@ -63,16 +64,16 @@ rebuild:
 
 ## clean: Stop services and remove volumes
 clean:
-	$(COMPOSE) down -v
+	$(DEPS_ENV) $(COMPOSE) down -v
 	@echo "Volumes removed."
 
 ## ps: Show running services
 ps:
-	$(COMPOSE) ps
+	$(DEPS_ENV) $(COMPOSE) ps
 
 ## shell: Open a shell in the Kestrix container
 shell:
-	$(COMPOSE) exec kestrix sh
+	$(DEPS_ENV) $(COMPOSE) exec kestrix sh
 
 ## test-webhook: Send a test webhook to the local server
 test-webhook:
@@ -102,4 +103,4 @@ health:
 	@curl -s http://localhost:8080/api/health 2>/dev/null || echo "  Kestrix: not running"
 	@echo ""
 	@echo "Postgres:"
-	@$(COMPOSE) exec -T postgres pg_isready -U kestrix 2>/dev/null || echo "  Postgres: not running"
+	@$(DEPS_ENV) $(COMPOSE) exec -T postgres pg_isready -U kestrix 2>/dev/null || echo "  Postgres: not running"
