@@ -349,9 +349,10 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	return true, nil
 }
 
-// remoteJobTruncationMarker matches the marker the in-process boundedWriter
-// uses, so a client (or a human) cannot tell the two paths apart from
-// stored output alone.
+// remoteJobTruncationMarker ends a remote output - a job's own or the run's
+// aggregate - once it is cut at the bound. The in-process path appends a
+// different text (internal/service/bounded_writer.go), so the stored output of
+// the two paths can be told apart.
 const remoteJobTruncationMarker = "\n[output truncated: exceeded maximum size]"
 
 // boundAppendChunk returns the slice of chunk that should still be appended
@@ -456,9 +457,10 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 
 	var results []TaskResult
 	json.Unmarshal([]byte(taskResultsJSON), &results)
-	// The task's output is everything its trace carried plus the completion's
-	// remainder, bounded like an in-process task's - remote-run-ux design.md D1.
-	// The remainder goes on its own line, as it does in the run's aggregate.
+	// The task's output is everything the completing claim's trace carried plus
+	// the completion's remainder, bounded per task by maxOutputBytes -
+	// remote-run-ux design.md D1. The remainder goes on its own line, as it does
+	// in the run's aggregate.
 	taskOutput := jobOutput + boundAppendChunk(jobOutput, lineBreakBefore(jobOutput, output), maxOutputBytes)
 	results = append(results, TaskResult{Name: taskName, Status: status, Output: taskOutput, Error: taskError})
 	newStatus, errMsg := computeRunStatus(results)

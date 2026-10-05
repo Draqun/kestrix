@@ -208,9 +208,9 @@ The run detail shows each task's own output. For a remote task that is
 everything its runner streamed with `PATCH .../trace`, in order, followed by
 any `output` in the completion report, which goes on its own line when the
 trace ended mid-line. Kestrix redacts it and bounds it per task by
-`KESTRIX_RUNNER_MAX_OUTPUT_BYTES`, the way an in-process task's output is:
-past the bound it is cut and ends with the truncation marker. It appears when
-the task completes, not while it runs; the run's aggregate output stays live.
+`KESTRIX_RUNNER_MAX_OUTPUT_BYTES`: past the bound it is cut and ends with a
+truncation marker. It appears when the task completes, not while it runs; the
+run's aggregate output stays live.
 If [silent-runner recovery](#silent-runner-recovery) returned the job to the
 queue, the task shows only the claim that completed it, while the aggregate
 output keeps what every claim streamed.
