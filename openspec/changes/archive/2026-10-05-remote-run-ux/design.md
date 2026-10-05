@@ -16,10 +16,10 @@ workspace. The run row still gets `changed = [task]` and the full project as
 
 ```
 runner ── trace chunk ──▶ AppendJobTrace ──▶ runs.output        (aggregate, live)
-                                        └──▶ remote_jobs.output (new, per job)
+                                        └──▶ remote_jobs.output (new, per claim)
 runner ── complete ─────▶ CompleteJob ────▶ task_results[+] { output: job.output + remainder }
                           CompleteRemoteJob ─▶ resumeRemoteRun
-                                               └─ no remote snapshot → return (new)
+                                               └─ nothing due, or no remote snapshot → return (new)
 ```
 
 ## Decisions
@@ -27,10 +27,20 @@ runner ── complete ─────▶ CompleteJob ────▶ task_resul
 ### D1. Accumulate per job, write once on completion
 
 `AppendJobTrace` already locks the job row and the run row. It also appends
-the same redacted chunk to `remote_jobs.output`, bounded by
-`boundAppendChunk` against that column. `CompleteJob` builds the task
-result's `output` from that column plus the completion's remainder, bounded
-the same way.
+the same redacted chunk to `remote_jobs.output`. The bound is the
+aggregate's rule (`boundAppend`, the rule behind `boundAppendChunk`) applied
+to that column alone, so a sibling that used up the run's budget does not
+shorten this task's output. The check reads only the column's length and
+whether it already ends with the marker, in the database: a long task does
+not load its output on every chunk. A cut never splits a multi-byte
+character, because PostgreSQL rejects the invalid UTF-8 it would leave.
+`CompleteJob` builds the task result's `output` from that column plus the
+completion's remainder, which goes on its own line when the trace ended
+mid-line, bounded the same way.
+
+The column belongs to one claim (D5). When the job ends - completed, fenced
+out because its run is already terminal, or cancelled - the column is
+emptied: the task result, or the run's aggregate, already has the content.
 
 Rejected: rewriting the matching entry inside `runs.task_results` on every
 chunk. It is an append-only JSON array with several entries per task. That
@@ -39,13 +49,18 @@ completion anyway.
 
 ### D2. Nothing to resume without a snapshot
 
-`resumeRemoteRun` returns before resolving the DAG when
-`GetRemoteRunSnapshot` returns no snapshot. Every dispatch it can make needs
+`resumeRemoteRun` works out which tasks are due first (the walk is pure) and
+returns when none is: most completions unblock nothing, and the snapshot
+holds the run's whole source archive. When something is due it loads the
+snapshot, and when `GetRemoteRunSnapshot` returns none it returns before any
+write - it never dispatches, skips or records a task. Every dispatch needs
 that snapshot: without it the payload has no source archive and no
 variables. The runs that lack one are exactly single-task re-runs. This
 covers rows written before the upgrade too, and needs no new flag.
 Approval of a manual task inside a whole run still resumes, because that run
-has a snapshot.
+has a snapshot - also when nothing was dispatched at start because its first
+task is manual: `startRemote` stores the snapshot whenever any task is
+triggered.
 
 Rejected: gating on `rerun_task` (D3). It misses in-flight re-runs created
 before the upgrade, and it ties a correctness guard to a display field.
@@ -67,6 +82,20 @@ missing or non-`Bearer` header. A well-formed token the store rejects answers
 returns an error on `401`, and `cmdRunner` exits non-zero with the body.
 A database blip must not stop every runner.
 
+### D5. A claim starts its trace from scratch
+
+The runner builds a fresh trace writer per claim, so its offsets start at 0.
+`AppendJobTrace` takes an offset below the stored one for a retry and
+acknowledges it without storing anything. A job returned to the queue kept
+the superseded claim's `trace_offset`, so the replacement runner's early
+output vanished from the run's output (reproduced on `main`). `ClaimNextJob`
+now resets `trace_offset` and `remote_jobs.output`. The task result comes
+from the claim that completes the job; the run's aggregate keeps what every
+claim streamed.
+
+Rejected: continuing the superseded claim's output. Two attempts of one task
+would run together in one task result.
+
 ## Security Considerations
 
 - Output: the new column stores the chunk after server-side redaction, the
@@ -80,8 +109,9 @@ A database blip must not stop every runner.
 ## Risks / Trade-offs
 
 - A remote task's output is stored twice: in the run's aggregate and in the
-  job row until the task result is written. The per-task bound caps it.
-  Retention already prunes whole runs.
+  job row until the job ends. A job returned to the queue keeps the
+  superseded claim's output until it is claimed again or cancelled. The
+  per-task bound caps it. Retention already prunes whole runs.
 - A runner revoked mid-job exits on its next poll, after its in-flight
   completion is rejected. That is intended.
 
@@ -89,5 +119,5 @@ A database blip must not stop every runner.
 
 Two idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... NOT NULL DEFAULT
 ''` in `internal/store/pgstore.go`. Existing rows keep behaving as today
-except for D2, which needs no data. Rollback: the previous image ignores
+except for D2 and D5, which need no data. Rollback: the previous image ignores
 both columns.

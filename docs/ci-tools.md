@@ -85,6 +85,11 @@ streaming from two different runners at the same time, and only that no
 output is lost is guaranteed - not the order two concurrent tasks' lines
 appear in.
 
+A task's own output on the run detail is not affected: it is the trace of the
+claim that completed that one job, followed by any output in its completion
+report (see
+[Task output](remote-runners.md#task-output)).
+
 ### Cancellation
 
 Cancelling a run terminates its executing task before the run is recorded as

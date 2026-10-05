@@ -40,7 +40,7 @@ func TestMockProjectStore_DeleteRecordsCall(t *testing.T) {
 func TestMockRunStore_CreateRunRecordsCall(t *testing.T) {
 	m := &MockRunStore{CreateRunID: 42}
 	snap := &model.Project{Name: "demo"}
-	id, err := m.CreateRun("demo", []string{"svc"}, true, snap, "user:alice")
+	id, err := m.CreateRun("demo", []string{"svc"}, "", true, snap, "user:alice")
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}

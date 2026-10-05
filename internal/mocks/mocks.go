@@ -231,6 +231,7 @@ type MockRunStore struct {
 type createRunCall struct {
 	ProjectName   string
 	Changed       []string
+	RerunTask     string
 	IncludeManual bool
 	Snap          *model.Project
 	StartedBy     string
@@ -255,9 +256,9 @@ type applyTaskCall struct {
 	OutputExtra string
 }
 
-func (m *MockRunStore) CreateRun(p string, c []string, im bool, snap *model.Project, startedBy string) (int, error) {
+func (m *MockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string) (int, error) {
 	m.mu.Lock()
-	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, im, snap, startedBy})
+	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, rerunTask, im, snap, startedBy})
 	m.mu.Unlock()
 	return m.CreateRunID, m.CreateRunErr
 }
@@ -614,6 +615,7 @@ type MockRemoteJobStore struct {
 	SetRemoteRunSnapshotErr   error
 	SetRemoteRunSnapshotCalls int
 	GetRemoteRunSnapshotErr   error
+	GetRemoteRunSnapshotCalls int
 }
 
 // CreateRemoteJobCall records one CreateRemoteJob invocation.
@@ -747,6 +749,7 @@ func (m *MockRemoteJobStore) SetRemoteRunSnapshot(runID int, archive []byte, var
 func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string]map[string]string, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.GetRemoteRunSnapshotCalls++
 	if m.GetRemoteRunSnapshotErr != nil {
 		return nil, nil, nil, m.GetRemoteRunSnapshotErr
 	}

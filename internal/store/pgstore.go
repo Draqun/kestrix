@@ -221,6 +221,9 @@ func migrate(db *sql.DB, defaultMode string) error {
 		{"add user token version", `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1`},
 		{"add run started_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT ''`},
 		{"add run canceled_by", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS canceled_by TEXT NOT NULL DEFAULT ''`},
+		// The task a single-task re-run was started for, so the run is labelled
+		// "Re-run: <task>" instead of carrying the task name in changed.
+		{"add run rerun task", `ALTER TABLE runs ADD COLUMN IF NOT EXISTS rerun_task TEXT NOT NULL DEFAULT ''`},
 		{"add webhook event source", `ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS source_name TEXT NOT NULL DEFAULT ''`},
 		// Supports pruneRuns' `WHERE status IN (...) ORDER BY started_at DESC, id
 		// DESC LIMIT $1`, run inside every FinishRun/CancelRun transaction;
@@ -259,6 +262,10 @@ func migrate(db *sql.DB, defaultMode string) error {
 		{"add runner tags", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`},
 		{"add runner last seen", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`},
 		{"add remote job required tags", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS required_tags TEXT[] NOT NULL DEFAULT '{}'`},
+		// Every trace append accepted for a job's current claim accumulates
+		// here (a new claim empties it), so CompleteJob can put the completing
+		// claim's output on the task's result - remote-run-ux design.md D1.
+		{"add remote job output", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS output TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {

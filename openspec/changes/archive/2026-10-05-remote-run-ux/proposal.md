@@ -25,9 +25,14 @@ asked for.
 
 ## What Changes
 
-- A remote task's result carries the job's whole output: every accepted
-  trace append plus the completion's remainder. It is redacted and bounded
-  per task by `max_output_bytes`, like an in-process task's output.
+- A remote task's result carries the output of the claim that completed the
+  job: every trace append accepted from that claim plus the completion's
+  remainder. It is redacted and bounded per task by `max_output_bytes`.
+- A claim starts its trace from scratch. A job that silent-runner recovery
+  returned to the queue no longer loses its replacement runner's early output
+  from the run's output (found while building the item above): the
+  superseded claim's trace position is reset, and the task's output starts
+  over.
 - A remote run with no remote snapshot is never resumed. Single-task re-runs
   are exactly those runs, so completing one dispatches nothing else. Approving
   a manual task inside a whole run still resumes that run's dependents.
@@ -47,8 +52,9 @@ None.
 
 ### Modified Capabilities
 
-- `remote-runner-execution`: task output from the whole job; single-task
-  re-runs never resume; rejected runner credentials.
+- `remote-runner-execution`: task output from the completing claim; a claim
+  starts its trace from scratch; single-task re-runs never resume; rejected
+  runner credentials.
 - `ui-single-task-rerun`: a re-run is recorded and labelled as one.
 
 ## Non-goals

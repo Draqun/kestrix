@@ -800,7 +800,7 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 	if s.runStore == nil {
 		return 0, fmt.Errorf("run store is not configured")
 	}
-	runID, err := s.runStore.CreateRun(projectName, changed, includeManual, proj, startedBy)
+	runID, err := s.runStore.CreateRun(projectName, changed, "", includeManual, proj, startedBy)
 	if err != nil {
 		return 0, fmt.Errorf("create run: %w", err)
 	}

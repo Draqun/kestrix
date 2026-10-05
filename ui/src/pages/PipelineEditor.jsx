@@ -269,7 +269,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
                       </Typography>
                     </Box>
                     <Typography variant="caption" color="text.secondary">
-                      {run.changed?.join(', ') || '(No changes)'}
+                      {run.rerun_task ? `Re-run: ${run.rerun_task}` : run.changed?.join(', ') || '(No changes)'}
                     </Typography>
                   </Paper>
                 );
@@ -314,7 +314,7 @@ export default function PipelineEditor({ projectName, onProjectChange }) {
             <>
               <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
                 <Chip label={formatStatus(selectedRun.status).label} color={formatStatus(selectedRun.status).color} />
-                <Chip label={`Changed: ${selectedRun.changed?.join(', ') || 'none'}`} variant="outlined" />
+                <Chip label={selectedRun.rerun_task ? `Re-run: ${selectedRun.rerun_task}` : `Changed: ${selectedRun.changed?.join(', ') || 'none'}`} variant="outlined" />
                 <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto', alignSelf: 'center' }}>
                   {new Date(selectedRun.started_at).toLocaleString()}
                   {selectedRun.finished_at && ` → ${new Date(selectedRun.finished_at).toLocaleString()}`}

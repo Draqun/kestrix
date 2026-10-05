@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -354,6 +355,62 @@ func TestPollNextJob_NonOKNon204ReturnsError(t *testing.T) {
 	}
 }
 
+// remote-run-ux D4: a 401 means the token is unknown or revoked, which no
+// retry can fix, so it is a distinct error carrying the server's own message.
+func TestPollNextJob_401IsReportedDistinctly(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"json error body", `{"error":"invalid or revoked runner token"}`, "invalid or revoked runner token"},
+		{"plain body", "nope", "nope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(tc.body))
+			}))
+			defer ts.Close()
+
+			job, status, err := pollNextJob(context.Background(), ts.Client(), ts.URL, "tok")
+			if !errors.Is(err, errRunnerRejected) {
+				t.Fatalf("error = %v, want errRunnerRejected", err)
+			}
+			if want := errRunnerRejected.Error() + ": " + tc.want; err.Error() != want {
+				t.Fatalf("error = %q, want %q", err, want)
+			}
+			if status != http.StatusUnauthorized || job != nil {
+				t.Fatalf("got (%v, %d), want (nil, 401)", job, status)
+			}
+		})
+	}
+}
+
+// serverMessage is what the runner prints when its token is rejected: the
+// "error" of a JSON body, otherwise the body itself, trimmed.
+func TestServerMessage(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"json error", `{"error":"invalid or revoked runner token"}`, "invalid or revoked runner token"},
+		{"json with an empty error", `{"error":""}`, `{"error":""}`},
+		{"not json, trimmed", "  not json\n", "not json"},
+		{"empty body", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := serverMessage([]byte(tc.body)); got != tc.want {
+				t.Fatalf("serverMessage(%q) = %q, want %q", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPollNextJob_500IsNotARejection(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	if _, _, err := pollNextJob(context.Background(), ts.Client(), ts.URL, "tok"); err == nil || errors.Is(err, errRunnerRejected) {
+		t.Fatalf("error = %v, want a plain error that is not errRunnerRejected", err)
+	}
+}
+
 func TestPollNextJob_MalformedBodyReturnsDecodeError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -504,6 +561,97 @@ func TestRunPollLoop_PollErrorRetriesThenExits(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("runPollLoop did not return after context cancellation")
+	}
+}
+
+// A rejected token ends the loop at once with the server's message; the retry
+// delay is set far beyond the test's deadline to prove it is not waited out.
+func TestRunPollLoop_ReturnsWhenTokenRejected(t *testing.T) {
+	old := pollErrorRetryDelay
+	pollErrorRetryDelay = time.Hour
+	defer func() { pollErrorRetryDelay = old }()
+
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid or revoked runner token"}`))
+	}))
+	defer ts.Close()
+
+	result := make(chan error, 1)
+	go func() { result <- runPollLoop(context.Background(), ts.Client(), ts.URL, "tok", "local") }()
+
+	select {
+	case err := <-result:
+		if want := errRunnerRejected.Error() + ": invalid or revoked runner token"; !errors.Is(err, errRunnerRejected) || err.Error() != want {
+			t.Fatalf("runPollLoop = %v, want errRunnerRejected as %q", err, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runPollLoop did not return after a 401")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1: a rejected token must not be retried", got)
+	}
+}
+
+// A connection error is transient (the server may be restarting): the loop
+// keeps polling and only ctx ends it, without an error.
+func TestRunPollLoop_ConnectionErrorKeepsRetrying(t *testing.T) {
+	old := pollErrorRetryDelay
+	pollErrorRetryDelay = time.Millisecond
+	defer func() { pollErrorRetryDelay = old }()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url, client := ts.URL, ts.Client()
+	ts.Close() // closed before use: every poll fails to connect.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runPollLoop(ctx, client, url, "tok", "local") }()
+
+	select {
+	case err := <-result:
+		t.Fatalf("runPollLoop returned %v on a connection error, want it to keep retrying", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("runPollLoop = %v after cancel, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runPollLoop did not return after context cancellation")
+	}
+}
+
+// `kestrix runner` itself: a revoked runner exits non-zero naming why. The
+// process gets a deadline because, without the exit, it would poll forever.
+func TestRunnerCommand_ExitsNonZeroWhenTokenRejected(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid or revoked runner token"}`))
+	}))
+	defer ts.Close()
+
+	bin := buildKestrix(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "runner", "--server", ts.URL, "--token", "revoked")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	if ctx.Err() != nil {
+		t.Fatalf("kestrix runner kept polling after a 401 instead of exiting (stderr: %s)", stderr.String())
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
+		t.Fatalf("kestrix runner err = %v, want a non-zero exit", err)
+	}
+	if !strings.Contains(stderr.String(), "invalid or revoked runner token") {
+		t.Fatalf("stderr = %q, want it to name the server's message", stderr.String())
 	}
 }
 

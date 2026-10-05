@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
@@ -234,8 +235,12 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 		return nil, fmt.Errorf("select next pending job: %w", err)
 	}
 
+	// A claim's runner traces from offset 0 with a fresh traceWriter, so a
+	// re-claimed job drops the superseded claim's trace position and output
+	// with it: the task's result comes only from the claim that completes.
 	row := tx.QueryRow(
-		`UPDATE remote_jobs SET status = $1, runner_id = $2, claim_epoch = claim_epoch + 1, claimed_at = now(), updated_at = now()
+		`UPDATE remote_jobs SET status = $1, runner_id = $2, claim_epoch = claim_epoch + 1, claimed_at = now(), updated_at = now(),
+		   trace_offset = 0, output = ''
 		 WHERE id = $3 RETURNING `+remoteJobColumns,
 		domain.RemoteJobStatusClaimed, runnerID, jobID,
 	)
@@ -263,7 +268,10 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 // bound is already reached is dropped entirely. ok is false when epoch no
 // longer matches the job's stored claim_epoch (D1) or the job is already
 // terminal; the append is then a no-op. A first successful append on a
-// "claimed" job advances it to "running", informationally.
+// "claimed" job advances it to "running", informationally. The same chunk is
+// appended to the job's own output (remote_jobs.output), bounded against that
+// column, so CompleteJob can put the completing claim's output on the task's
+// result.
 func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -271,11 +279,20 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	}
 	defer tx.Rollback()
 
-	var runID, claimEpoch, traceOffset int
+	var runID, claimEpoch, traceOffset, jobOutputLen int
 	var jobStatus string
+	var jobTruncated bool
 	var runnerID sql.NullInt64
-	err = tx.QueryRow(`SELECT run_id, claim_epoch, status, trace_offset, runner_id FROM remote_jobs WHERE id = $1 FOR UPDATE`, jobID).
-		Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID)
+	// The job's own output is measured in the database, not loaded: the bound
+	// check needs only its length and whether the truncation marker is already
+	// there, and loading up to max_output_bytes on every chunk made a long task
+	// quadratic. right() counts characters, not bytes, so it is given the
+	// marker's length in characters: the check then holds for any marker.
+	err = tx.QueryRow(
+		`SELECT run_id, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
+		 FROM remote_jobs WHERE id = $1 FOR UPDATE`,
+		jobID, utf8.RuneCountInString(remoteJobTruncationMarker), remoteJobTruncationMarker,
+	).Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -311,10 +328,18 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	if jobStatus == domain.RemoteJobStatusClaimed {
 		newStatus = domain.RemoteJobStatusRunning
 	}
-	if _, err := tx.Exec(
-		`UPDATE remote_jobs SET status = $1, trace_offset = $2, updated_at = now() WHERE id = $3`,
-		newStatus, offset+len(chunk), jobID,
-	); err != nil {
+	// The job's own output is bounded against itself, not the run's
+	// aggregate: a sibling that used up the aggregate's budget must not
+	// shorten this task's output (remote-run-ux design.md D1). The column is
+	// rewritten only when something is appended, so a chunk past the bound
+	// leaves it alone.
+	jobUpdate := `UPDATE remote_jobs SET status = $1, trace_offset = $2, updated_at = now() WHERE id = $3`
+	jobArgs := []any{newStatus, offset + len(chunk), jobID}
+	if jobAppend := boundAppend(jobOutputLen, jobTruncated, chunk, maxOutputBytes); jobAppend != "" {
+		jobUpdate = `UPDATE remote_jobs SET status = $1, trace_offset = $2, output = output || $4, updated_at = now() WHERE id = $3`
+		jobArgs = append(jobArgs, jobAppend)
+	}
+	if _, err := tx.Exec(jobUpdate, jobArgs...); err != nil {
 		return false, fmt.Errorf("advance trace offset: %w", err)
 	}
 
@@ -324,9 +349,10 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	return true, nil
 }
 
-// remoteJobTruncationMarker matches the marker the in-process boundedWriter
-// uses, so a client (or a human) cannot tell the two paths apart from
-// stored output alone.
+// remoteJobTruncationMarker ends a remote output - a job's own or the run's
+// aggregate - once it is cut at the bound. The in-process path appends a
+// different text (internal/service/bounded_writer.go), so the stored output of
+// the two paths can be told apart.
 const remoteJobTruncationMarker = "\n[output truncated: exceeded maximum size]"
 
 // boundAppendChunk returns the slice of chunk that should still be appended
@@ -336,22 +362,35 @@ const remoteJobTruncationMarker = "\n[output truncated: exceeded maximum size]"
 // truncation marker the one time the bound is crossed, or "" once the
 // bound (marker included) has already been reached - see design.md D9.
 func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
+	return boundAppend(len(currentOutput), strings.HasSuffix(currentOutput, remoteJobTruncationMarker), chunk, maxOutputBytes)
+}
+
+// boundAppend is boundAppendChunk for a caller that knows only how many bytes
+// the current output occupies and whether it already ends with the truncation
+// marker, so it need not load the output itself.
+func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes int) string {
 	if maxOutputBytes <= 0 || chunk == "" {
 		return chunk
 	}
-	if strings.HasSuffix(currentOutput, remoteJobTruncationMarker) {
+	if truncated {
 		// The marker was already appended by an earlier chunk; every later
-		// chunk for this run is discarded.
+		// chunk for this output is discarded.
 		return ""
 	}
-	remaining := maxOutputBytes - len(currentOutput)
+	remaining := maxOutputBytes - currentLen
 	if remaining <= 0 {
 		return remoteJobTruncationMarker
 	}
 	if len(chunk) <= remaining {
 		return chunk
 	}
-	return chunk[:remaining] + remoteJobTruncationMarker
+	// Never cut inside a multi-byte character: PostgreSQL rejects the invalid
+	// UTF-8 a byte cut would leave, which failed the whole request.
+	cut := remaining
+	for cut > 0 && !utf8.RuneStart(chunk[cut]) {
+		cut--
+	}
+	return chunk[:cut] + remoteJobTruncationMarker
 }
 
 // CompleteJob records a job's terminal report. See domain.RemoteJobStore's
@@ -364,7 +403,9 @@ func boundAppendChunk(currentOutput, chunk string, maxOutputBytes int) string {
 // AppendJobTrace already bounds every trace chunk (REVIEW.md R5) - without
 // this, one completion report could append up to the runner-job request
 // body's own size bound directly to runs.output, ignoring the operator-
-// configured output budget entirely.
+// configured output budget entirely. The task's result carries the
+// completing claim's output: what AppendJobTrace accumulated for that claim,
+// then output, bounded the same way.
 func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -373,11 +414,11 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 	defer tx.Rollback()
 
 	var runID int
-	var taskName, jobStatus string
+	var taskName, jobStatus, jobOutput string
 	var claimEpoch int
 	var runnerID sql.NullInt64
-	err = tx.QueryRow(`SELECT run_id, task_name, claim_epoch, status, runner_id FROM remote_jobs WHERE id = $1 FOR UPDATE`, jobID).
-		Scan(&runID, &taskName, &claimEpoch, &jobStatus, &runnerID)
+	err = tx.QueryRow(`SELECT run_id, task_name, claim_epoch, status, runner_id, output FROM remote_jobs WHERE id = $1 FOR UPDATE`, jobID).
+		Scan(&runID, &taskName, &claimEpoch, &jobStatus, &runnerID, &jobOutput)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -400,9 +441,10 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		// was still in flight. Recording a fresh task result here would let
 		// computeRunStatus revive a run that is supposed to stay terminal -
 		// see design.md D9 and tasks.md 3.4. Mark this job terminal so it
-		// stops being reclaimed or re-offered, and still append its
+		// stops being reclaimed or re-offered (dropping its own copy of the
+		// trace: the run's output already has it), and still append its
 		// trailing output for visibility, but touch nothing else.
-		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE id = $2`, status, jobID); err != nil {
+		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
 			return false, fmt.Errorf("finalize fenced job: %w", err)
 		}
 		if toAppend := boundAppendChunk(runOutput, output, maxOutputBytes); toAppend != "" {
@@ -415,14 +457,15 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 
 	var results []TaskResult
 	json.Unmarshal([]byte(taskResultsJSON), &results)
-	results = append(results, TaskResult{Name: taskName, Status: status, Output: output, Error: taskError})
+	// The task's output is everything the completing claim's trace carried plus
+	// the completion's remainder, bounded per task by maxOutputBytes -
+	// remote-run-ux design.md D1. The remainder goes on its own line, as it does
+	// in the run's aggregate.
+	taskOutput := jobOutput + boundAppendChunk(jobOutput, lineBreakBefore(jobOutput, output), maxOutputBytes)
+	results = append(results, TaskResult{Name: taskName, Status: status, Output: taskOutput, Error: taskError})
 	newStatus, errMsg := computeRunStatus(results)
 
-	chunk := output
-	if chunk != "" && runOutput != "" && !strings.HasSuffix(runOutput, "\n") {
-		chunk = "\n" + chunk
-	}
-	out := runOutput + boundAppendChunk(runOutput, chunk, maxOutputBytes)
+	out := runOutput + boundAppendChunk(runOutput, lineBreakBefore(runOutput, output), maxOutputBytes)
 	resultsJSON, _ := json.Marshal(results)
 	finished := newStatus == "passed" || newStatus == "failed" || newStatus == "canceled"
 	if finished {
@@ -444,7 +487,9 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		}
 	}
 
-	if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE id = $2`, status, jobID); err != nil {
+	// The job-row copy of the output has done its job once the task result
+	// carries it (remote-run-ux design.md D1), so a finished job keeps none.
+	if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
 		return false, fmt.Errorf("finalize completed job: %w", err)
 	}
 
@@ -478,10 +523,12 @@ func (s *PGStore) PendingOrClaimedJobIDsForRun(runID int) ([]int, error) {
 // CancelJobsForRun marks runID's still-"pending" jobs "canceled" outright.
 // A "claimed"/"running" job is left alone - no stop signal exists (D8) - and
 // relies on CompleteJob's terminal-run fencing once its runner eventually
-// reports back.
+// reports back. A cancelled job keeps no output: one that streamed some and
+// was returned to pending by ReclaimStaleJobs still holds it until it is
+// claimed again.
 func (s *PGStore) CancelJobsForRun(runID int) error {
 	_, err := s.db.Exec(
-		`UPDATE remote_jobs SET status = $1, updated_at = now() WHERE run_id = $2 AND status = $3`,
+		`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE run_id = $2 AND status = $3`,
 		domain.RemoteJobStatusCanceled, runID, domain.RemoteJobStatusPending,
 	)
 	return err

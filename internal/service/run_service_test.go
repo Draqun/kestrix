@@ -1650,7 +1650,7 @@ type seqRunStore struct {
 	finish int
 }
 
-func (s *seqRunStore) CreateRun(string, []string, bool, *model.Project, string) (int, error) {
+func (s *seqRunStore) CreateRun(string, []string, string, bool, *model.Project, string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++
@@ -1846,7 +1846,7 @@ type seqIDMockRunStore struct {
 	next int
 }
 
-func (s *seqIDMockRunStore) CreateRun(p string, c []string, im bool, snap *model.Project, startedBy string) (int, error) {
+func (s *seqIDMockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++

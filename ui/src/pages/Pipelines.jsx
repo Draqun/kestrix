@@ -263,7 +263,9 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
         <Typography variant="h4">Run #{runId}</Typography>
         <Typography variant="h6" color="text.secondary">{projectName}</Typography>
         {st && <Chip label={st.label} color={st.color} size="small" />}
-        {r?.changed?.length > 0 && (
+        {r?.rerun_task ? (
+          <Chip label={`Re-run: ${r.rerun_task}`} size="small" variant="outlined" />
+        ) : r?.changed?.length > 0 && (
           <Chip label={`Changed: ${r.changed.join(', ')}`} size="small" variant="outlined" />
         )}
         <Box sx={{ flexGrow: 1 }} />
@@ -604,7 +606,9 @@ export function RunList({ onNewRun, onOpenRun }) {
                         {run.finished_at && ` → ${new Date(run.finished_at).toLocaleString()}`}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {run.changed?.length ? `Changed: ${run.changed.join(', ')}` : 'No changes'}
+                        {run.rerun_task
+                          ? `Re-run: ${run.rerun_task}`
+                          : run.changed?.length ? `Changed: ${run.changed.join(', ')}` : 'No changes'}
                       </Typography>
                     </Box>
                   }

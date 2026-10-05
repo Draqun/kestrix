@@ -8,11 +8,11 @@ Kestrix SHALL redact the output and the error the same way as trace output,
 SHALL bound the error's length, and SHALL record the error on the task's
 result. Kestrix SHALL record the task's result and resume
 the run's dependency graph, applying the same blocked/manual/ordering rules
-an in-process run applies. The task's result SHALL carry the job's whole
-output: every trace append Kestrix accepted for the job, in order, followed
-by the completion's remaining output. It SHALL be redacted and bounded by
-`max_output_bytes` with the truncation marker, the same as an in-process
-task's output. A
+an in-process run applies. The task's result SHALL carry the output of the
+claim that completed the job: every trace append Kestrix accepted from that
+claim, in order, followed by the completion's remaining output. It SHALL be
+redacted and bounded by `max_output_bytes`; past the bound it SHALL be cut
+and end with a truncation marker. A
 completion report SHALL present the claim epoch it was issued; Kestrix SHALL
 accept the first completion report for a given claim epoch and SHALL reject
 every subsequent one for that same epoch or for an epoch the job has moved
@@ -66,6 +66,11 @@ through a late completion.
 - **THEN** the completion SHALL be rejected
 - **AND** the task's result SHALL come only from whichever claim completes
   first under its own still-current epoch
+
+#### Scenario: A re-queued job's output starts over
+- **WHEN** silent-runner recovery returns a job that had streamed output to the queue, and another runner claims it, streams new output and completes it
+- **THEN** the task's result SHALL carry only the replacement claim's output
+- **AND** the run's aggregate output SHALL contain the output of both claims
 
 #### Scenario: Streamed output appears on the task
 - **WHEN** a runner sends a task's output as trace appends and completes the job with no remaining output

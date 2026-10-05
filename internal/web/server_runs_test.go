@@ -539,6 +539,10 @@ func TestHandleRunTask_Happy(t *testing.T) {
 	if len(mock.CreateRunCalls) != 1 || mock.CreateRunCalls[0].StartedBy != "user:dave" {
 		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:dave", mock.CreateRunCalls)
 	}
+	// remote-run-ux D3: the task is the run's re-run label, never a changed repo.
+	if call := mock.CreateRunCalls[0]; call.RerunTask != "test" || len(call.Changed) != 0 {
+		t.Fatalf("CreateRun rerunTask = %q, changed = %v; want test, none", call.RerunTask, call.Changed)
+	}
 	mock.WaitFinish()
 	// handleRunTask shares runTaskInternal with the manual-approval path
 	// (run-actor-attribution design.md D4), so a task re-run by name carries
@@ -823,6 +827,9 @@ func TestHandleRunTask_SecretResolutionError(t *testing.T) {
 	}
 	if len(mock.CreateRunCalls) != 1 {
 		t.Fatalf("CreateRunCalls = %d, want 1", len(mock.CreateRunCalls))
+	}
+	if call := mock.CreateRunCalls[0]; call.RerunTask != "deploy" || len(call.Changed) != 0 {
+		t.Fatalf("CreateRun rerunTask = %q, changed = %v; want deploy, none", call.RerunTask, call.Changed)
 	}
 	if len(mock.FinishRunCalls) != 1 {
 		t.Fatalf("FinishRunCalls = %d, want 1", len(mock.FinishRunCalls))
@@ -1336,14 +1343,14 @@ func TestHandleRunProject_ReportsQueuedStatus(t *testing.T) {
 func TestFailRunOnSecretError_NoRunStore(t *testing.T) {
 	srv := &Server{}
 	// Must not panic when no run store is configured.
-	srv.failRunOnSecretError("demo", &domain.Project{}, nil, false, "", errors.New("boom"))
+	srv.failRunOnSecretError("demo", &domain.Project{}, nil, "", false, "", errors.New("boom"))
 }
 
 func TestFailRunOnSecretError_CreateRunError(t *testing.T) {
 	buf := captureLog(t)
 	store := &mocks.MockRunStore{CreateRunErr: errors.New("create failed")}
 	srv := &Server{runStore: store}
-	srv.failRunOnSecretError("demo", &domain.Project{}, nil, false, "", errors.New("boom"))
+	srv.failRunOnSecretError("demo", &domain.Project{}, nil, "", false, "", errors.New("boom"))
 	if len(store.FinishRunCalls) != 0 {
 		t.Fatalf("FinishRun should not be called when CreateRun fails: %+v", store.FinishRunCalls)
 	}
@@ -1356,7 +1363,7 @@ func TestFailRunOnSecretError_FinishRunError(t *testing.T) {
 	buf := captureLog(t)
 	store := &mocks.MockRunStore{CreateRunID: 5, FinishRunErr: errors.New("finish failed")}
 	srv := &Server{runStore: store}
-	srv.failRunOnSecretError("demo", &domain.Project{Tasks: []domain.Task{{Name: "t"}}}, nil, false, "", errors.New("boom"))
+	srv.failRunOnSecretError("demo", &domain.Project{Tasks: []domain.Task{{Name: "t"}}}, nil, "", false, "", errors.New("boom"))
 	if !strings.Contains(buf.String(), "could not finish run record") {
 		t.Fatalf("expected a warning log naming the failure, got %q", buf.String())
 	}
@@ -1419,6 +1426,9 @@ func TestHandleRunProject_SecretResolutionError(t *testing.T) {
 	}
 	if len(mockRun.CreateRunCalls) != 1 {
 		t.Fatalf("CreateRunCalls = %d, want 1", len(mockRun.CreateRunCalls))
+	}
+	if got := mockRun.CreateRunCalls[0].RerunTask; got != "" {
+		t.Fatalf("a whole run recorded rerunTask %q, want empty", got)
 	}
 	if len(mockRun.FinishRunCalls) != 1 {
 		t.Fatalf("FinishRunCalls = %d, want 1", len(mockRun.FinishRunCalls))

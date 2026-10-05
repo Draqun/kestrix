@@ -172,7 +172,9 @@ type ProjectSource struct {
 // RunStore is the port for run lifecycle persistence.
 // Only PostgreSQL implements this.
 type RunStore interface {
-	CreateRun(projectName string, changed []string, includeManual bool, snap *Project, startedBy string) (int, error)
+	// CreateRun records a new run. rerunTask names the task of a single-task
+	// re-run (whose changed is empty); it is "" for every other run.
+	CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *Project, startedBy string) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
@@ -288,7 +290,11 @@ type RemoteJobStore interface {
 	GetRemoteJob(jobID int) (*RemoteJob, error)
 	// AppendJobTrace appends chunk to the job's run's output (a database-side
 	// append, never FlushRunOutput's whole-column overwrite - D9), bounded by
-	// maxOutputBytes the same way the in-process boundedWriter is. offset is
+	// maxOutputBytes the same way the in-process boundedWriter is. The same
+	// chunk is also appended to the job's own output, bounded against that
+	// output and not the run's, so a sibling that used up the aggregate's
+	// budget does not shorten this task's output; a new claim of the job
+	// starts that output, and its trace stream, from empty. offset is
 	// the byte position, in the job's own trace stream, chunk begins at: it
 	// must equal the job's current stored trace_offset to be applied. A
 	// lower offset is a runner's own safe retry (for example after a
@@ -319,7 +325,12 @@ type RemoteJobStore interface {
 	// for system-initiated calls (ReclaimStaleJobs's own fail-a-stale-job
 	// path); every HTTP-driven call passes the authenticated runner's ID.
 	// output is bounded by maxOutputBytes the same way AppendJobTrace's
-	// chunk is - a non-positive value means unbounded. taskError, when
+	// chunk is - a non-positive value means unbounded. The recorded task
+	// result's Output is the trace accumulated for the job's current claim
+	// (see AppendJobTrace) followed by output (on its own line when the
+	// trace ended mid-line), bounded against the job's own budget; the job's
+	// copy of the trace is then cleared, and the run's aggregate output is
+	// built separately. taskError, when
 	// non-empty, is stored as the task result's Error (remote-runner-fixes
 	// design.md D4).
 	CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
@@ -363,8 +374,11 @@ type RemoteJobStore interface {
 	// re-resolving secrets (design.md D6/D7). Called once, at run creation.
 	SetRemoteRunSnapshot(runID int, archive []byte, variables map[string]map[string]string, secretValues []string) error
 	// GetRemoteRunSnapshot returns what SetRemoteRunSnapshot stored, or a
-	// nil archive and empty map if none was ever set (a non-remote run, or
-	// one that dispatched no eligible task at all - see startRemote).
+	// nil archive and empty map if none was ever set (a non-remote run, a
+	// single-task re-run, or a run with no triggered task at all - see
+	// startRemote, which stores one whenever any task is triggered, even when
+	// every triggered task is manual and nothing is dispatched at Start).
+	// resumeRemoteRun resumes only runs that have one.
 	GetRemoteRunSnapshot(runID int) (archive []byte, variables map[string]map[string]string, secretValues []string, err error)
 	// RemoteJobSecretValues returns the resolved runtime-secret values of a
 	// job's run, for redacting what its runner sends back (trace and
@@ -710,4 +724,7 @@ type Run struct {
 	// was canceled while running or queued - see run-attribution D3 and
 	// run-concurrency-and-retention design.md D2.
 	CanceledBy string `json:"canceled_by,omitempty"`
+	// RerunTask is the task a single-task re-run was started for; empty for
+	// every other run, including runs stored before the field existed.
+	RerunTask string `json:"rerun_task"`
 }

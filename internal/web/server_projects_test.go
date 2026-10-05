@@ -1069,7 +1069,7 @@ type seqIDRunStore struct {
 	next int
 }
 
-func (s *seqIDRunStore) CreateRun(p string, c []string, im bool, snap *domain.Project, startedBy string) (int, error) {
+func (s *seqIDRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *domain.Project, startedBy string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++

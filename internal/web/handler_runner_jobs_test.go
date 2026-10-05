@@ -49,56 +49,51 @@ func setupRunnerJobServer(t *testing.T, runnerStore domain.RunnerStore, remoteJo
 
 // ── requireRunnerAuth (tasks.md 3.1) ────────────────────────────────
 
-func TestRequireRunnerAuth_NoHeaderRejected(t *testing.T) {
-	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, &mocks.MockRemoteJobStore{}, nil)
-	called := false
-	h := srv.requireRunnerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/runner-jobs/next", nil))
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", w.Code)
-	}
-	if called {
-		t.Fatal("handler must not run without credentials")
-	}
-}
+// remote-run-ux D4: the rejection says what failed. A missing or non-bearer
+// header keeps its message, a bearer token the store rejects is named as such,
+// and a failure to check the token is a 500, not a credential failure - the
+// runner stops on 401 but must survive a database blip. "Rejects" covers an
+// unknown and a revoked token alike: AuthenticateRunner reports ok=false for
+// both (RunnerStore's own contract), so the middleware has no revocation check
+// of its own.
+func TestRequireRunnerAuth_RejectionStatusAndMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		authorization string
+		store         *mocks.MockRunnerStore
+		wantStatus    int
+		wantMessage   string
+	}{
+		{"no header", "", &mocks.MockRunnerStore{AuthenticateRunnerOK: true}, http.StatusUnauthorized, "missing or malformed Authorization header"},
+		{"not a bearer token", "Basic abc123", &mocks.MockRunnerStore{AuthenticateRunnerOK: true}, http.StatusUnauthorized, "missing or malformed Authorization header"},
+		{"token the store rejects", "Bearer revoked-token", &mocks.MockRunnerStore{AuthenticateRunnerOK: false}, http.StatusUnauthorized, "invalid or revoked runner token"},
+		{"store failure", "Bearer any-token", &mocks.MockRunnerStore{AuthenticateRunnerErr: errors.New("db down")}, http.StatusInternalServerError, "could not check runner token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := setupRunnerJobServer(t, tc.store, &mocks.MockRemoteJobStore{}, nil)
+			called := false
+			h := srv.requireRunnerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+			r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
+			if tc.authorization != "" {
+				r.Header.Set("Authorization", tc.authorization)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
 
-func TestRequireRunnerAuth_WrongPrefixRejected(t *testing.T) {
-	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{AuthenticateRunnerOK: true}, &mocks.MockRemoteJobStore{}, nil)
-	h := srv.requireRunnerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
-	r.Header.Set("Authorization", "Basic abc123")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", w.Code)
-	}
-}
-
-func TestRequireRunnerAuth_UnknownTokenRejected(t *testing.T) {
-	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{AuthenticateRunnerOK: false}, &mocks.MockRemoteJobStore{}, nil)
-	h := srv.requireRunnerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
-	r.Header.Set("Authorization", "Bearer not-a-real-token")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", w.Code)
-	}
-}
-
-func TestRequireRunnerAuth_RevokedTokenRejected(t *testing.T) {
-	// AuthenticateRunner itself reports ok=false for a revoked token
-	// (RunnerStore's own contract) - the middleware has no separate
-	// revocation check of its own to duplicate that.
-	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{AuthenticateRunnerOK: false}, &mocks.MockRemoteJobStore{}, nil)
-	h := srv.requireRunnerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
-	r.Header.Set("Authorization", "Bearer revoked-token")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", w.Code)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tc.wantStatus, w.Body.String())
+			}
+			var body map[string]string
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body["error"] != tc.wantMessage {
+				t.Fatalf("error = %q, want %q", body["error"], tc.wantMessage)
+			}
+			if called {
+				t.Fatal("handler must not run when the token was not accepted")
+			}
+		})
 	}
 }
 
