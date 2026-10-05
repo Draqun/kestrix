@@ -263,8 +263,8 @@ not yours.
 is fenced out.
 
 Kestrix redacts known secrets from every chunk, `output`, and `error` again
-before storing them. The task's result shows the accepted trace chunks
-followed by `output` on its own line.
+before storing them. The task's result shows the trace chunks accepted from
+the claim that completes the job, followed by `output` on its own line.
 
 A request with a missing or non-bearer `Authorization` header is rejected
 `401 missing or malformed Authorization header`. A bearer token Kestrix does

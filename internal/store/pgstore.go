@@ -262,9 +262,9 @@ func migrate(db *sql.DB, defaultMode string) error {
 		{"add runner tags", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`},
 		{"add runner last seen", `ALTER TABLE runners ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`},
 		{"add remote job required tags", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS required_tags TEXT[] NOT NULL DEFAULT '{}'`},
-		// Every accepted trace append of a job accumulates here, so CompleteJob
-		// can put the job's whole output on the task's result - remote-run-ux
-		// design.md D1.
+		// Every trace append accepted for a job's current claim accumulates
+		// here (a new claim empties it), so CompleteJob can put the completing
+		// claim's output on the task's result - remote-run-ux design.md D1.
 		{"add remote job output", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS output TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, statement := range statements {

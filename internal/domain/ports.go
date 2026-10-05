@@ -326,10 +326,11 @@ type RemoteJobStore interface {
 	// path); every HTTP-driven call passes the authenticated runner's ID.
 	// output is bounded by maxOutputBytes the same way AppendJobTrace's
 	// chunk is - a non-positive value means unbounded. The recorded task
-	// result's Output is the job's accumulated trace followed by output (on
-	// its own line when the trace ended mid-line), bounded against the job's
-	// own budget; the job's copy of the trace is then cleared, and the run's
-	// aggregate output is built separately. taskError, when
+	// result's Output is the trace accumulated for the job's current claim
+	// (see AppendJobTrace) followed by output (on its own line when the
+	// trace ended mid-line), bounded against the job's own budget; the job's
+	// copy of the trace is then cleared, and the run's aggregate output is
+	// built separately. taskError, when
 	// non-empty, is stored as the task result's Error (remote-runner-fixes
 	// design.md D4).
 	CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)

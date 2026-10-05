@@ -9,10 +9,10 @@ import (
 	"kestrix/internal/domain"
 )
 
-// ── remote-run-ux D1: a task's result carries the job's whole output ────
+// ── remote-run-ux D1: a task's result carries the completing claim's output ──
 
-// storedJobOutput reads remote_jobs.output, the per-job accumulation of
-// every accepted trace append.
+// storedJobOutput reads remote_jobs.output, the accumulation of every trace
+// append accepted for the job's current claim.
 func storedJobOutput(t *testing.T, pg *PGStore, jobID int) string {
 	t.Helper()
 	var out string

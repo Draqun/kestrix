@@ -270,7 +270,8 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 // terminal; the append is then a no-op. A first successful append on a
 // "claimed" job advances it to "running", informationally. The same chunk is
 // appended to the job's own output (remote_jobs.output), bounded against that
-// column, so CompleteJob can put the job's whole output on the task's result.
+// column, so CompleteJob can put the completing claim's output on the task's
+// result.
 func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -401,9 +402,9 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 // AppendJobTrace already bounds every trace chunk (REVIEW.md R5) - without
 // this, one completion report could append up to the runner-job request
 // body's own size bound directly to runs.output, ignoring the operator-
-// configured output budget entirely. The task's result carries the job's
-// whole output: what AppendJobTrace accumulated, then output, bounded the same
-// way.
+// configured output budget entirely. The task's result carries the
+// completing claim's output: what AppendJobTrace accumulated for that claim,
+// then output, bounded the same way.
 func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
