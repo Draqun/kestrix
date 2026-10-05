@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -171,7 +172,9 @@ func TestPG_CompleteJob_AggregateOutputUnchangedByTaskOutput(t *testing.T) {
 
 // A reclaimed job's replacement claim starts its own trace at offset 0 (a
 // fresh traceWriter), and the task's result comes only from the claim that
-// completes, never from what the superseded claim had streamed.
+// completes, never from what the superseded claim had streamed. The run's
+// aggregate output, unlike the task's, keeps both streams
+// (docs/remote-runners.md, "Task output").
 func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "proj-reclaim-trace", "")
@@ -202,6 +205,15 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 	}
 	if got := latestTaskOutput(t, pg, runID, "build"); got != "second claim" {
 		t.Fatalf("task output = %q, want only the completing claim's %q", got, "second claim")
+	}
+	run, err := pg.GetRun(runID)
+	if err != nil || run == nil {
+		t.Fatalf("GetRun = %+v, %v", run, err)
+	}
+	for _, want := range []string{"partial output of the first claim", "second claim"} {
+		if !strings.Contains(run.Output, want) {
+			t.Fatalf("run.Output = %q, want the aggregate to keep %q", run.Output, want)
+		}
 	}
 }
 
