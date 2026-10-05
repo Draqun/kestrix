@@ -1,8 +1,9 @@
 package service
 
 import (
-	"fmt"
 	"io"
+
+	"kestrix/internal/domain"
 )
 
 // boundedWriter wraps an io.Writer, forwarding at most max bytes and
@@ -55,25 +56,19 @@ func (b *boundedWriter) Flush() error {
 	if !b.truncated {
 		return nil
 	}
-	_, err := io.WriteString(b.w, truncationMarker(b.max))
+	_, err := io.WriteString(b.w, domain.TruncationMarker(b.max))
 	return err
 }
 
-// truncationMarker names the bound so an operator knows how to raise it.
-// Shared by boundedWriter.Flush (streaming run output) and truncateOutput
-// (complete-string TaskResult.Output) so both bounds report identically.
-func truncationMarker(max int) string {
-	return fmt.Sprintf("--- output truncated at %d bytes (runner.max_output_bytes) ---\n", max)
-}
-
 // truncateOutput bounds a complete string to max bytes, appending
-// truncationMarker. Unlike boundedWriter, which wraps a live stream,
-// TaskResult.Output arrives from task runners as a single already-complete
-// buffer built independently of the run's aggregate output stream - see
-// REVIEW.md R1. A non-positive max means unbounded.
+// domain.TruncationMarker - the same line boundedWriter.Flush (streaming run
+// output) and remote output end with. Unlike boundedWriter, which wraps a
+// live stream, TaskResult.Output arrives from task runners as a single
+// already-complete buffer built independently of the run's aggregate output
+// stream - see REVIEW.md R1. A non-positive max means unbounded.
 func truncateOutput(s string, max int) string {
 	if max <= 0 || len(s) <= max {
 		return s
 	}
-	return s[:max] + truncationMarker(max)
+	return s[:max] + domain.TruncationMarker(max)
 }

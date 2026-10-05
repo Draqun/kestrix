@@ -102,7 +102,7 @@ func TestPG_AppendJobTrace_JobOutputBoundedPerJobNotPerRun(t *testing.T) {
 	if _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 10, "MORE", bound, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := storedJobOutput(t, pg, aID), "aaaaaA"+remoteJobTruncationMarker; got != want {
+	if got, want := storedJobOutput(t, pg, aID), "aaaaaA"+domain.TruncationMarker(bound); got != want {
 		t.Fatalf("job a output = %q, want %q", got, want)
 	}
 }
@@ -119,9 +119,9 @@ func TestPG_CompleteJob_TaskOutput(t *testing.T) {
 		{"remainder goes on its own line after a trace that ends mid-line", []string{"abc"}, "def", 0, "abc\ndef"},
 		{"no extra line break after a trace that ends in one", []string{"abc\n"}, "def", 0, "abc\ndef"},
 		{"remainder only", nil, "done", 0, "done"},
-		{"trace over the bound", []string{"0123456789ABC"}, "", 10, "0123456789" + remoteJobTruncationMarker},
-		{"remainder crosses the bound", []string{"abc"}, "0123456789", 10, "abc\n012345" + remoteJobTruncationMarker},
-		{"remainder after the marker is dropped", []string{"0123456789ABC"}, "MORE", 10, "0123456789" + remoteJobTruncationMarker},
+		{"trace over the bound", []string{"0123456789ABC"}, "", 10, "0123456789" + domain.TruncationMarker(10)},
+		{"remainder crosses the bound", []string{"abc"}, "0123456789", 10, "abc\n012345" + domain.TruncationMarker(10)},
+		{"remainder after the marker is dropped", []string{"0123456789ABC"}, "MORE", 10, "0123456789" + domain.TruncationMarker(10)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pg := testPG(t)
@@ -266,11 +266,11 @@ func TestBoundAppendChunk_NeverSplitsACharacter(t *testing.T) {
 		max                  int
 		want                 string
 	}{
-		{"cut inside a 3-byte character backs off to its start", "", "€€€", 4, "€" + remoteJobTruncationMarker},
-		{"cut on a character boundary is kept", "", "€€€", 6, "€€" + remoteJobTruncationMarker},
-		{"4-byte character", "", "😀😀", 5, "😀" + remoteJobTruncationMarker},
-		{"budget smaller than the first character leaves only the marker", "", "€", 2, remoteJobTruncationMarker},
-		{"budget left by earlier output", "ab", "€€", 4, remoteJobTruncationMarker},
+		{"cut inside a 3-byte character backs off to its start", "", "€€€", 4, "€" + domain.TruncationMarker(4)},
+		{"cut on a character boundary is kept", "", "€€€", 6, "€€" + domain.TruncationMarker(6)},
+		{"4-byte character", "", "😀😀", 5, "😀" + domain.TruncationMarker(5)},
+		{"budget smaller than the first character leaves only the marker", "", "€", 2, domain.TruncationMarker(2)},
+		{"budget left by earlier output", "ab", "€€", 4, domain.TruncationMarker(4)},
 		{"fits exactly", "", "€€", 6, "€€"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,7 +301,7 @@ func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
 			jobID := mustCreateRemoteJob(t, pg, runID, "build")
 			job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-multibyte-bound"))
 			const bound = 4
-			want := "€" + remoteJobTruncationMarker
+			want := "€" + domain.TruncationMarker(bound)
 
 			if tc.trace != "" {
 				if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.trace, bound, nil); err != nil || !ok {
@@ -342,7 +342,7 @@ func TestPG_AppendJobTrace_JobOutputBoundCountsBytes(t *testing.T) {
 		}
 		offset += len(chunk)
 	}
-	if got, want := storedJobOutput(t, pg, jobID), "€€a"+remoteJobTruncationMarker; got != want {
+	if got, want := storedJobOutput(t, pg, jobID), "€€a"+domain.TruncationMarker(bound); got != want {
 		t.Fatalf("remote_jobs.output = %q, want %q", got, want)
 	}
 }
@@ -397,7 +397,7 @@ func TestPG_AppendJobTrace_ChunksPastTheBoundStillAdvanceTheStream(t *testing.T)
 		offset += len(chunk)
 	}
 	send("abcdef") // crosses the bound: "abcd" and the marker
-	want := "abcd" + remoteJobTruncationMarker
+	want := "abcd" + domain.TruncationMarker(bound)
 
 	for _, chunk := range []string{"ghi", "jkl"} { // both dropped
 		if _, err := pg.db.Exec(`UPDATE remote_jobs SET updated_at = now() - interval '1 hour' WHERE id = $1`, jobID); err != nil {
