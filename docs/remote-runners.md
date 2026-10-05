@@ -251,8 +251,10 @@ is pending, otherwise `200` with the claimed job:
 | `payload.archive` | Base64 tar.gz of the source checkout |
 
 **`PATCH /api/runner-jobs/{id}/trace`** with `{"epoch", "offset", "chunk"}`
-appends output; `offset` is the number of bytes already accepted. `204` on
-success, `409` when the epoch is stale or the job is not yours.
+appends output; `offset` is the number of bytes already accepted for this
+claim, so every claim - a re-claim after silent-runner recovery included -
+starts at `0`. `204` on success, `409` when the epoch is stale or the job is
+not yours.
 
 **`PUT /api/runner-jobs/{id}/complete`** with `{"epoch", "status", "output",
 "error"}` reports the outcome once. `status` is `passed` or `failed`;
