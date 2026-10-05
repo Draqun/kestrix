@@ -779,3 +779,41 @@ func TestResumeRemoteRun_ApprovedManualTaskInWholeRunStillDispatchesDependents(t
 		t.Fatalf("expected notify dispatched after deploy was approved and passed, got %+v", calls)
 	}
 }
+
+// A whole run can start with nothing eligible - its first task is manual - and
+// must still resume: Start stores the snapshot whenever any task is triggered,
+// not only when a job is dispatched, so approving that task and completing it
+// dispatches the task that depends on it.
+func TestResumeRemoteRun_WholeRunStartedWithOnlyAManualTaskResumesAfterApproval(t *testing.T) {
+	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "deploy", Trigger: "repo.app.changed", Manual: true, Execute: spec},
+		{Name: "notify", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+	opts := domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New()}
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, opts)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if len(remoteJobs.CreateRemoteJobCalls) != 0 {
+		t.Fatalf("nothing is eligible at Start, got %+v", remoteJobs.CreateRemoteJobCalls)
+	}
+
+	// Approving deploy dispatches it (job 1); its completion must resume notify.
+	if _, dispatched, err := svc.RunTask(context.Background(), runID, "proj", proj, "deploy", opts); err != nil || !dispatched {
+		t.Fatalf("RunTask deploy = dispatched %v, err %v", dispatched, err)
+	}
+	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "deploy"}
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("complete deploy: %v", err)
+	}
+	calls := remoteJobs.CreateRemoteJobCalls
+	if len(calls) != 2 || calls[1].TaskName != "notify" {
+		t.Fatalf("expected notify dispatched after deploy was approved and passed, got %+v", calls)
+	}
+}
