@@ -372,7 +372,7 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 	}
 	if truncated {
 		// The marker was already appended by an earlier chunk; every later
-		// chunk for this run is discarded.
+		// chunk for this output is discarded.
 		return ""
 	}
 	remaining := maxOutputBytes - currentLen
