@@ -41,16 +41,21 @@ None.
 
 - `remote-runner-execution`: a remote run finishes after its dependents are
   decided.
+- `hexagonal-ports`: the `RunStore` port exposes `FinishRunIfDone`.
+- `service-layer`: a remote run is finished by the service, once its
+  dependents are decided.
 
 ## Non-goals
 
-- Manual gates. A manual task has no result until approved, so the run still
-  finishes without it and the approval still reopens it.
+- Manual gates. A remote run never dispatches a manual task and records no
+  result for it, so the run finishes without it and the gate cannot be
+  approved. This change does not change that.
 - A task whose dependency was not triggered. It is neither dispatched nor
   skipped today (checked: `eligibleForDispatch` returns nothing for it), and
   stays so.
-- Silent-runner recovery. Failing a stale job still finishes the run in the
-  same transaction.
+- Silent-runner recovery. Failing a stale job still ends the run in the same
+  transaction - when the run's results leave nothing in flight; a run with a
+  sibling still in flight keeps running.
 - `ApplyTaskResult` moving a finished run back to `running`.
 - Recording dependents as `skipped` after a failure has already finished the
   run.
@@ -58,7 +63,8 @@ None.
 ## Impact
 
 - No schema change.
-- Ports: `RemoteJobStore.CompleteJob` gains a flag; `RunStore` gains a method
-  that finishes a run from its results.
+- Ports: `RunStore` gains a method that finishes a run from its results;
+  `RemoteJobStore.CompleteJob` keeps one protocol - a completion never
+  finishes the run.
 - Code: `internal/store`, `internal/service` (`CompleteRemoteJob`,
   `resumeRemoteRun`), mocks, `docs/remote-runners.md`, `CHANGELOG.md`.

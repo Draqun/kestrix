@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,16 +27,23 @@ func (s *RunService) SetRemoteJobStore(store domain.RemoteJobStore) {
 	s.remoteJobStore = store
 }
 
-// runLocker hands out one *sync.Mutex per run ID, so concurrent
-// resumeRemoteRun calls for the same run serialize while calls for
-// different runs never block each other. An in-process lock is enough to
-// close the double-dispatch race REVIEW.md's R4 describes because Phase 1
-// has exactly one control-plane process owning remote_jobs (design.md
-// Risks: "two runners, one project" scale) - the same assumption
-// runnerPollLimiter (internal/web/handler_runner_jobs.go) already makes for
-// its own per-runner concurrency bound. Entries are never removed: Phase 1's
-// run volume makes that an acceptable, bounded-by-run-count trade against
-// the complexity of reference-counted cleanup.
+// runLocker hands out one *sync.Mutex per run ID, so two completions of one
+// run serialize while completions of different runs never block each other.
+// CompleteRemoteJob takes the lock and holds it across the whole completion
+// path: the result write, the walker that dispatches what the completion
+// unblocked, and the finishing of the run.
+//
+// An in-process lock orders those completions only while one control-plane
+// process owns remote_jobs. A second process would reach the same
+// eligibility conclusion about a shared dependent and dispatch it twice;
+// the database's unique index rejects the second job, and the walker treats
+// that rejection as a no-op - the task stays dispatched and the run keeps
+// going. The single-process premise is the constraint documented in
+// docs/architecture.md ("Single-instance constraint").
+//
+// Entries are never removed: Phase 1's run volume makes that an acceptable,
+// bounded-by-run-count trade against the complexity of reference-counted
+// cleanup.
 type runLocker struct {
 	mu    sync.Mutex
 	locks map[int]*sync.Mutex
@@ -167,12 +175,14 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) 
 		for _, dep := range task.DependsOn {
 			d, ok := latest[dep]
 			if !ok || d.Status == "pending" || d.Status == "running" || d.Status == "claimed" || d.Status == "manual" {
+				// The dependency is not decided yet: the task waits,
+				// whatever its other dependencies say - the decision
+				// belongs to the pass that resolves the last one.
 				unresolved = true
-				break
+				continue
 			}
 			if d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped" {
 				blocked = true
-				break
 			}
 		}
 		if unresolved {
@@ -294,6 +304,18 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 // caller may only complete a job it holds the current claim on, per
 // callerRunnerID - and otherwise triggers the dependency-graph resumption
 // walker (tasks.md 3.6) for any task that just became eligible.
+//
+// The run's lock covers the whole path: the result write, the walker and
+// the finishing of the run. Two jobs of one run completing at the same
+// moment are then handled one after the other, so neither can finish the
+// run on a view that does not yet hold the other's result -
+// remote-run-waits-for-dependents design.md D3.
+//
+// The store's completion does not finish the run: it only records the
+// result, the walker decides what that result unblocked, and only then does
+// this function finish the run, with the status its results imply - a run
+// whose dependent has not been dispatched yet stays "running"
+// (remote-run-waits-for-dependents design.md D1/D2).
 func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int) (bool, error) {
 	job, err := s.remoteJobStore.GetRemoteJob(jobID)
 	if err != nil {
@@ -302,6 +324,8 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 	if job == nil {
 		return false, nil
 	}
+	unlock := s.runLocks.lock(job.RunID)
+	defer unlock()
 	ok, err := s.remoteJobStore.CompleteJob(jobID, epoch, status, output, taskError, callerRunnerID, s.MaxOutputBytes)
 	if err != nil {
 		return false, fmt.Errorf("complete remote job %d: %w", jobID, err)
@@ -309,10 +333,50 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 	if !ok {
 		return false, nil
 	}
-	if err := s.resumeRemoteRun(job.RunID); err != nil {
-		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, err)
+	decided, resumeErr := s.resumeRemoteRun(job.RunID)
+	if resumeErr != nil && !decided {
+		// The walker failed before it knew what was due, so the run
+		// keeps running: finishing it here would hide the tasks that
+		// were never dispatched -
+		// remote-run-waits-for-dependents design.md D5.
+		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, resumeErr)
+	}
+	// The batch was decided - every due task has a job or a recorded
+	// failure - so the run takes the status its results imply, and a
+	// dispatch failure travels on top of it -
+	// remote-run-waits-for-dependents design.md D5.
+	if err := s.finishRunWithRetry(job.RunID); err != nil {
+		if resumeErr != nil {
+			return true, errors.Join(fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err), resumeErr)
+		}
+		return true, fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err)
+	}
+	if resumeErr != nil {
+		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, resumeErr)
 	}
 	return true, nil
+}
+
+// finishRunAttempts bounds how often the run's finishing write is retried.
+const finishRunAttempts = 3
+
+// finishRunWithRetry finishes the run, retrying a failed write. The completion that
+// led here is already recorded, so a lost finishing write would leave the
+// run "running" with every task terminal and nothing left that would ever
+// finish it - only the startup sweep, which runs once, at process start -
+// remote-run-waits-for-dependents design.md D5. A write that keeps failing
+// leaves the run running until that sweep marks it failed.
+func (s *RunService) finishRunWithRetry(runID int) error {
+	var err error
+	for attempt := 0; attempt < finishRunAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 50 * time.Millisecond)
+		}
+		if err = s.runStore.FinishRunIfDone(runID); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // resumeRemoteRun is tasks.md 3.6: given runID's persisted task_results and
@@ -321,22 +385,31 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 // internal/runner's taskLoop applies in-process (eligibleForDispatch) - and
 // dispatches a job for each, reusing the archive and resolved variables
 // startRemote persisted once at run creation (design.md D6/D7). A task
-// newly blocked by a failed dependency is recorded "skipped" via the same
-// path CancelRun uses for a blocked dependent. Serialized per run via
-// resumeLocks (REVIEW.md R4): two jobs of one run completing at nearly the
-// same time both call this, and without serializing, both could reach the
-// same eligibility conclusion about a shared dependent and dispatch it
-// twice.
-func (s *RunService) resumeRemoteRun(runID int) error {
-	unlock := s.resumeLocks.lock(runID)
-	defer unlock()
-
+// newly blocked by a failed dependency is recorded "skipped" by the walker
+// itself, through AppendTaskResult, with the error "dependency failed" -
+// not through CancelRun, which writes the skipped results of a canceled run
+// itself, with "dependency canceled". The caller holds the run's lock
+// (remote-run-waits-for-dependents design.md D3), which keeps two jobs of
+// one run completing at the same moment from reaching the same eligibility
+// conclusion about a shared dependent and dispatching it twice.
+//
+// decided says whether the walker got as far as knowing what was due:
+// every due task then has a job or a recorded failure, so the run's status
+// can be decided. A false with an error means the walker stopped earlier,
+// and the run must stay running (design.md D5).
+func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 	run, err := s.runStore.GetRun(runID)
 	if err != nil {
-		return fmt.Errorf("get run %d: %w", runID, err)
+		return false, fmt.Errorf("get run %d: %w", runID, err)
 	}
 	if run == nil || run.PipelineDef == nil {
-		return nil
+		return true, nil
+	}
+	if domain.IsTerminalRunStatus(run.Status) {
+		// The run was canceled (or otherwise finished) before this walker
+		// ran: it stays that way, and nothing is dispatched for it -
+		// remote-run-waits-for-dependents design.md D4.
+		return true, nil
 	}
 	changedSet := make(map[string]bool, len(run.Changed))
 	for _, c := range run.Changed {
@@ -344,7 +417,7 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 	}
 	nodes, err := dag.New(*run.PipelineDef).Resolve(changedSet)
 	if err != nil {
-		return fmt.Errorf("resolve pipeline: %w", err)
+		return false, fmt.Errorf("resolve pipeline: %w", err)
 	}
 
 	latest := taskResultsByName(run)
@@ -352,35 +425,90 @@ func (s *RunService) resumeRemoteRun(runID int) error {
 	if len(eligible) == 0 && len(newlySkipped) == 0 {
 		// Nothing to dispatch or skip, so skip the snapshot too: it holds the
 		// run's whole source archive, and most completions unblock nothing.
-		return nil
+		return true, nil
 	}
 	archive, variables, secretValues, err := s.remoteJobStore.GetRemoteRunSnapshot(runID)
 	if err != nil {
-		return fmt.Errorf("load remote run snapshot: %w", err)
+		return false, fmt.Errorf("load remote run snapshot: %w", err)
 	}
 	if archive == nil {
 		// No snapshot means a single-task re-run (dispatchSingleTask stores
 		// none): every dispatch below needs the archive and variables, and
 		// what was computed above would dispatch or skip tasks nobody asked
 		// for. Return before the first write - remote-run-ux design.md D2.
-		return nil
+		return true, nil
 	}
 	for _, skip := range newlySkipped {
-		if _, err := s.runStore.ApplyTaskResult(runID, skip, ""); err != nil {
-			return fmt.Errorf("record blocked task %q: %w", skip.Name, err)
+		// AppendTaskResult records the result and leaves the run's status
+		// alone: the walker never decides the run's status. The run takes it
+		// once, after the walker, through FinishRunIfDone - see
+		// remote-run-waits-for-dependents design.md D1.
+		if err := s.runStore.AppendTaskResult(runID, skip); err != nil {
+			return false, fmt.Errorf("record blocked task %q: %w", skip.Name, err)
 		}
 	}
+	// A dispatch failure does not abandon the batch: every task that became
+	// due gets either a job or a recorded failure, and the run's status is
+	// decided once, after the batch -
+	// remote-run-waits-for-dependents design.md D5.
+	var dispatchErrs []error
 	for _, task := range eligible {
-		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
+		if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"}); err != nil {
+			// The "pending" record is what tells the next walker pass that
+			// the task is decided; without it the task would be dispatched
+			// a second time - so the task is recorded failed instead of
+			// being dispatched -
+			// remote-run-waits-for-dependents design.md D5.
+			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("record pending task %q: %w", task.Name, err)))
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
+			continue
+		}
 		payload := domain.RemoteJobPayload{
 			Task: task, Repos: sanitizeReposForPayload(run.PipelineDef.Repos), DefaultImage: run.PipelineDef.DefaultImage,
 			Variables: variables[task.Name], SecretValues: secretValues, Archive: archive,
 		}
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
-			return fmt.Errorf("dispatch task %q: %w", task.Name, err)
+			if errors.Is(err, domain.ErrRemoteJobExists) {
+				// The task already has an active job: it is dispatched,
+				// not failed, and the run keeps going.
+				continue
+			}
+			// The task became due and its job cannot be created: record the
+			// task failed, naming the failure, so the run ends failed
+			// instead of staying running with a task that has no job -
+			// remote-run-waits-for-dependents design.md D5.
+			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err)))
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
+			continue
 		}
 	}
-	return nil
+	if len(dispatchErrs) > 0 {
+		// A task that could not be dispatched is failed, so its own
+		// dependents are blocked: record them skipped, so the run's
+		// results name every task that will not run. This pass can only
+		// skip: every task the first pass made eligible was seeded
+		// (dispatched "pending" or recorded "failed"), so none of them is
+		// eligible again.
+		_, newlyBlocked := eligibleForDispatch(nodes, latest)
+		for _, skip := range newlyBlocked {
+			if err := s.runStore.AppendTaskResult(runID, skip); err != nil {
+				dispatchErrs = append(dispatchErrs, fmt.Errorf("record blocked task %q: %w", skip.Name, err))
+			}
+		}
+		return true, fmt.Errorf("dispatch failed: %w", errors.Join(dispatchErrs...))
+	}
+	return true, nil
+}
+
+// recordDispatchFailure records the task failed, naming why, so the run
+// ends failed instead of staying running with a task that has no job - it
+// returns the failure it recorded, joined with the write error when the
+// failure could not be recorded at all.
+func (s *RunService) recordDispatchFailure(runID int, taskName string, cause error) error {
+	if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: taskName, Status: "failed", Error: cause.Error()}); err != nil {
+		return errors.Join(cause, fmt.Errorf("record failed task %q: %w", taskName, err))
+	}
+	return cause
 }
 
 // ReclaimStaleRemoteJobs is silent-runner recovery's periodic check

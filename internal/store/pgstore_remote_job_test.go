@@ -286,7 +286,7 @@ func TestPG_AppendJobTrace_BoundedTruncatesOnce(t *testing.T) {
 
 	// The job still completes normally after truncation - it is not failed
 	// by the bound.
-	if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob after truncation = (%v, %v)", ok, err)
 	}
 }
@@ -413,7 +413,7 @@ func TestPG_CompleteJob_RecordsResultAndResumesNothingBlocked(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-complete"))
 
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", nil, 0, true)
 	if err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
@@ -444,7 +444,7 @@ func TestPG_CompleteJob_OutputBoundedByMaxOutputBytes(t *testing.T) {
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-complete-bound"))
 
 	const bound = 10
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "0123456789OVERFLOW", "", nil, bound)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "0123456789OVERFLOW", "", nil, bound, true)
 	if err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
@@ -476,7 +476,7 @@ func TestPG_CompleteJob_FencedRunOutputAlsoBounded(t *testing.T) {
 	}
 
 	bound := len(priorOutput.Output) + 5
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "0123456789", "", nil, bound)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "0123456789", "", nil, bound, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +500,7 @@ func TestPG_CompleteJob_StaleEpochRejected(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-complete-stale"))
 
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch+1, domain.RemoteJobStatusPassed, "ghost", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch+1, domain.RemoteJobStatusPassed, "ghost", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestPG_CompleteJob_WrongRunnerRejected(t *testing.T) {
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-owner-complete"))
 	intruder := mustCreateRunner(t, pg, "r-intruder-complete")
 
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "forged", "", &intruder, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "forged", "", &intruder, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestPG_CompleteJob_NeverClaimedJobRejectsGuessedZeroEpoch(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	attacker := mustCreateRunner(t, pg, "r-attacker-complete")
 
-	ok, err := pg.CompleteJob(jobID, 0, domain.RemoteJobStatusPassed, "forged", "", &attacker, 0)
+	ok, err := pg.completeJob(jobID, 0, domain.RemoteJobStatusPassed, "forged", "", &attacker, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +571,7 @@ func TestPG_CompleteJob_OwningRunnerSucceeds(t *testing.T) {
 	runnerID := mustCreateRunner(t, pg, "r-owner-complete-ok")
 	job, _ := pg.ClaimNextJob(runnerID)
 
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", &runnerID, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", &runnerID, 0, true)
 	if err != nil || !ok {
 		t.Fatalf("CompleteJob from the owning runner = (%v, %v)", ok, err)
 	}
@@ -587,7 +587,7 @@ func TestPG_CompleteJob_NilCallerBypassesOwnershipForSystemCalls(t *testing.T) {
 	// A nil callerRunnerID is what ReclaimStaleJobs's own internal fail-path
 	// uses - not attributed to any authenticated runner, so it must still be
 	// able to finalize the job regardless of who claimed it.
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "reclaimed", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "reclaimed", "", nil, 0, true)
 	if err != nil || !ok {
 		t.Fatalf("CompleteJob with nil callerRunnerID = (%v, %v)", ok, err)
 	}
@@ -600,10 +600,10 @@ func TestPG_CompleteJob_DuplicateForSameEpochIsNoOp(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-dup"))
 
-	if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "first", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "first", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("first CompleteJob = (%v, %v)", ok, err)
 	}
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "second", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "second", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +631,7 @@ func TestPG_CompleteJob_UnderSupersededEpochRejected(t *testing.T) {
 	}
 	// The original, merely-slow runner's completion under its old epoch
 	// must be rejected.
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +661,7 @@ func TestPG_CompleteJob_RunAlreadyTerminal_StoresOutputOnlyByFailInterruptedRuns
 	}
 	priorOutput := run.Output
 
-	ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late but real output", "", nil, 0)
+	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late but real output", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +702,7 @@ func TestPG_CompleteJob_RunInterleavedTerminalRejected(t *testing.T) {
 	// A sibling job fails. b is still running (its claim recorded it so,
 	// remote-runner-fixes D5), so the run stays running like an in-process
 	// run would...
-	if ok, err := pg.CompleteJob(jobAID, jobA.ClaimEpoch, domain.RemoteJobStatusFailed, "a failed", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobAID, jobA.ClaimEpoch, domain.RemoteJobStatusFailed, "a failed", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob(a) = (%v, %v)", ok, err)
 	}
 	run, err := pg.GetRun(runID)
@@ -718,7 +718,7 @@ func TestPG_CompleteJob_RunInterleavedTerminalRejected(t *testing.T) {
 	}
 
 	// Job b's completion now arrives against an already-terminal run.
-	ok, err := pg.CompleteJob(jobBID, jobB.ClaimEpoch, domain.RemoteJobStatusPassed, "b output", "", nil, 0)
+	ok, err := pg.completeJob(jobBID, jobB.ClaimEpoch, domain.RemoteJobStatusPassed, "b output", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +729,7 @@ func TestPG_CompleteJob_RunInterleavedTerminalRejected(t *testing.T) {
 
 func TestPG_CompleteJob_UnknownJob(t *testing.T) {
 	pg := testPG(t)
-	ok, err := pg.CompleteJob(999999, 1, domain.RemoteJobStatusPassed, "x", "", nil, 0)
+	ok, err := pg.completeJob(999999, 1, domain.RemoteJobStatusPassed, "x", "", nil, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +786,7 @@ func TestPG_PendingOrClaimedJobIDsForRun(t *testing.T) {
 	aID := mustCreateRemoteJob(t, pg, runID, "a")
 	bID := mustCreateRemoteJob(t, pg, runID, "b")
 	jobA, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-outstanding-ids"))
-	if _, err := pg.CompleteJob(jobA.ID, jobA.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0); err != nil {
+	if _, err := pg.completeJob(jobA.ID, jobA.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -829,7 +829,7 @@ func TestPG_ReclaimStaleJobs_ReturnsToPendingAndBumpsEpoch(t *testing.T) {
 	if ok, _ := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "late", 0, nil); ok {
 		t.Fatal("expected old-epoch trace append to be rejected after reclaim")
 	}
-	if ok, _ := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late", "", nil, 0); ok {
+	if ok, _ := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late", "", nil, 0, true); ok {
 		t.Fatal("expected old-epoch completion to be rejected after reclaim")
 	}
 
@@ -889,7 +889,7 @@ func TestPG_ReclaimStaleJobs_TerminalRunJobNeverReclaimedOrOffered(t *testing.T)
 	jobBID := mustCreateRemoteJob(t, pg, runID, "b")
 	jobA, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-terminal-reclaim"))
 	// Job b stays pending. Fail the run out from under both via job a.
-	if ok, err := pg.CompleteJob(jobAID, jobA.ClaimEpoch, domain.RemoteJobStatusFailed, "a failed", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobAID, jobA.ClaimEpoch, domain.RemoteJobStatusFailed, "a failed", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob(a) = (%v, %v)", ok, err)
 	}
 
@@ -950,7 +950,7 @@ func TestPG_OutstandingJobRunIDsForProject(t *testing.T) {
 	}
 
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-has-outstanding"))
-	if _, err := pg.CompleteJob(job.ID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0); err != nil {
+	if _, err := pg.completeJob(job.ID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true); err != nil {
 		t.Fatal(err)
 	}
 	ids, err = pg.OutstandingJobRunIDsForProject("proj-has-outstanding")

@@ -164,6 +164,26 @@ type Claims struct {
 	ExpiresAt    time.Time
 }
 
+// A run's terminal status: the values the runs.status column takes once the
+// run is finished. A run that is not finished reads "queued" or "running".
+const (
+	RunStatusPassed   = "passed"
+	RunStatusFailed   = "failed"
+	RunStatusCanceled = "canceled"
+)
+
+// IsTerminalRunStatus reports whether a run's status is one it never leaves:
+// passed, failed or canceled. One rule, shared by the service and the store,
+// so the two never disagree about when a run is finished - see
+// remote-run-waits-for-dependents design.md D2.
+func IsTerminalRunStatus(status string) bool {
+	switch status {
+	case RunStatusPassed, RunStatusFailed, RunStatusCanceled:
+		return true
+	}
+	return false
+}
+
 // TaskResult captures the outcome of a single task execution.
 // It is the single source of truth for task results across the runner,
 // store, and service layers.

@@ -195,12 +195,12 @@ func migrate(db *sql.DB, defaultMode string) error {
 		CREATE INDEX IF NOT EXISTS idx_remote_jobs_run ON remote_jobs(run_id);
 		ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS trace_offset INTEGER NOT NULL DEFAULT 0;
 
-		-- Backstop against resumeRemoteRun dispatching one task twice for the
-		-- same run (REVIEW.md R4): RunService.resumeLocks already serializes
-		-- that in-process, but this catches it at the database layer too -
-		-- only non-terminal jobs are constrained, so a single-task re-run
-		-- dispatching a fresh job for a task whose earlier job already went
-		-- terminal is unaffected.
+		-- Backstop against the walker dispatching one task twice for the
+		-- same run (REVIEW.md R4): RunService.runLocks already serializes
+		-- the whole completion path in-process, but this catches it at the
+		-- database layer too - only non-terminal jobs are constrained, so a
+		-- single-task re-run dispatching a fresh job for a task whose earlier
+		-- job already went terminal is unaffected.
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_jobs_run_task_active
 			ON remote_jobs(run_id, task_name)
 			WHERE status NOT IN ('passed', 'failed', 'canceled');

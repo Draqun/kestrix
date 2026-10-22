@@ -493,13 +493,17 @@ type RunService struct {
 	// Nil (the default, until SetRemoteJobStore is called) means Start,
 	// RunTask, and ApproveManualTask never branch into that path.
 	remoteJobStore domain.RemoteJobStore
-	// resumeLocks serializes resumeRemoteRun per run ID (remote-runner-
-	// registration REVIEW.md R3/R4): two jobs of one run completing at
-	// nearly the same time both trigger resumption, and without this a
-	// dependent both racers agree has become eligible could be dispatched
-	// twice. See remote_dispatch.go's runLocker doc for why an in-process
-	// mutex is enough here rather than a DB-level lock.
-	resumeLocks *runLocker
+	// runLocks serializes the whole completion path per run ID
+	// (remote-runner-registration REVIEW.md R3/R4, remote-run-waits-for-
+	// dependents design.md D3): two jobs of one run completing at nearly the
+	// same time both record a result, resume the run and finish it, and
+	// without this a dependent both racers agree has become eligible could
+	// be dispatched twice - and one of them could finish the run before the
+	// other one's result is recorded. See remote_dispatch.go's runLocker doc
+	// for why an in-process mutex is enough here rather than a DB-level
+	// lock, and docs/architecture.md for the single-instance constraint it
+	// rests on.
+	runLocks *runLocker
 
 	// CancelGrace bounds how long Cancel waits, beyond an extra 5s, for an
 	// active run's executeRun goroutine to return after its context is
@@ -563,12 +567,12 @@ func (s *RunService) CheckLocalAllowed(mode string) error {
 // NewRunService creates a RunService.
 func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, taskRunner domain.TaskRunner) *RunService {
 	return &RunService{
-		runStore:    runStore,
-		pipeline:    pipeline,
-		taskRunner:  taskRunner,
-		active:      make(map[int]activeRun),
-		done:        make(map[int]chan struct{}),
-		resumeLocks: newRunLocker(),
+		runStore:   runStore,
+		pipeline:   pipeline,
+		taskRunner: taskRunner,
+		active:     make(map[int]activeRun),
+		done:       make(map[int]chan struct{}),
+		runLocks:   newRunLocker(),
 	}
 }
 
@@ -1161,7 +1165,7 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 	// RunTask/ApproveManualTask never call FinishRun, and StartTask's
 	// finishStartedTask calls it only to persist the record, never to record
 	// a metric.
-	if runStatus == "passed" || runStatus == "failed" || runStatus == "canceled" {
+	if domain.IsTerminalRunStatus(runStatus) {
 		s.recordRunFinished(runStatus, projectName, startedAt)
 	}
 	if opts.SourceSessions != nil && s.runStore != nil {

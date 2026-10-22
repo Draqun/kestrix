@@ -82,7 +82,7 @@ func TestPG_RemoteSecrets_DeletedOnceTerminal(t *testing.T) {
 	}
 	jobID := mustCreateSecretJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-secrets-deleted"))
-	if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "done", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "done", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = %v, %v", ok, err)
 	}
 	if err := pg.DeleteTerminalRemoteSecrets(); err != nil {
@@ -241,7 +241,7 @@ func TestPG_CompleteJob_StoresTaskError(t *testing.T) {
 	runID := mustCreateRun(t, pg, "proj-task-error", nil)
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-task-error"))
-	if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "", `exec: "bash": executable file not found in $PATH`, nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "", `exec: "bash": executable file not found in $PATH`, nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = %v, %v", ok, err)
 	}
 	run, _ := pg.GetRun(runID)

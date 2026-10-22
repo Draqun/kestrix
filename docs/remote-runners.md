@@ -222,14 +222,53 @@ A single-task re-run dispatches one job, for that task, and nothing else.
 Completing it does not dispatch, skip, or record any other task of the run,
 whatever the pipeline's triggers say: a negated trigger such as
 `!repo.docs.changed` holds for any set of changes, which is why a re-run of
-`build` used to start `lint` and `deploy` as well. Approving a manual task
-inside a whole run still resumes that run's dependents. Kestrix resumes only
-runs that were started with a source snapshot, and a re-run has none.
+`build` used to start `lint` and `deploy` as well. A manual gate is out of
+scope in remote mode: a manual task is never dispatched, never recorded, and
+never approvable - see
+[When a remote run finishes](#when-a-remote-run-finishes). Kestrix resumes
+only runs that were started with a source snapshot, and a re-run has none.
 
 The run is recorded with `rerun_task` set to the task's name and an empty
 `changed`, and is labelled **Re-run: build** in the run list and the run
 detail. Re-runs recorded before this label existed keep showing
 **Changed: build**.
+
+### When a remote run finishes
+
+A `remote` run finishes when nothing is left to do, not when its last task
+completes. After a task completes, Kestrix first decides what that completion
+unblocks: a dependent whose own dependencies have all passed is dispatched as
+a new job, a dependent of a failed task is recorded `skipped` - unless one of
+its other dependencies is still undecided. A dependent waits for every one of
+its dependencies to be decided, so a dependency that is never decided - a
+manual gate - leaves it neither dispatched nor recorded. Only then does the
+run take its final status - `passed`, `failed` or `canceled`.
+
+Silent-runner recovery is another way a run ends: a job that exhausts its
+reclaims is failed by the recovery sweep, which ends its run in the same
+transaction - when the run's other tasks leave nothing in flight; a run with
+a sibling still in flight keeps running. The tasks that job blocked are
+neither dispatched nor recorded `skipped`.
+
+Two failures leave a run `running` although its own results hold nothing
+pending: the walker stopping before it knows what was due (the run, its
+pipeline or its snapshot cannot be read), and the finishing write failing
+every retry. Both are visible - the run can still be canceled - and the
+startup sweep marks such a run `failed` (`interrupted by server restart`) when
+the process restarts. Finishing them `passed` would hide the tasks that were
+never dispatched.
+
+A manual gate is out of scope for a remote run: the walker never dispatches a
+manual task and no result is recorded for it, so the run takes the status its
+other results imply - the gate is neither run nor approvable.
+
+So a run reads `running` while a dependent waits for a runner, and a gate that
+waits for `passed` never sees a run whose last task has not run yet. A
+dependent that cannot be dispatched - the job could not be created - is
+recorded `failed`, naming the failure, and the run ends `failed` instead of
+staying `running` with a task that has no job. A run canceled while a job was
+in flight keeps its `canceled` status; the late result is not recorded - only
+its output is appended to the run's output - and it does not reopen the run.
 
 ## Runner-job protocol
 
@@ -261,6 +300,15 @@ not yours.
 `output` is any output not already sent as trace; `error` (optional, at most
 4 KiB kept) says why the task failed. `204` on success, `409` when the report
 is fenced out.
+
+A completion that was recorded is still `204` when its resumption failed,
+because there is nothing for the runner to retry; only a report that was not
+recorded answers `500`. What the run does next depends on the failure. A task
+that became due and could not be dispatched is recorded `failed`, so the run
+ends `failed` with the failure in the server log. A walker that stopped
+before it knew what was due leaves the run `running` until the startup sweep
+marks it `failed` (`interrupted by server restart`) - see
+[When a remote run finishes](#when-a-remote-run-finishes).
 
 Kestrix redacts known secrets from every chunk, `output`, and `error` again
 before storing them. The task's result shows the trace chunks accepted from

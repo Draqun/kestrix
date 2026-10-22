@@ -21,14 +21,6 @@ func isTerminalJobStatus(status string) bool {
 	return false
 }
 
-func isTerminalRunStatus(status string) bool {
-	switch status {
-	case "passed", "failed", "canceled":
-		return true
-	}
-	return false
-}
-
 // callerOwnsJob reports whether callerRunnerID is allowed to act on a job
 // whose stored runner_id is storedRunnerID. A nil callerRunnerID is a
 // system-initiated call (never HTTP-driven) and always owns the job; a
@@ -131,6 +123,11 @@ func (s *PGStore) CreateRemoteJob(runID int, taskName string, payload domain.Rem
 		`INSERT INTO remote_jobs (id, run_id, task_name, status, payload, secrets_enc, required_tags) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, runID, taskName, domain.RemoteJobStatusPending, string(b), enc, nonNilTags(payload.Task.RunnerTags),
 	); err != nil {
+		if isUniqueViolation(err) {
+			// The run's own index says the task already has an active
+			// job: the task is dispatched, not failed.
+			return 0, fmt.Errorf("%w: task %q of run %d", domain.ErrRemoteJobExists, taskName, runID)
+		}
 		return 0, err
 	}
 	return id, nil
@@ -391,10 +388,19 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 	return chunk[:cut] + domain.TruncationMarker(maxOutputBytes)
 }
 
-// CompleteJob records a job's terminal report. See domain.RemoteJobStore's
-// doc for the full fencing contract; in short: the epoch check, the job's
-// own terminal check, and the parent run's terminal check all happen under
-// row locks in this one transaction, so a run that goes terminal for an
+// CompleteJob records a job's terminal report; see
+// domain.RemoteJobStore's doc for the full fencing contract. It never
+// finishes the run: the completion records the result, the output and the
+// job and leaves the run's status, error and finished_at alone, so the
+// service can finish the run itself once it has decided what the completion
+// unblocked - see remote-run-waits-for-dependents design.md D1.
+func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+	return s.completeJob(jobID, epoch, status, output, taskError, callerRunnerID, maxOutputBytes, false)
+}
+
+// completeJob is CompleteJob's body. The epoch check, the job's own
+// terminal check, and the parent run's terminal check all happen under row
+// locks in this one transaction, so a run that goes terminal for an
 // unrelated reason between the epoch check and the result write is still
 // caught - the two checks (task 1.2) must not be layered in the handler.
 // output is bounded by maxOutputBytes via boundAppendChunk, the same way
@@ -404,7 +410,15 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 // configured output budget entirely. The task's result carries the
 // completing claim's output: what AppendJobTrace accumulated for that claim,
 // then output, bounded the same way.
-func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+//
+// finishRun is the store's own second protocol, with exactly one caller:
+// ReclaimStaleJobs, which ends the run in the same transaction as the stale
+// job's failure - when the run's results leave nothing in flight, the same
+// rule FinishRunIfDone follows (a stale job ends the pipeline's useful work
+// - the remote-run-waits-for-dependents proposal's non-goals). With it off -
+// every port-driven completion - the completion leaves the run's status alone
+// and the service finishes the run itself.
+func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int, finishRun bool) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("begin complete job: %w", err)
@@ -433,7 +447,7 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 		return false, fmt.Errorf("select run for completion: %w", err)
 	}
 
-	if isTerminalRunStatus(runStatus) {
+	if domain.IsTerminalRunStatus(runStatus) {
 		// The run was finalized by something with no idea remote_jobs
 		// exists (FailInterruptedRuns) or by a sibling job while this one
 		// was still in flight. Recording a fresh task result here would let
@@ -461,27 +475,44 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 	// in the run's aggregate.
 	taskOutput := jobOutput + boundAppendChunk(jobOutput, lineBreakBefore(jobOutput, output), maxOutputBytes)
 	results = append(results, TaskResult{Name: taskName, Status: status, Output: taskOutput, Error: taskError})
-	newStatus, errMsg := computeRunStatus(results)
 
 	out := runOutput + boundAppendChunk(runOutput, lineBreakBefore(runOutput, output), maxOutputBytes)
 	resultsJSON, _ := json.Marshal(results)
-	finished := newStatus == "passed" || newStatus == "failed" || newStatus == "canceled"
-	if finished {
+	if !finishRun {
+		// The caller finishes the run itself, once it has decided what this
+		// completion unblocked: the run's status, error and finished_at stay
+		// as they are until then -
+		// remote-run-waits-for-dependents design.md D1.
 		if _, err := tx.Exec(
-			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = now() WHERE id = $5`,
-			newStatus, string(resultsJSON), out, errMsg, runID,
+			`UPDATE runs SET task_results = $1, output = $2 WHERE id = $3`,
+			string(resultsJSON), out, runID,
 		); err != nil {
-			return false, fmt.Errorf("finish run from job completion: %w", err)
-		}
-		if err := s.pruneRuns(tx); err != nil {
-			return false, err
+			return false, fmt.Errorf("record job completion: %w", err)
 		}
 	} else {
-		if _, err := tx.Exec(
-			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4 WHERE id = $5`,
-			newStatus, string(resultsJSON), out, errMsg, runID,
-		); err != nil {
-			return false, fmt.Errorf("update run from job completion: %w", err)
+		newStatus, errMsg := computeRunStatus(results)
+		if domain.IsTerminalRunStatus(newStatus) {
+			// Nothing is left in flight: the run takes the status its
+			// results imply, exactly as FinishRunIfDone takes it.
+			if _, err := tx.Exec(
+				`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = now() WHERE id = $5`,
+				newStatus, string(resultsJSON), out, errMsg, runID,
+			); err != nil {
+				return false, fmt.Errorf("finish run from job completion: %w", err)
+			}
+			if err := s.pruneRuns(tx); err != nil {
+				return false, err
+			}
+		} else {
+			// A sibling task is still in flight, so the run keeps the status
+			// it has: the same rule FinishRunIfDone follows, so the two
+			// paths cannot disagree about when a run is finished.
+			if _, err := tx.Exec(
+				`UPDATE runs SET task_results = $1, output = $2 WHERE id = $3`,
+				string(resultsJSON), out, runID,
+			); err != nil {
+				return false, fmt.Errorf("update run from job completion: %w", err)
+			}
 		}
 	}
 
@@ -580,10 +611,13 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 
 	reclaimed, failed := 0, 0
 	for _, j := range stale {
-		if isTerminalRunStatus(j.runStatus) || j.reclaimCount >= maxReclaims {
+		if domain.IsTerminalRunStatus(j.runStatus) || j.reclaimCount >= maxReclaims {
 			// reason is a short, fixed system string, never runner-controlled
 			// output, so it needs no output-budget bound here.
-			if _, err := s.CompleteJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, reason, nil, 0); err != nil {
+			// A stale job ends the pipeline's useful work, so its completion
+			// finishes the run itself - when nothing is left in flight -
+			// remote-run-waits-for-dependents design.md D1.
+			if _, err := s.completeJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, reason, nil, 0, true); err != nil {
 				return reclaimed, failed, fmt.Errorf("fail stale job %d: %w", j.id, err)
 			}
 			// CompleteJob finalizes the job row to "failed" whenever the
