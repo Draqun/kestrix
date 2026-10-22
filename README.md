@@ -403,6 +403,12 @@ Each example is a directory holding one `pipeline.tf`:
 
 ## Development
 
+This repository is worked on with [Jujutsu (`jj`)](https://jj-vcs.dev/), colocated
+with the Git repository. Use `jj` for commits, rebasing and pushing bookmarks
+(`jj git push --bookmark <name>`) instead of `git commit`/`git rebase`; plain
+`git` commands for inspection (`git log`, `git diff`, ...) still work against
+the same underlying repository.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow (jj/Git, commit
 format, MR expectations, licensing of contributions) and
 [SECURITY.md](SECURITY.md) to report a vulnerability privately.
