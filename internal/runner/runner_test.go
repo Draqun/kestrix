@@ -330,7 +330,7 @@ func TestRunLocal_CancelKillsProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	started := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	project := simpleProject("cancel", "repo.repo.changed", "sleep 30 & sleep 30 & wait")
+	project := simpleProject("cancel", "repo.repo.changed", "sleep 33 & sleep 33 & wait")
 	var out bytes.Buffer
 
 	go func() {
@@ -353,7 +353,7 @@ func TestRunLocal_CancelKillsProcessGroup(t *testing.T) {
 
 	deadline := time.Now().Add(grace + 2*time.Second)
 	for {
-		output, lookErr := exec.Command("pgrep", "-f", "sleep 30").Output()
+		output, lookErr := exec.Command("pgrep", "-f", "sleep 33").Output()
 		if lookErr != nil {
 			return // pgrep exits non-zero when no process matches
 		}

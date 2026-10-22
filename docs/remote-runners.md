@@ -202,6 +202,26 @@ running on the Kestrix host - including a single-task re-run and an
 approved manual gate (see [`ci-tools.md`](ci-tools.md#runner) for how those
 two differ from every other mode once a project is on `remote`).
 
+### When a remote run starts
+
+When a `remote` run starts, Kestrix resolves the triggered tasks from the
+changes and either dispatches a job for each immediately-eligible task or
+finishes the run:
+
+- **A dependency outside the run is ignored:** if a task depends on another
+  task whose trigger was not satisfied, that dependency is not part of the run
+  and does not hold the dependent back, matching in-process execution. Only
+  dependencies among triggered tasks must pass before the dependent runs.
+- **Nothing triggered finishes `passed`:** if no task's trigger is satisfied,
+  the run finishes `passed` at once, with no task results and no jobs created,
+  instead of hanging `running`.
+- **A start that fails finishes `failed`:** if building the source archive or
+  persisting the run snapshot fails after the run is created, the run is
+  finished `failed` with the error naming the cause (redacted for secret
+  values). When only the job of one task cannot be created, that task is
+  recorded `failed` with the error, and the run settles `failed` once any
+  in-flight jobs complete.
+
 ### Task output
 
 The run detail shows each task's own output. For a remote task that is
