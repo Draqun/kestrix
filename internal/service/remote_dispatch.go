@@ -144,34 +144,60 @@ func archiveWorkDirWithOpener(workDir string, open func(string) (*os.File, error
 // eligibleForDispatch returns, from nodes (a triggered-only DAG resolution,
 // topological order preserved), the tasks that are immediately dispatchable
 // given latest - the run's current per-task-name result - along with any
-// task that becomes newly "skipped" (dependency failed) as a side effect.
+// task that becomes newly "skipped" (dependency failed) as a side effect,
+// and any manual gates to record (design D1-D3).
 // It applies the same blocked/manual/ordering rules internal/runner's
 // taskLoop applies in-process, over persisted results instead of an
 // in-memory loop - see design.md Goals ("the one thing that is not reuse")
 // and tasks.md 3.6. A task already dispatched, terminal, or still waiting
 // on an unresolved (not yet passed/failed/skipped/canceled) dependency is
 // left alone; the caller re-evaluates after the next completion.
-func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) (eligible []model.Task, newlySkipped []domain.TaskResult) {
+func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, includeManual bool) (eligible []model.Task, newlySkipped []domain.TaskResult, gates []domain.TaskResult) {
 	nodeSet := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
 		nodeSet[node.Task.Name] = true
 	}
 	for _, node := range nodes {
 		task := node.Task
-		_, seeded := latest[task.Name]
-		if seeded {
+		cur, seeded := latest[task.Name]
+		if seeded && (!task.Manual || includeManual || cur.Status != "manual") {
 			// A task_result entry only ever appears here once this walker
 			// (or startRemote's own first pass) has already decided this
 			// task's fate: dispatched (recorded "pending" - awaiting its
 			// runner, not "still needs deciding"), or resolved to a
 			// terminal status by a completion. Either way, never
 			// re-examine it - see the D9/D10 append-only shape this
-			// mirrors.
+			// mirrors. The one exception is a waiting "manual" gate, which
+			// is re-examined for a failed dependency (design D2).
 			continue
 		}
-		if task.Manual {
-			// A manual task is dispatched only by its own approval
-			// (tasks.md 2.4), never by this walker.
+		if task.Manual && !includeManual {
+			if !seeded {
+				gates = append(gates, domain.TaskResult{Name: task.Name, Status: "manual"})
+				cur = domain.TaskResult{Name: task.Name, Status: "manual"}
+				latest[task.Name] = cur
+			}
+			// A manual gate is never dispatched by this walker (design D1).
+			// Check if any inside dependency failed, was canceled or was skipped (design D2).
+			blocked := false
+			for _, dep := range task.DependsOn {
+				if !nodeSet[dep] {
+					continue
+				}
+				d, ok := latest[dep]
+				if !ok {
+					continue
+				}
+				if d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped" {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				newlySkipped = append(newlySkipped, domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"})
+				latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			}
+			// With a pending or passed dependency, it stays manual (already in latest).
 			continue
 		}
 		blocked := false
@@ -209,7 +235,7 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) 
 		eligible = append(eligible, task)
 		latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "pending"}
 	}
-	return eligible, newlySkipped
+	return eligible, newlySkipped, gates
 }
 
 // buildRemoteJobPayload constructs the payload a runner receives for task:
@@ -272,8 +298,16 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	}
 	slog.Info("run started", "run_id", runID, "project", projectName, "account", opts.Actor, "mode", "remote")
 
+	if len(opts.InitialSources) > 0 {
+		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
+			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
+				return runID, fmt.Errorf("persist run sources: %w", err)
+			}
+		}
+	}
+
 	latest := make(map[string]domain.TaskResult, len(nodes))
-	eligible, _ := eligibleForDispatch(nodes, latest)
+	eligible, _, gates := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 
 	if len(nodes) == 0 {
 		// Nothing triggered: finish the run passed at once -
@@ -310,6 +344,10 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		return runID, snapshotErr
 	}
 
+	for _, gate := range gates {
+		_ = s.runStore.AppendTaskResult(runID, gate)
+	}
+
 	var dispatchErrs []error
 	for _, task := range eligible {
 		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
@@ -320,7 +358,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		}
 	}
 	if len(dispatchErrs) > 0 {
-		_, newlySkipped := eligibleForDispatch(nodes, latest)
+		_, newlySkipped, _ := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 		for _, skip := range newlySkipped {
 			_ = s.runStore.AppendTaskResult(runID, skip)
 		}
@@ -454,9 +492,9 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 	}
 
 	latest := taskResultsByName(run)
-	eligible, newlySkipped := eligibleForDispatch(nodes, latest)
-	if len(eligible) == 0 && len(newlySkipped) == 0 {
-		// Nothing to dispatch or skip, so skip the snapshot too: it holds the
+	eligible, newlySkipped, gates := eligibleForDispatch(nodes, latest, run.IncludeManual)
+	if len(eligible) == 0 && len(newlySkipped) == 0 && len(gates) == 0 {
+		// Nothing to dispatch, skip, or record as gate, so skip the snapshot too: it holds the
 		// run's whole source archive, and most completions unblock nothing.
 		return true, nil
 	}
@@ -470,6 +508,11 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 		// what was computed above would dispatch or skip tasks nobody asked
 		// for. Return before the first write - remote-run-ux design.md D2.
 		return true, nil
+	}
+	for _, gate := range gates {
+		if err := s.runStore.AppendTaskResult(runID, gate); err != nil {
+			return false, fmt.Errorf("record gate %q: %w", gate.Name, err)
+		}
 	}
 	for _, skip := range newlySkipped {
 		// AppendTaskResult records the result and leaves the run's status
@@ -522,7 +565,7 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 		// skip: every task the first pass made eligible was seeded
 		// (dispatched "pending" or recorded "failed"), so none of them is
 		// eligible again.
-		_, newlyBlocked := eligibleForDispatch(nodes, latest)
+		_, newlyBlocked, _ := eligibleForDispatch(nodes, latest, run.IncludeManual)
 		for _, skip := range newlyBlocked {
 			if err := s.runStore.AppendTaskResult(runID, skip); err != nil {
 				dispatchErrs = append(dispatchErrs, fmt.Errorf("record blocked task %q: %w", skip.Name, err))
