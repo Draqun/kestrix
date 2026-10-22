@@ -26,12 +26,18 @@ runner ── complete ──▶ CompleteRemoteJob ─┬─ CompleteJob   resul
 
 ### D1. The service finishes the run, after the walker
 
-`CompleteJob` gains a flag, `finishRun`. Off, it records the result, the
-output and the job as today but leaves the run's `status`, `error` and
-`finished_at` alone. `CompleteRemoteJob` passes it off, runs the walker, and
-then finishes the run (D2). `ReclaimStaleJobs` passes it on, which is today's
-behaviour: a failed stale job ends the pipeline's useful work, so it keeps
-finishing the run itself.
+The port's `CompleteJob` has one protocol: it records the result, the output
+and the job, and leaves the run's `status`, `error` and `finished_at` alone.
+`CompleteRemoteJob` runs the walker and then finishes the run (D2).
+
+The store keeps a second, private path for silent-runner recovery:
+`ReclaimStaleJobs` fails a stale job and ends its run in the same
+transaction - when the run's results leave nothing in flight, the same rule
+`FinishRunIfDone` follows - which is today's behaviour - a failed stale job
+ends the pipeline's useful work. That path does not run the walker, so the
+tasks the stale job blocked are neither dispatched nor recorded `skipped`; it
+is outside this change's scope, and the requirement in the spec delta says
+so.
 
 A run is therefore `running` from the moment a task completes until the
 walker has dispatched or skipped what it unblocked. No client reads a
@@ -84,6 +90,13 @@ due (loading the run or the snapshot) does not finish the run: it stays
 process restarts. Finishing it `passed` on such an error would hide the
 undispatched tasks.
 
+The finishing write is retried (three attempts): the completion is already
+recorded, so a single failed write would leave the run `running` with every
+task terminal and nothing that would ever finish it. A write that keeps
+failing leaves the run `running` until the startup sweep marks it `failed`
+(`interrupted by server restart`) - the same visible failure as a walker
+error that stops before the run's status can be decided.
+
 ## Security Considerations
 
 - No new data, endpoint or permission.
@@ -98,7 +111,8 @@ undispatched tasks.
   `passed` run whose dependents never ran.
 - The lock is held across one database transaction. It serializes
   completions of a single run only.
-- `CompleteJob`'s signature changes; it has two callers.
+- `CompleteJob`'s signature does not change. The port keeps one protocol; the
+  store's private reclaim path keeps the old one.
 
 ## Migration Plan
 

@@ -648,6 +648,61 @@ func TestEligibleForDispatch_DiamondBlockedBranchSkipsInOnePass(t *testing.T) {
 	}
 }
 
+// A task with a failed dependency and an undecided one waits: the
+// undecided dependency wins, whatever the order of DependsOn. Before the
+// change the loop broke on the first dependency it saw, so the outcome
+// depended on that order - a task that listed the failed dependency first
+// was skipped at once, while the same task listed the other way round
+// waited. The undecided dependency is either a task still in flight
+// ("pending") or one that is never decided at all - a manual gate, which no
+// walker ever records.
+func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) {
+	cases := []struct {
+		name      string
+		dependsOn []string
+		latest    map[string]domain.TaskResult
+	}{
+		{
+			"failed first, gate second",
+			[]string{"failed", "gate"},
+			map[string]domain.TaskResult{"failed": {Name: "failed", Status: "failed"}},
+		},
+		{
+			"gate first, failed second",
+			[]string{"gate", "failed"},
+			map[string]domain.TaskResult{"failed": {Name: "failed", Status: "failed"}},
+		},
+		{
+			"failed first, pending second",
+			[]string{"failed", "waiting"},
+			map[string]domain.TaskResult{
+				"failed":  {Name: "failed", Status: "failed"},
+				"waiting": {Name: "waiting", Status: "pending"},
+			},
+		},
+		{
+			"pending first, failed second",
+			[]string{"waiting", "failed"},
+			map[string]domain.TaskResult{
+				"failed":  {Name: "failed", Status: "failed"},
+				"waiting": {Name: "waiting", Status: "pending"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := []dag.Node{{Task: model.Task{Name: "task", DependsOn: tc.dependsOn}}}
+			eligible, skipped := eligibleForDispatch(nodes, tc.latest)
+			if len(eligible) != 0 || len(skipped) != 0 {
+				t.Fatalf("eligible=%v skipped=%v, want the task to wait for its undecided dependency", eligible, skipped)
+			}
+			if _, seeded := tc.latest["task"]; seeded {
+				t.Fatal("the task was seeded, want it left undecided")
+			}
+		})
+	}
+}
+
 func TestEligibleForDispatch_ManualTaskNeverAutoDispatched(t *testing.T) {
 	nodes := []dag.Node{{Task: model.Task{Name: "gate", Manual: true}}}
 	latest := map[string]domain.TaskResult{"gate": {Name: "gate", Status: "pending"}}
@@ -689,7 +744,7 @@ func TestRunService_RemoteMode_SecretValuesReachEveryJob(t *testing.T) {
 
 	runStore.GetRunResult = &domain.Run{ID: 42, Changed: []string{"app"}, PipelineDef: proj,
 		TaskResults: []domain.TaskResult{{Name: "a", Status: "passed"}}}
-	if err := svc.resumeRemoteRun(42); err != nil {
+	if _, err := svc.resumeRemoteRun(42); err != nil {
 		t.Fatalf("resumeRemoteRun: %v", err)
 	}
 	last := remoteJobs.CreateRemoteJobCalls[len(remoteJobs.CreateRemoteJobCalls)-1]

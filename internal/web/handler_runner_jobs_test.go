@@ -484,6 +484,40 @@ func TestHandleRunnerJobComplete_NilRemoteJobStore(t *testing.T) {
 	}
 }
 
+// A completion that was recorded is not the server's error: the job is
+// terminal and the run's results hold the task's outcome, so the runner
+// has nothing to retry. The failed dispatch is logged, not returned.
+func TestHandleRunnerJobComplete_RecordedCompletionWithFailedDispatchIsNoContent(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{
+		Jobs:               map[int]*domain.RemoteJob{1: {ID: 1, RunID: 1, TaskName: "build"}},
+		CompleteJobOK:      true,
+		CreateRemoteJobErr: errGap,
+	}
+	remoteJobs.SetRemoteRunSnapshot(1, []byte("archive"), nil, nil)
+	runStore := &mocks.MockRunStore{GetRunResult: &domain.Run{
+		ID:      1,
+		Changed: []string{"app"},
+		PipelineDef: &domain.Project{
+			Name:  "proj",
+			Repos: []domain.Repo{{Name: "app"}},
+			Tasks: []domain.Task{
+				{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+				{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
+			},
+		},
+		TaskResults: []domain.TaskResult{{Name: "build", Status: "passed"}},
+	}}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, runStore)
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobComplete(w, completeReq(`{"epoch":1,"status":"passed","output":"done"}`))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: the completion was recorded, only the dispatch failed (body=%s)", w.Code, w.Body.String())
+	}
+	if len(remoteJobs.CreateRemoteJobCalls) != 1 {
+		t.Fatalf("dispatch calls = %d, want 1: the walker did try to dispatch the dependent", len(remoteJobs.CreateRemoteJobCalls))
+	}
+}
+
 func TestHandleRunnerJobComplete_NotOKMapsToConflict(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{CompleteJobOK: false}
 	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)

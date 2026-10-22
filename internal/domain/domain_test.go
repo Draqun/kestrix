@@ -191,3 +191,18 @@ func TestVariable_JSONFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// A run's terminal status is one it never leaves: passed, failed or
+// canceled. Everything else is still running.
+func TestIsTerminalRunStatus(t *testing.T) {
+	for _, status := range []string{RunStatusPassed, RunStatusFailed, RunStatusCanceled} {
+		if !IsTerminalRunStatus(status) {
+			t.Errorf("IsTerminalRunStatus(%q) = false, want true", status)
+		}
+	}
+	for _, status := range []string{"", "running", "queued", "pending"} {
+		if IsTerminalRunStatus(status) {
+			t.Errorf("IsTerminalRunStatus(%q) = true, want false", status)
+		}
+	}
+}

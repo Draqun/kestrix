@@ -19,6 +19,11 @@ process's own goroutines (`RunService.Start`), not in the database, so a second
 process sharing the same database would misclassify the first one's live runs as
 interrupted. Multi-instance coordination is not implemented.
 
+The remote-run completion path relies on it too: the per-run lock that orders
+two completions of one run is in-process, so a second `serve` process could
+dispatch a shared dependent twice. The database rejects the second job, and the
+walker treats that rejection as a no-op - the run keeps going.
+
 On startup, before the HTTP listener opens, Kestrix fails every run still
 `running` from a previous instance (crash, redeploy, `docker compose up -d`):
 each such run is marked `failed` with error `interrupted by server restart`,

@@ -268,13 +268,24 @@ func (s *Server) handleRunnerJobComplete(w http.ResponseWriter, r *http.Request)
 		taskError = taskError[:cut]
 	}
 	completed, err := s.runService.CompleteRemoteJob(jobID, req.Epoch, req.Status, output, taskError, &runnerID)
-	if err != nil {
+	if err != nil && !completed {
+		// The completion was not recorded, so the report is lost and the
+		// runner may send it again: this is the server's error.
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !completed {
 		writeError(w, http.StatusConflict, "stale epoch, job not owned by this runner, or job already terminal")
 		return
+	}
+	if err != nil {
+		// The completion was recorded - the job is terminal and the run's
+		// results hold the task's outcome - but the run's resumption
+		// failed. There is nothing for the runner to retry: the job is
+		// already terminal, and a second report would be answered 409.
+		// The run's own state says what happened, so the failure is
+		// logged, not returned.
+		slog.Error("runner job completion recorded, but the run's resumption failed", "job_id", jobID, "error", redact.Err(err, secrets))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -137,7 +137,7 @@ func TestPG_CompleteJob_TaskOutput(t *testing.T) {
 				offset += len(chunk)
 			}
 
-			if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, tc.bound); err != nil || !ok {
+			if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, tc.bound, true); err != nil || !ok {
 				t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 			}
 			if got := latestTaskOutput(t, pg, runID, "build"); got != tc.want {
@@ -158,7 +158,7 @@ func TestPG_CompleteJob_AggregateOutputUnchangedByTaskOutput(t *testing.T) {
 	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "abc", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "def", "", nil, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "def", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
 	run, err := pg.GetRun(runID)
@@ -200,7 +200,7 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 			t.Fatalf("second claim AppendJobTrace(offset %d) = (%v, %v)", c.offset, ok, err)
 		}
 	}
-	if ok, err := pg.CompleteJob(jobID, claim2.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", &second, 0); err != nil || !ok {
+	if ok, err := pg.completeJob(jobID, claim2.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", &second, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
 	if got := latestTaskOutput(t, pg, runID, "build"); got != "second claim" {
@@ -246,7 +246,7 @@ func TestPG_CompleteJob_ClearsTheJobsOutput(t *testing.T) {
 				}
 			}
 
-			ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0)
+			ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true)
 			if err != nil || ok == tc.runIsOver {
 				t.Fatalf("CompleteJob = (%v, %v), want ok=%v", ok, err, !tc.runIsOver)
 			}
@@ -311,7 +311,7 @@ func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
 					t.Fatalf("remote_jobs.output = %q, want %q", got, want)
 				}
 			}
-			if ok, err := pg.CompleteJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, bound); err != nil || !ok {
+			if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, bound, true); err != nil || !ok {
 				t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 			}
 			if got := latestTaskOutput(t, pg, runID, "build"); got != want {

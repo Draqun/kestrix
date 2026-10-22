@@ -24,6 +24,16 @@ type fakeStatefulRunStore struct {
 	mu     sync.Mutex
 	nextID int
 	runs   map[int]*domain.Run
+	// appendErrForStatus fails only the append of a result with this
+	// status, so a test can make one write fail (the failed record of a
+	// task) while the other (the pending record of the same task)
+	// succeeds.
+	appendErrForStatus string
+	// finishTransient makes FinishRunIfDone fail only while
+	// finishErrsLeft is positive: a test's way of a write that fails once
+	// and succeeds on the retry.
+	finishTransient bool
+	finishErrsLeft  int
 }
 
 func newFakeStatefulRunStore() *fakeStatefulRunStore {
@@ -57,6 +67,12 @@ func (f *fakeStatefulRunStore) GetRun(id int) (*domain.Run, error) {
 func (f *fakeStatefulRunStore) AppendTaskResult(runID int, tr domain.TaskResult) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.MockRunStore.AppendTaskErr != nil {
+		return f.MockRunStore.AppendTaskErr
+	}
+	if f.appendErrForStatus != "" && tr.Status == f.appendErrForStatus {
+		return fmt.Errorf("write failed")
+	}
 	r, ok := f.runs[runID]
 	if !ok {
 		return fmt.Errorf("no such run %d", runID)
@@ -79,6 +95,45 @@ func (f *fakeStatefulRunStore) ApplyTaskResult(runID int, tr domain.TaskResult, 
 	status, _ := computeRunStatusForTest(r.TaskResults)
 	r.Status = status
 	return status, nil
+}
+
+// appendResult records a task result without touching the run's status, the
+// way PGStore's CompleteJob does: a completion records the result, and the
+// run's status is decided later, by FinishRunIfDone.
+func (f *fakeStatefulRunStore) appendResult(runID int, tr domain.TaskResult) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.runs[runID]; ok {
+		r.TaskResults = append(r.TaskResults, tr)
+	}
+}
+
+// FinishRunIfDone mirrors PGStore's: the run takes the status its results
+// imply, but only when nothing is pending or running any more, and a run
+// that is already terminal is left alone.
+func (f *fakeStatefulRunStore) FinishRunIfDone(runID int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.MockRunStore.FinishRunIfDoneErr != nil {
+		if !f.finishTransient || f.finishErrsLeft > 0 {
+			if f.finishErrsLeft > 0 {
+				f.finishErrsLeft--
+			}
+			return f.MockRunStore.FinishRunIfDoneErr
+		}
+	}
+	r, ok := f.runs[runID]
+	if !ok {
+		return nil
+	}
+	if domain.IsTerminalRunStatus(r.Status) {
+		return nil
+	}
+	status, _ := computeRunStatusForTest(r.TaskResults)
+	if domain.IsTerminalRunStatus(status) {
+		r.Status = status
+	}
+	return nil
 }
 
 // computeRunStatusForTest mirrors store.computeRunStatus (unexported,
@@ -123,10 +178,17 @@ func (f *fakeStatefulRunStore) status(runID int) string {
 // records the task result on the linked runStore, the way PGStore's real
 // CompleteJob does transactionally against runs.task_results - a fixed-mock
 // CompleteJobOK alone would leave the completed task's status at "pending"
-// forever, so resumeRemoteRun would never see it as resolved.
+// forever, so resumeRemoteRun would never see it as resolved. The result is
+// recorded without touching the run's status, exactly as PGStore's
+// CompleteJob does it; the run's status is decided later, by
+// FinishRunIfDone.
 type fakeRemoteJobStore struct {
 	*mocks.MockRemoteJobStore
 	runStore *fakeStatefulRunStore
+	// afterRecord runs right after the completion's result is recorded: the
+	// hook a test uses to land a cancel in the window between the completion
+	// and the walker that follows it.
+	afterRecord func()
 }
 
 func (f *fakeRemoteJobStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
@@ -136,7 +198,11 @@ func (f *fakeRemoteJobStore) CompleteJob(jobID, epoch int, status, output, taskE
 	}
 	job := f.MockRemoteJobStore.Jobs[jobID]
 	if job != nil {
-		_, _ = f.runStore.ApplyTaskResult(job.RunID, domain.TaskResult{Name: job.TaskName, Status: status, Output: output}, "")
+		tr := domain.TaskResult{Name: job.TaskName, Status: status, Output: output}
+		f.runStore.appendResult(job.RunID, tr)
+	}
+	if f.afterRecord != nil {
+		f.afterRecord()
 	}
 	return ok, nil
 }
@@ -419,12 +485,14 @@ func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
 	}
 }
 
-// TestResumeRemoteRun_ConcurrentCallsNeverDoubleDispatchSharedDependent is
-// REVIEW.md R4: two jobs of one diamond DAG (left, right) both required by
+// TestCompleteRemoteJob_ConcurrentCompletionsNeverDoubleDispatchSharedDependent
+// is REVIEW.md R4: two jobs of one diamond DAG (left, right) both required by
 // one downstream dependent (join) completing at nearly the same time must
-// still dispatch join exactly once, never twice, however the two
-// resumeRemoteRun calls interleave.
-func TestResumeRemoteRun_ConcurrentCallsNeverDoubleDispatchSharedDependent(t *testing.T) {
+// still dispatch join exactly once, never twice, however the two completions
+// interleave. The run's lock is what serializes them: it covers the result
+// write, the walker and the finishing of the run -
+// remote-run-waits-for-dependents design.md D3.
+func TestCompleteRemoteJob_ConcurrentCompletionsNeverDoubleDispatchSharedDependent(t *testing.T) {
 	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
 		{Name: "root", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "left", Trigger: "repo.app.changed", DependsOn: []string{"root"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -432,7 +500,7 @@ func TestResumeRemoteRun_ConcurrentCallsNeverDoubleDispatchSharedDependent(t *te
 		{Name: "join", Trigger: "repo.app.changed", DependsOn: []string{"left", "right"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}}
+	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 
@@ -442,31 +510,28 @@ func TestResumeRemoteRun_ConcurrentCallsNeverDoubleDispatchSharedDependent(t *te
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-
-	// Simulate both branches already reported "passed" - the state two
-	// racing CompleteRemoteJob calls would each observe just before calling
-	// resumeRemoteRun - without going through the CompleteJob/epoch path,
-	// which is not what this test is about.
-	for _, name := range []string{"root", "left", "right"} {
-		if _, err := runStore.ApplyTaskResult(runID, domain.TaskResult{Name: name, Status: "passed"}, ""); err != nil {
-			t.Fatalf("seed %q: %v", name, err)
-		}
+	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "root"}
+	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("complete root: %v", err)
 	}
+	remoteJobs.Jobs[2] = &domain.RemoteJob{ID: 2, RunID: runID, TaskName: "left"}
+	remoteJobs.Jobs[3] = &domain.RemoteJob{ID: 3, RunID: runID, TaskName: "right"}
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
-	for i := 0; i < 2; i++ {
+	for _, jobID := range []int{2, 3} {
 		wg.Add(1)
-		go func() {
+		go func(jobID int) {
 			defer wg.Done()
-			errs <- svc.resumeRemoteRun(runID)
-		}()
+			_, err := svc.CompleteRemoteJob(jobID, 1, "passed", "", "", nil)
+			errs <- err
+		}(jobID)
 	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
 		if err != nil {
-			t.Fatalf("resumeRemoteRun: %v", err)
+			t.Fatalf("complete: %v", err)
 		}
 	}
 
@@ -478,6 +543,18 @@ func TestResumeRemoteRun_ConcurrentCallsNeverDoubleDispatchSharedDependent(t *te
 	}
 	if joinDispatches != 1 {
 		t.Fatalf("join dispatched %d times, want exactly 1 (calls: %+v)", joinDispatches, remoteJobs.CreateRemoteJobCalls)
+	}
+	// join itself has not run yet, so the run must still be running.
+	if got := runStore.status(runID); got != "running" {
+		t.Fatalf("run status = %q, want running while join is pending", got)
+	}
+
+	remoteJobs.Jobs[4] = &domain.RemoteJob{ID: 4, RunID: runID, TaskName: "join"}
+	if _, err := svc.CompleteRemoteJob(4, 1, "passed", "", "", nil); err != nil {
+		t.Fatalf("complete join: %v", err)
+	}
+	if got := runStore.status(runID); got != "passed" {
+		t.Fatalf("run status = %q, want passed once join passed", got)
 	}
 }
 
@@ -551,7 +628,7 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
+func TestResumeRemoteRun_AppendTaskResultErrorForSkipPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -562,8 +639,8 @@ func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Seed build's failure directly (bypassing ApplyTaskResult, so the
-	// error injected below fires only for the skip this triggers, not for
+	// Seed build's failure directly (bypassing the walker, so the error
+	// injected below fires only for the skip this triggers, not for
 	// recording build's own result).
 	runStore.runs[runID].TaskResults = append(runStore.runs[runID].TaskResults, domain.TaskResult{Name: "build", Status: "failed"})
 
@@ -571,10 +648,10 @@ func TestResumeRemoteRun_ApplyTaskResultErrorForSkipPropagates(t *testing.T) {
 	seedSnapshot(t, remoteJobs, runID)
 	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
-	runStore.MockRunStore.ApplyTaskErr = fmt.Errorf("write failed")
+	runStore.MockRunStore.AppendTaskErr = fmt.Errorf("write failed")
 
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
-		t.Fatal("expected ApplyTaskResult's error (recording the skipped dependent) to propagate")
+		t.Fatal("expected AppendTaskResult's error (recording the skipped dependent) to propagate")
 	}
 }
 
@@ -631,30 +708,6 @@ func TestResumeRemoteRun_NothingToDispatchDoesNotLoadSnapshot(t *testing.T) {
 	}
 	if got := len(remoteJobs.CreateRemoteJobCalls); got != 2 {
 		t.Fatalf("jobs created = %d, want only the 2 from Start: %+v", got, remoteJobs.CreateRemoteJobCalls)
-	}
-}
-
-func TestResumeRemoteRun_CreateRemoteJobErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
-		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
-		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
-	}}
-	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	remoteJobs := &mocks.MockRemoteJobStore{
-		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
-		CompleteJobOK: true,
-	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	svc.SetRemoteJobStore(remoteJobs)
-	remoteJobs.CreateRemoteJobErr = context.DeadlineExceeded
-	seedSnapshot(t, remoteJobs, runID)
-
-	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
-		t.Fatal("expected CreateRemoteJob's error (dispatching deploy) to propagate")
 	}
 }
 

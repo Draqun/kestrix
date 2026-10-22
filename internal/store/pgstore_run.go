@@ -50,7 +50,7 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 		b, _ := json.Marshal(taskResults)
 		taskResultsJSON = string(b)
 	}
-	finished := status == "passed" || status == "failed" || status == "canceled"
+	finished := domain.IsTerminalRunStatus(status)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -79,6 +79,55 @@ func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults [
 		}
 	}
 
+	return tx.Commit()
+}
+
+// FinishRunIfDone finishes a run whose recorded results leave nothing in
+// flight: while any task is still pending or running the run keeps its
+// "running" status, and only a terminal status derived from the results
+// (passed/failed/canceled) ends it. It is a no-op for a run that is already
+// terminal, so a cancel that won the race is never undone. The row lock
+// makes the decision atomic against a concurrent completion of the same run
+// - see remote-run-waits-for-dependents design.md D2.
+func (s *PGStore) FinishRunIfDone(runID int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin finish run if done: %w", err)
+	}
+	defer tx.Rollback()
+
+	var status, taskResultsJSON string
+	err = tx.QueryRow(`SELECT status, task_results FROM runs WHERE id = $1 FOR UPDATE`, runID).
+		Scan(&status, &taskResultsJSON)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select run for finishing: %w", err)
+	}
+	if domain.IsTerminalRunStatus(status) {
+		return nil
+	}
+	var results []TaskResult
+	if err := json.Unmarshal([]byte(taskResultsJSON), &results); err != nil {
+		// The results could not be read: the run's status cannot be
+		// derived from them, so the run is left as it is rather than
+		// finished on a decision nobody could read.
+		return fmt.Errorf("decode run task results: %w", err)
+	}
+	newStatus, errMsg := computeRunStatus(results)
+	if !domain.IsTerminalRunStatus(newStatus) {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`UPDATE runs SET status = $1, error = $2, finished_at = now() WHERE id = $3`,
+		newStatus, errMsg, runID,
+	); err != nil {
+		return fmt.Errorf("finish run if done: %w", err)
+	}
+	if err := s.pruneRuns(tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -147,6 +196,8 @@ func (s *PGStore) StartQueuedRun(id int) (bool, error) {
 }
 
 // AppendTaskResult atomically adds a single task result to the run's task_results array.
+// It leaves the run's status, error and finished_at alone - the caller decides
+// the run's outcome, with FinishRunIfDone.
 func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
 	return appendTaskResult(s.db, runID, tr)
 }
@@ -475,28 +526,68 @@ func lineBreakBefore(existing, chunk string) string {
 // ApplyTaskResult appends a task result and recomputes overall run status,
 // returning that status so the caller can detect a terminal outcome
 // (passed/failed/canceled) without a separate GetRun call - see REVIEW.md R1.
+//
+// A run that is already finished keeps the status it has: a late result
+// never reopens it and never overwrites a cancel that won the race - the
+// same rule FinishRunIfDone follows (remote-run-waits-for-dependents
+// design.md D2). A cancel is the one status a finished run still takes: it
+// is a deliberate act, and the derivation ranks it above a failure.
+//
+// The read-modify-write of the results happens under the run's row lock, so
+// a result committed concurrently by another writer is not lost: the run's
+// results are the only source of its final status.
 func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (string, error) {
-	run, err := s.GetRun(id)
-	if err != nil || run == nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("begin apply task result: %w", err)
+	}
+	defer tx.Rollback()
+
+	var runStatus, taskResultsJSON, runOutput string
+	err = tx.QueryRow(`SELECT status, task_results, output FROM runs WHERE id = $1 FOR UPDATE`, id).
+		Scan(&runStatus, &taskResultsJSON, &runOutput)
+	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("run not found")
 	}
-	results := append(run.TaskResults, tr)
+	if err != nil {
+		return "", fmt.Errorf("select run for task result: %w", err)
+	}
+	var runResults []TaskResult
+	if err := json.Unmarshal([]byte(taskResultsJSON), &runResults); err != nil {
+		return "", fmt.Errorf("decode run task results: %w", err)
+	}
+	results := append(runResults, tr)
 	status, errMsg := computeRunStatus(results)
-	out := run.Output + lineBreakBefore(run.Output, outputExtra)
+	out := runOutput + lineBreakBefore(runOutput, outputExtra)
 	b, _ := json.Marshal(results)
-	finished := status == "passed" || status == "failed" || status == "canceled"
+	if domain.IsTerminalRunStatus(runStatus) && status != domain.RunStatusCanceled {
+		if _, err := tx.Exec(
+			`UPDATE runs SET task_results = $1, output = $2 WHERE id = $3`,
+			string(b), out, id,
+		); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
+		return runStatus, nil
+	}
+	finished := domain.IsTerminalRunStatus(status)
 	if finished {
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = COALESCE(finished_at, now()) WHERE id = $5`,
 			status, string(b), out, errMsg, id,
 		)
 	} else {
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = NULL WHERE id = $5`,
 			status, string(b), out, errMsg, id,
 		)
 	}
 	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return status, nil

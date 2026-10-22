@@ -1665,6 +1665,7 @@ func (s *seqRunStore) FinishRun(int, string, string, string, []domain.TaskResult
 }
 
 func (s *seqRunStore) AppendTaskResult(int, domain.TaskResult) error { return nil }
+func (s *seqRunStore) FinishRunIfDone(int) error                     { return nil }
 func (s *seqRunStore) FlushRunOutput(int, string) error              { return nil }
 func (s *seqRunStore) CancelRun(int, string) (bool, error)           { return true, nil }
 func (s *seqRunStore) SetCanceledBy(int, string) error               { return nil }

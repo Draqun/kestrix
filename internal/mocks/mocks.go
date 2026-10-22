@@ -183,19 +183,23 @@ type MockRunStore struct {
 	MockRemoteJobStore
 	MockRunnerStore
 
-	mu              sync.Mutex
-	CreateRunCalls  []createRunCall
-	CreateRunID     int
-	CreateRunErr    error
-	FinishRunCalls  []finishRunCall
-	FinishRunErr    error
-	FinishRunCh     chan struct{} // closed once after the first FinishRun call
-	finishOnce      sync.Once     // protects FinishRunCh from double-close
-	AppendTaskCalls []domain.TaskResult
-	AppendTaskErr   error
-	FlushRunCalls   []string
-	CancelRunCalls  []cancelRunCall
-	CancelRunErr    error
+	mu             sync.Mutex
+	CreateRunCalls []createRunCall
+	CreateRunID    int
+	CreateRunErr   error
+	FinishRunCalls []finishRunCall
+	FinishRunErr   error
+	// FinishRunIfDoneCalls records the run IDs FinishRunIfDone was called
+	// with, in call order.
+	FinishRunIfDoneCalls []int
+	FinishRunIfDoneErr   error
+	FinishRunCh          chan struct{} // closed once after the first FinishRun call
+	finishOnce           sync.Once     // protects FinishRunCh from double-close
+	AppendTaskCalls      []domain.TaskResult
+	AppendTaskErr        error
+	FlushRunCalls        []string
+	CancelRunCalls       []cancelRunCall
+	CancelRunErr         error
 	// CancelRunNoChange makes CancelRun report changed=false (as if a
 	// concurrent caller, or an already-terminal run, beat this call to the
 	// transition) instead of the default changed=true.
@@ -270,6 +274,12 @@ func (m *MockRunStore) FinishRun(id int, status, output, errMsg string, trs []do
 		m.finishOnce.Do(func() { close(m.FinishRunCh) })
 	}
 	return m.FinishRunErr
+}
+func (m *MockRunStore) FinishRunIfDone(runID int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FinishRunIfDoneCalls = append(m.FinishRunIfDoneCalls, runID)
+	return m.FinishRunIfDoneErr
 }
 func (m *MockRunStore) AppendTaskResult(runID int, tr domain.TaskResult) error {
 	m.mu.Lock()
@@ -577,7 +587,10 @@ type MockRemoteJobStore struct {
 
 	CreateRemoteJobCalls []CreateRemoteJobCall
 	CreateRemoteJobErr   error
-	nextJobID            int
+	// CreateRemoteJobErrFor fails the dispatch of the named task only, so a
+	// test can make one task of a batch fail while the others succeed.
+	CreateRemoteJobErrFor map[string]error
+	nextJobID             int
 
 	ClaimNextJobResult *domain.RemoteJob
 	ClaimNextJobErr    error
@@ -640,6 +653,9 @@ func (m *MockRemoteJobStore) CreateRemoteJob(runID int, taskName string, payload
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.CreateRemoteJobCalls = append(m.CreateRemoteJobCalls, CreateRemoteJobCall{RunID: runID, TaskName: taskName, Payload: payload})
+	if err, ok := m.CreateRemoteJobErrFor[taskName]; ok {
+		return 0, err
+	}
 	if m.CreateRemoteJobErr != nil {
 		return 0, m.CreateRemoteJobErr
 	}

@@ -176,6 +176,22 @@ type RunStore interface {
 	// re-run (whose changed is empty); it is "" for every other run.
 	CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *Project, startedBy string) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
+	// FinishRunIfDone finishes a run whose recorded results leave nothing in
+	// flight, and only then: while any task is still pending or running the
+	// run keeps its "running" status. It is a no-op for a run that is already
+	// terminal, so a cancel that won the race is never undone. A run whose
+	// results imply a terminal status takes that status, its error message
+	// and finished_at, and its history is pruned as FinishRun's is.
+	// remote-run-waits-for-dependents design.md D2.
+	//
+	// A terminal run is never re-derived, by this method or by
+	// ApplyTaskResult - see ApplyTaskResult.
+	FinishRunIfDone(runID int) error
+	// AppendTaskResult records a task result and leaves the run's status,
+	// error and finished_at untouched - unlike ApplyTaskResult, it does not
+	// derive the run's status. A caller that records a result for a task
+	// that was never run (a skipped dependent) uses it, and decides the
+	// run's outcome itself, with FinishRunIfDone.
 	AppendTaskResult(runID int, tr TaskResult) error
 	FlushRunOutput(runID int, output string) error
 	// CancelRun marks a running/queued run canceled. changed reports whether
@@ -187,6 +203,13 @@ type RunStore interface {
 	// status, returned as status - the caller uses it to detect and record
 	// a terminal outcome (passed/failed/canceled) exactly once, without a
 	// separate racy GetRun check - see REVIEW.md R1.
+	//
+	// It follows the same rule FinishRunIfDone does: a terminal run is
+	// never re-derived. A result that arrives for a finished run is
+	// recorded, but it does not move the run back to running and does not
+	// overwrite a cancel that won the race. A cancel is the one status a
+	// finished run still takes - it is a deliberate act, not a derivation.
+	// See REVIEW.md R3/R10.
 	ApplyTaskResult(id int, tr TaskResult, outputExtra string) (status string, err error)
 	// SetCanceledBy records which actor canceled a run, for the path where a
 	// running task's own ApplyTaskResult call - not CancelRun - performs the
@@ -274,10 +297,17 @@ type RemoteJob struct {
 	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
+// ErrRemoteJobExists is what a RemoteJobStore's CreateRemoteJob returns
+// when the task already has an active job - the run's own index rejects the
+// second dispatch. It is not a failure: the task is already dispatched, and
+// the caller must not record it as failed.
+var ErrRemoteJobExists = errors.New("remote job already exists")
+
 // RemoteJobStore is the port for dispatching, claiming, and completing
 // remote-runner jobs; see remote-runner-execution spec.md and design.md D1/D9.
 type RemoteJobStore interface {
-	// CreateRemoteJob dispatches one task of runID as a pending job.
+	// CreateRemoteJob dispatches one task of runID as a pending job. It
+	// returns ErrRemoteJobExists when the task already has an active job.
 	CreateRemoteJob(runID int, taskName string, payload RemoteJobPayload) (int, error)
 	// ClaimNextJob atomically claims the oldest pending job whose required
 	// tags are all among runnerID's tags (an untagged job matches every
@@ -333,6 +363,15 @@ type RemoteJobStore interface {
 	// built separately. taskError, when
 	// non-empty, is stored as the task result's Error (remote-runner-fixes
 	// design.md D4).
+	//
+	// A completion never finishes the run: it records the result, the output
+	// and the job and leaves the run's status, error and finished_at alone.
+	// The caller decides the run's status, once, through
+	// RunStore.FinishRunIfDone - so a run's terminal status is written in one
+	// place - remote-run-waits-for-dependents design.md D1. The one
+	// exception is silent-runner recovery, which is not a port call:
+	// ReclaimStaleJobs fails a stale job and, in the same transaction, ends
+	// the run when the run's results leave nothing in flight (see its doc).
 	CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (ok bool, err error)
 	// PendingOrClaimedJobIDsForRun returns the IDs of runID's jobs not yet
 	// terminal, for CancelRun's remote-mode carve-out (task 4.3).

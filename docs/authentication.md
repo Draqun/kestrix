@@ -219,7 +219,9 @@ from it.
 
 The throttle is per Kestrix process, not shared across replicas - running
 more than one API process behind a load balancer multiplies the effective
-limit by the replica count. `KESTRIX_TRUST_PROXY_HEADER` (default `false`)
+limit by the replica count. Kestrix supports one `serve` process per database
+(see [architecture.md](architecture.md#single-instance-constraint)), so a
+second API process is not a supported configuration. `KESTRIX_TRUST_PROXY_HEADER` (default `false`)
 controls whether the client-address key comes from the connection's peer
 address or from the first hop of `X-Forwarded-For`; enable it only behind a
 reverse proxy that sets that header itself; leaving it on elsewhere lets any
