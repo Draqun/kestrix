@@ -108,6 +108,20 @@ func (f *fakeStatefulRunStore) appendResult(runID int, tr domain.TaskResult) {
 	}
 }
 
+func (f *fakeStatefulRunStore) FinishRun(id int, status, output, errMsg string, trs []domain.TaskResult) error {
+	f.mu.Lock()
+	if r, ok := f.runs[id]; ok {
+		r.Status = status
+		r.Output = output
+		r.Error = errMsg
+		if len(trs) > 0 {
+			r.TaskResults = append(r.TaskResults, trs...)
+		}
+	}
+	f.mu.Unlock()
+	return f.MockRunStore.FinishRun(id, status, output, errMsg, trs)
+}
+
 // FinishRunIfDone mirrors PGStore's: the run takes the status its results
 // imply, but only when nothing is pending or running any more, and a run
 // that is already terminal is left alone.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -559,14 +560,17 @@ func TestRunService_Start_RemoteMode_CreateRunErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesButKeepsRunID(t *testing.T) {
+func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesAndFinishesRunFailed(t *testing.T) {
+	secret := "secret-to-redact-12345"
 	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
-	svc := NewRunService(&mocks.MockRunStore{CreateRunID: 7}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	runStore := &mocks.MockRunStore{CreateRunID: 7}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
-		Mode: "remote", WorkDir: filepath.Join(t.TempDir(), "does-not-exist"),
+		Mode: "remote", WorkDir: filepath.Join(t.TempDir(), "does-not-exist-"+secret),
+		ResolvedSecretValues: []string{secret},
 	})
 	if err == nil {
 		t.Fatal("expected an error when the source archive cannot be built")
@@ -574,18 +578,162 @@ func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesButKeepsRunID(t *test
 	if runID != 7 {
 		t.Fatalf("runID = %d, want 7 (the run row was already created)", runID)
 	}
+	if len(runStore.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(runStore.FinishRunCalls))
+	}
+	finish := runStore.FinishRunCalls[0]
+	if finish.ID != 7 || finish.Status != "failed" {
+		t.Fatalf("unexpected finish call: %+v", finish)
+	}
+	if strings.Contains(finish.ErrMsg, secret) {
+		t.Fatalf("FinishRun ErrMsg leaked secret: %q", finish.ErrMsg)
+	}
+	if !strings.Contains(finish.ErrMsg, "***") {
+		t.Fatalf("FinishRun ErrMsg missing *** marker: %q", finish.ErrMsg)
+	}
 }
 
-func TestRunService_Start_RemoteMode_CreateRemoteJobErrorPropagates(t *testing.T) {
+// 2.2: startRemote finishes a run whose first pass dispatches nothing passed (D2).
+// Unit test with a store whose FinishRun fails returns that error.
+func TestRunService_Start_RemoteMode_NothingTriggeredFinishRunFails(t *testing.T) {
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+	}}
+	expectedErr := errors.New("finish error")
+	runStore := &mocks.MockRunStore{CreateRunID: 10, FinishRunErr: expectedErr}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+	})
+	if err == nil || !errors.Is(err, expectedErr) {
+		t.Fatalf("Start err = %v, want %v", err, expectedErr)
+	}
+	if runID != 10 {
+		t.Fatalf("runID = %d, want 10", runID)
+	}
+}
+
+// 2.3: startRemote finishes the run failed when the snapshot fails (D3), the error redacted.
+func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotFailsRun(t *testing.T) {
+	secret := "secret-snapshot-fail"
 	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
-	svc := NewRunService(&mocks.MockRunStore{CreateRunID: 1}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
-	if _, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+	runStore := &mocks.MockRunStore{CreateRunID: 15}
+	snapshotErr := errors.New("snapshot db error: " + secret)
+	remoteJobs := &mocks.MockRemoteJobStore{SetRemoteRunSnapshotErr: snapshotErr}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(remoteJobs)
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), ResolvedSecretValues: []string{secret},
+	})
+	if err == nil {
+		t.Fatal("expected error when SetRemoteRunSnapshot fails")
+	}
+	if runID != 15 {
+		t.Fatalf("runID = %d, want 15", runID)
+	}
+	if len(runStore.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(runStore.FinishRunCalls))
+	}
+	finish := runStore.FinishRunCalls[0]
+	if finish.Status != "failed" {
+		t.Fatalf("finish.Status = %q, want failed", finish.Status)
+	}
+	if strings.Contains(finish.ErrMsg, secret) {
+		t.Fatalf("finish.ErrMsg leaked secret: %q", finish.ErrMsg)
+	}
+	if !strings.Contains(finish.ErrMsg, "***") {
+		t.Fatalf("finish.ErrMsg missing ***: %q", finish.ErrMsg)
+	}
+}
+
+// 2.3: Unit test with mocks that fail CreateRemoteJob: the first job failing gives a failed run at once.
+func TestRunService_Start_RemoteMode_CreateRemoteJobFailsFirstJobGivesFailedRunAtOnce(t *testing.T) {
+	secret := "secret-job-fail"
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+		{Name: "b", Trigger: "repo.app.changed", DependsOn: []string{"a"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{CreateRemoteJobErr: errors.New("job queue down: " + secret)}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), ResolvedSecretValues: []string{secret},
+	})
+	if err == nil {
+		t.Fatal("expected dispatch error")
+	}
+	if got := runStore.status(runID); got != "failed" {
+		t.Fatalf("run status = %q, want failed at once when the only job fails", got)
+	}
+	run, _ := runStore.GetRun(runID)
+	if len(run.TaskResults) == 0 {
+		t.Fatal("expected task results")
+	}
+	var sawFailedA, sawSkippedB bool
+	for _, tr := range run.TaskResults {
+		if tr.Name == "a" && tr.Status == "failed" {
+			sawFailedA = true
+			if strings.Contains(tr.Error, secret) {
+				t.Fatalf("task error leaked secret: %q", tr.Error)
+			}
+			if !strings.Contains(tr.Error, "***") {
+				t.Fatalf("task error missing ***: %q", tr.Error)
+			}
+		}
+		if tr.Name == "b" && tr.Status == "skipped" {
+			sawSkippedB = true
+		}
+	}
+	if !sawFailedA || !sawSkippedB {
+		t.Fatalf("expected task a failed and task b skipped, got %+v", run.TaskResults)
+	}
+}
+
+// 2.3: Unit test with mocks that fail CreateRemoteJob: the second failing while the first is pending
+// leaves the run running until the first completes, then failed.
+func TestRunService_Start_RemoteMode_CreateRemoteJobFailsSecondJobWhileFirstPending(t *testing.T) {
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+		{Name: "b", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{
+		Jobs:                  map[int]*domain.RemoteJob{},
+		CompleteJobOK:         true,
+		CreateRemoteJobErrFor: map[string]error{"b": errors.New("b failed to dispatch")},
+	}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
+	svc.SetRemoteJobStore(fakeJobs)
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
-	}); err == nil {
-		t.Fatal("expected CreateRemoteJob's error to propagate")
+	})
+	if err == nil {
+		t.Fatal("expected dispatch error for task b")
+	}
+	// Task a was dispatched, task b failed. Task a is pending, so run stays running!
+	if got := runStore.status(runID); got != "running" {
+		t.Fatalf("run status = %q, want running while task a is pending", got)
+	}
+	if len(remoteJobs.CreateRemoteJobCalls) != 2 || remoteJobs.CreateRemoteJobCalls[0].TaskName != "a" || remoteJobs.CreateRemoteJobCalls[1].TaskName != "b" {
+		t.Fatalf("expected create calls for a and b, got %+v", remoteJobs.CreateRemoteJobCalls)
+	}
+
+	// Now complete task a as passed
+	remoteJobs.Jobs[1] = &domain.RemoteJob{ID: 1, RunID: runID, TaskName: "a"}
+	if ok, err := svc.CompleteRemoteJob(1, 1, "passed", "done", "", nil); err != nil || !ok {
+		t.Fatalf("CompleteRemoteJob = %v, %v", ok, err)
+	}
+	// Since task a is passed and task b was recorded failed, run settles failed!
+	if got := runStore.status(runID); got != "failed" {
+		t.Fatalf("run status after task a completed = %q, want failed", got)
 	}
 }
 
@@ -691,7 +839,16 @@ func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) 
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// The dependencies are tasks of the run itself, not tasks
+			// outside it: a dependency the pipeline never resolved is
+			// ignored (remote-run-start-never-hangs design.md D1), while
+			// an undecided one inside the run holds the task back. "gate"
+			// has no result at all, so it is a manual task.
 			nodes := []dag.Node{{Task: model.Task{Name: "task", DependsOn: tc.dependsOn}}}
+			for _, dep := range tc.dependsOn {
+				_, decided := tc.latest[dep]
+				nodes = append(nodes, dag.Node{Task: model.Task{Name: dep, Manual: !decided}})
+			}
 			eligible, skipped := eligibleForDispatch(nodes, tc.latest)
 			if len(eligible) != 0 || len(skipped) != 0 {
 				t.Fatalf("eligible=%v skipped=%v, want the task to wait for its undecided dependency", eligible, skipped)
@@ -709,6 +866,91 @@ func TestEligibleForDispatch_ManualTaskNeverAutoDispatched(t *testing.T) {
 	eligible, skipped := eligibleForDispatch(nodes, latest)
 	if len(eligible) != 0 || len(skipped) != 0 {
 		t.Fatalf("expected a manual task to be left alone, got eligible=%v skipped=%v", eligible, skipped)
+	}
+}
+
+// remote-run-start-never-hangs D1: eligibleForDispatch ignores dependencies outside nodes.
+func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
+	tests := []struct {
+		name         string
+		nodes        []dag.Node
+		latest       map[string]domain.TaskResult
+		wantEligible []string
+		wantSkipped  []string
+	}{
+		{
+			name: "a dependency outside the run is ignored",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint"}}},
+			},
+			latest:       map[string]domain.TaskResult{},
+			wantEligible: []string{"deploy"},
+			wantSkipped:  nil,
+		},
+		{
+			name: "one inside still holds",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "lint"}},
+				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint"}}},
+			},
+			latest:       map[string]domain.TaskResult{},
+			wantEligible: []string{"lint"},
+			wantSkipped:  nil,
+		},
+		{
+			name: "a diamond whose root is outside the run",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "left", DependsOn: []string{"root"}}},
+				{Task: model.Task{Name: "right", DependsOn: []string{"root"}}},
+				{Task: model.Task{Name: "join", DependsOn: []string{"left", "right"}}},
+			},
+			latest:       map[string]domain.TaskResult{},
+			wantEligible: []string{"left", "right"},
+			wantSkipped:  nil,
+		},
+		{
+			name: "an outside dependency next to a failed inside one is blocked by the failed one",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "lint"}},
+				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint", "outside"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"lint": {Name: "lint", Status: "failed"},
+			},
+			wantEligible: nil,
+			wantSkipped:  []string{"deploy"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotEligible, gotSkipped := eligibleForDispatch(tt.nodes, tt.latest)
+			var eligibleNames []string
+			for _, task := range gotEligible {
+				eligibleNames = append(eligibleNames, task.Name)
+			}
+			if len(eligibleNames) != len(tt.wantEligible) {
+				t.Fatalf("eligible = %v, want %v", eligibleNames, tt.wantEligible)
+			}
+			for i := range eligibleNames {
+				if eligibleNames[i] != tt.wantEligible[i] {
+					t.Fatalf("eligible[%d] = %q, want %q", i, eligibleNames[i], tt.wantEligible[i])
+				}
+			}
+
+			var skippedNames []string
+			for _, tr := range gotSkipped {
+				skippedNames = append(skippedNames, tr.Name)
+			}
+			if len(skippedNames) != len(tt.wantSkipped) {
+				t.Fatalf("skipped = %v, want %v", skippedNames, tt.wantSkipped)
+			}
+			for i := range skippedNames {
+				if skippedNames[i] != tt.wantSkipped[i] {
+					t.Fatalf("skipped[%d] = %q, want %q", i, skippedNames[i], tt.wantSkipped[i])
+				}
+			}
+		})
 	}
 }
 

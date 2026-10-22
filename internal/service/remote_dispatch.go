@@ -152,6 +152,10 @@ func archiveWorkDirWithOpener(workDir string, open func(string) (*os.File, error
 // on an unresolved (not yet passed/failed/skipped/canceled) dependency is
 // left alone; the caller re-evaluates after the next completion.
 func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) (eligible []model.Task, newlySkipped []domain.TaskResult) {
+	nodeSet := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		nodeSet[node.Task.Name] = true
+	}
 	for _, node := range nodes {
 		task := node.Task
 		_, seeded := latest[task.Name]
@@ -173,6 +177,12 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult) 
 		blocked := false
 		unresolved := false
 		for _, dep := range task.DependsOn {
+			if !nodeSet[dep] {
+				// A dependency outside the run (its trigger was not
+				// satisfied) is ignored: it is not part of this run and
+				// holds nothing - remote-run-start-never-hangs design.md D1.
+				continue
+			}
 			d, ok := latest[dep]
 			if !ok || d.Status == "pending" || d.Status == "running" || d.Status == "claimed" || d.Status == "manual" {
 				// The dependency is not decided yet: the task waits,
@@ -265,34 +275,57 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	latest := make(map[string]domain.TaskResult, len(nodes))
 	eligible, _ := eligibleForDispatch(nodes, latest)
 
-	var archive []byte
-	if len(nodes) > 0 {
-		archive, err = archiveWorkDir(opts.WorkDir)
-		if err != nil {
-			return runID, fmt.Errorf("build source archive: %w", err)
+	if len(nodes) == 0 {
+		// Nothing triggered: finish the run passed at once -
+		// remote-run-start-never-hangs design.md D2.
+		if err := s.runStore.FinishRun(runID, "passed", "", "", nil); err != nil {
+			return runID, fmt.Errorf("finish run %d: %w", runID, err)
 		}
-		// Persist the archive and every triggered task's resolved
-		// variables once, so tasks.md 3.6's resumption walker can dispatch
-		// a dependent task later without re-acquiring source or
-		// re-resolving secrets - see design.md D6/D7.
-		perTaskVars := make(map[string]map[string]string, len(nodes))
-		for _, node := range nodes {
-			var vars map[string]string
-			if opts.Variables != nil {
-				vars = opts.Variables.Get(node.Task.Execute.Repo, node.Task.Name, "")
-			}
-			perTaskVars[node.Task.Name] = vars
-		}
-		if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars, opts.ResolvedSecretValues); err != nil {
-			return runID, fmt.Errorf("persist remote run snapshot: %w", err)
-		}
+		return runID, nil
 	}
+
+	archive, err := archiveWorkDir(opts.WorkDir)
+	if err != nil {
+		archiveErr := fmt.Errorf("build source archive: %w", err)
+		redactedErr := redactValues(archiveErr.Error(), opts.ResolvedSecretValues)
+		_ = s.runStore.FinishRun(runID, "failed", "", redactedErr, nil)
+		return runID, archiveErr
+	}
+	// Persist the archive and every triggered task's resolved
+	// variables once, so tasks.md 3.6's resumption walker can dispatch
+	// a dependent task later without re-acquiring source or
+	// re-resolving secrets - see design.md D6/D7.
+	perTaskVars := make(map[string]map[string]string, len(nodes))
+	for _, node := range nodes {
+		var vars map[string]string
+		if opts.Variables != nil {
+			vars = opts.Variables.Get(node.Task.Execute.Repo, node.Task.Name, "")
+		}
+		perTaskVars[node.Task.Name] = vars
+	}
+	if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars, opts.ResolvedSecretValues); err != nil {
+		snapshotErr := fmt.Errorf("persist remote run snapshot: %w", err)
+		redactedErr := redactValues(snapshotErr.Error(), opts.ResolvedSecretValues)
+		_ = s.runStore.FinishRun(runID, "failed", "", redactedErr, nil)
+		return runID, snapshotErr
+	}
+
+	var dispatchErrs []error
 	for _, task := range eligible {
 		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
 		payload := buildRemoteJobPayload(task, proj.Repos, proj.DefaultImage, opts.Variables, archive, opts.ResolvedSecretValues)
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
-			return runID, fmt.Errorf("dispatch task %q: %w", task.Name, err)
+			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err), opts.ResolvedSecretValues))
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
 		}
+	}
+	if len(dispatchErrs) > 0 {
+		_, newlySkipped := eligibleForDispatch(nodes, latest)
+		for _, skip := range newlySkipped {
+			_ = s.runStore.AppendTaskResult(runID, skip)
+		}
+		_ = s.finishRunWithRetry(runID)
+		return runID, fmt.Errorf("dispatch failed: %w", errors.Join(dispatchErrs...))
 	}
 	return runID, nil
 }
@@ -459,7 +492,7 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 			// a second time - so the task is recorded failed instead of
 			// being dispatched -
 			// remote-run-waits-for-dependents design.md D5.
-			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("record pending task %q: %w", task.Name, err)))
+			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("record pending task %q: %w", task.Name, err), secretValues))
 			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
 			continue
 		}
@@ -477,7 +510,7 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 			// task failed, naming the failure, so the run ends failed
 			// instead of staying running with a task that has no job -
 			// remote-run-waits-for-dependents design.md D5.
-			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err)))
+			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err), secretValues))
 			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
 			continue
 		}
@@ -500,12 +533,16 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 	return true, nil
 }
 
-// recordDispatchFailure records the task failed, naming why, so the run
-// ends failed instead of staying running with a task that has no job - it
-// returns the failure it recorded, joined with the write error when the
-// failure could not be recorded at all.
-func (s *RunService) recordDispatchFailure(runID int, taskName string, cause error) error {
-	if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: taskName, Status: "failed", Error: cause.Error()}); err != nil {
+// recordDispatchFailure records the task failed, naming why (redacting any
+// secret values), so the run ends failed instead of staying running with a
+// task that has no job - it returns the failure it recorded, joined with the
+// write error when the failure could not be recorded at all.
+func (s *RunService) recordDispatchFailure(runID int, taskName string, cause error, secretValues []string) error {
+	errMsg := cause.Error()
+	if len(secretValues) > 0 {
+		errMsg = redactValues(errMsg, secretValues)
+	}
+	if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: taskName, Status: "failed", Error: errMsg}); err != nil {
 		return errors.Join(cause, fmt.Errorf("record failed task %q: %w", taskName, err))
 	}
 	return cause
