@@ -502,3 +502,99 @@ every other poll failure.
 #### Scenario: A transient failure does not stop the runner
 - **WHEN** `kestrix runner` polls and receives `500` or cannot connect
 - **THEN** it SHALL log the error and poll again after its retry delay
+
+### Requirement: A remote run finishes after its dependents are decided
+
+Kestrix SHALL NOT give a remote-mode run a terminal status because of a job's
+completion reported by a runner until it has decided what that completion
+unblocks: dispatched the tasks that became due, or recorded them `skipped`
+because a dependency failed. Until then the run SHALL stay `running`. Once no
+task is pending or running, the run SHALL take the status its results imply,
+unless Kestrix cannot decide or record that status. Kestrix SHALL NOT resume a
+run that is already finished. If Kestrix cannot create the job of a task that became
+due, it SHALL record that task as `failed` with an error naming the failure,
+so the run ends `failed` rather than staying `running` with a task that has no
+job.
+
+Two failures leave the run `running` although its results hold nothing
+pending: a walker that stops before it knows what was due - the run, its
+pipeline or its snapshot cannot be read - and a finishing write that fails
+every retry. Both keep the run visible and cancelable, and the startup sweep
+marks it `failed` (`interrupted by server restart`) when the process restarts.
+
+This requirement covers a completion reported by a runner. Silent-runner
+recovery is outside it: a job that exhausts its reclaims is failed by the
+recovery sweep, which ends its run in the same transaction when the run's
+results leave nothing in flight, so the tasks that job blocked are neither
+dispatched nor recorded `skipped`.
+
+A manual gate is outside it as well: in a remote run a manual task is never
+dispatched and no result is recorded for it, so the run takes the status its
+other results imply. A dependent waits for every one of its dependencies to
+be decided, so a dependency that is never decided - a manual gate - leaves
+the dependent neither dispatched nor recorded.
+
+#### Scenario: A dependent unblocked by the last running task runs
+- **WHEN** a whole run has `build` and `deploy`, `deploy` depends on `build`, and the runner reports `build` passed
+- **THEN** the run SHALL still be `running`
+- **AND** a job for `deploy` SHALL be available to a runner
+- **AND** when the runner reports `deploy` passed, the run SHALL become `passed`
+
+#### Scenario: A failure skips the dependents and fails the run
+- **WHEN** the runner reports `build` failed in that run
+- **THEN** `deploy` SHALL be recorded `skipped`
+- **AND** the run SHALL become `failed`
+
+#### Scenario: A single-task re-run still finishes
+- **WHEN** the runner reports the only job of a single-task re-run passed
+- **THEN** the run SHALL become `passed`
+
+#### Scenario: Concurrent completions do not finish the run early
+- **WHEN** `lint` and `build` of one run are reported passed at the same moment and `deploy` depends on `build`
+- **THEN** `deploy` SHALL be dispatched exactly once
+- **AND** the run SHALL stay `running` until `deploy` completes
+
+#### Scenario: A dependent that cannot be dispatched fails
+- **WHEN** a task becomes due and Kestrix cannot create its job
+- **THEN** that task SHALL be recorded `failed` with an error naming the failure
+- **AND** the run SHALL become `failed`
+
+#### Scenario: A run canceled before it is resumed stays canceled
+- **WHEN** a run is canceled after a job's completion was recorded and before Kestrix resumed the run
+- **THEN** no job SHALL be dispatched for the run
+- **AND** the run SHALL stay `canceled`
+
+### Requirement: A remote run does not hang at start
+
+When a remote-mode run starts, Kestrix SHALL either dispatch a job for every
+task that is ready or finish the run. A dependency whose trigger is not
+satisfied is not part of the run and SHALL NOT delay or block the tasks that
+depend on it, as in an in-process run. A run in which no task is triggered
+SHALL finish `passed`, with no task result and no job. If starting fails after
+the run was created, Kestrix SHALL finish the run `failed` with an error naming
+the failure; when only the job of one task cannot be created, Kestrix SHALL
+record that task `failed` with that error instead. The error SHALL be redacted
+like an error a runner reports.
+
+#### Scenario: A dependency outside the run does not hold a task back
+- **WHEN** `deploy` (trigger `repo.app.changed`) depends on `lint` (trigger `repo.docs.changed`) and a run starts with only `app` changed
+- **THEN** a job for `deploy` SHALL be available to a runner
+
+#### Scenario: A dependency inside the run still holds a task back
+- **WHEN** the same run starts with `app` and `docs` changed
+- **THEN** a job for `lint` SHALL be available and none for `deploy`
+- **AND** a job for `deploy` SHALL become available once `lint` passes
+
+#### Scenario: Nothing is triggered
+- **WHEN** a run starts and no task's trigger is satisfied
+- **THEN** the run SHALL be `passed`, with no task result and no job
+
+#### Scenario: The source archive cannot be built
+- **WHEN** a run starts and its source archive cannot be built
+- **THEN** the run SHALL be `failed` with an error naming the cause
+- **AND** no job SHALL exist for it
+
+#### Scenario: One job cannot be created
+- **WHEN** a run starts, the job of one task cannot be created, and no other job exists
+- **THEN** that task SHALL be recorded `failed` with an error naming the failure
+- **AND** the run SHALL be `failed`

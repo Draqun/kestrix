@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change hexagonal-refactor. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Service layer holds business logic
 The `internal/service` package SHALL contain all business logic (run orchestration, webhook processing, project CRUD validation). It SHALL NOT import `net/http`.
 
@@ -25,7 +27,7 @@ A single `buildVarStore(proj, cfg) *variables.Store` helper SHALL be used by all
 - **THEN** `ProjectService` returns an error before the store is called
 
 ### Requirement: RunService orchestrates async execution
-`RunService` SHALL create the run record, launch the background goroutine, and call `FinishRun` on completion. The goroutine SHALL have panic recovery.
+`RunService` SHALL create the run record, launch the background goroutine, and finish the run on completion: an in-process run calls `FinishRun`, a remote run calls `FinishRunIfDone`, which finishes it only when no task is pending or running. The goroutine SHALL have panic recovery.
 
 #### Scenario: Run completes and is finalized
 - **WHEN** `RunService.Start(name, changed)` is called
@@ -34,6 +36,11 @@ A single `buildVarStore(proj, cfg) *variables.Store` helper SHALL be used by all
 #### Scenario: Panic in goroutine is recovered
 - **WHEN** the runner panics during execution
 - **THEN** the panic is recovered and the run is marked failed
+
+#### Scenario: A remote run is finished only when its dependents are decided
+- **WHEN** a runner reports a task of a remote run completed
+- **THEN** the service resumes the run and calls `FinishRunIfDone`
+- **AND** the run is finished only when no task is pending or running
 
 ### Requirement: Service unit tests use mock stores
 The `internal/service` package tests SHALL use hand-rolled mock implementations of `domain.ProjectStore`, `domain.RunStore`, and `domain.PipelineRunner`. Tests SHALL NOT connect to PostgreSQL or touch the filesystem.
@@ -52,4 +59,3 @@ The `internal/service` package SHALL maintain ≥90% statement coverage as measu
 #### Scenario: Coverage gate enforced
 - **WHEN** running `go test ./internal/service/ -coverprofile=coverage.out`
 - **THEN** `go tool cover -func=coverage.out` reports ≥90% for the total package
-
