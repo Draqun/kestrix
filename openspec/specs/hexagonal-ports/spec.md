@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change hexagonal-refactor. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Domain package has zero external dependencies
 The `internal/domain` package SHALL NOT import any other `internal/*` package. It SHALL contain only interfaces and shared types.
 
@@ -18,11 +20,15 @@ The `domain.ProjectStore` interface SHALL expose `Load`, `Save`, `Get`, `FindByG
 - **THEN** all project operations succeed without type assertions
 
 ### Requirement: RunStore port covers run lifecycle
-The `domain.RunStore` interface SHALL expose `CreateRun`, `FinishRun`, `AppendTaskResult`, `FlushRunOutput`, `CancelRun`, `ApplyTaskResult`, `GetRun`, `CountRuns`, `ListRuns`, `ListAllRuns`, `CountRunsByStatus`.
+The `domain.RunStore` interface SHALL expose `CreateRun`, `FinishRun`, `FinishRunIfDone`, `AppendTaskResult`, `FlushRunOutput`, `CancelRun`, `ApplyTaskResult`, `GetRun`, `CountRuns`, `ListRuns`, `ListAllRuns`, `CountRunsByStatus`. `FinishRunIfDone` SHALL finish a run only when its recorded results leave nothing pending or running, and SHALL leave a run that is already terminal alone.
 
 #### Scenario: PGStore implements RunStore
 - **WHEN** a `PGStore` is used as `domain.RunStore`
 - **THEN** all run operations succeed without type assertions
+
+#### Scenario: A run with a task in flight is not finished
+- **WHEN** `FinishRunIfDone` is called for a run whose results still hold a pending or running task
+- **THEN** the run keeps its `running` status
 
 ### Requirement: PipelineRunner port covers execution
 The `domain.PipelineRunner` interface SHALL expose `Run(ctx, project, changedSet, opts) ([]TaskResult, error)`.
@@ -65,4 +71,3 @@ The `internal/domain` package SHALL maintain ≥90% statement coverage.
 #### Scenario: Coverage gate enforced
 - **WHEN** running `go test ./internal/domain/ -coverprofile=coverage.out`
 - **THEN** `go tool cover -func=coverage.out` reports ≥90% for the total package
-
