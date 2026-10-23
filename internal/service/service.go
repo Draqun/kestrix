@@ -833,8 +833,12 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 	opts.OnTaskComplete = func(tr domain.TaskResult) {
 		tr.Output = truncateOutput(redactValues(tr.Output, opts.ResolvedSecretValues), s.MaxOutputBytes)
 		if s.runStore != nil {
-			_ = s.runStore.AppendTaskResult(runID, tr)
-			_ = s.runStore.FlushRunOutput(runID, output.String())
+			if err := s.runStore.AppendTaskResult(runID, tr); err != nil {
+				slog.Warn("could not append task result", "run_id", runID, "err", redact.Err(err, opts.ResolvedSecretValues))
+			}
+			if err := s.runStore.FlushRunOutput(runID, output.String()); err != nil {
+				slog.Warn("could not flush run output", "run_id", runID, "err", redact.Err(err, opts.ResolvedSecretValues))
+			}
 		}
 	}
 	opts.OnSourcesAcquired = func(sources []domain.AcquiredSource) error {
@@ -885,7 +889,7 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 	// run, so this slice must be redacted independently rather than relying
 	// on that earlier pass.
 	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues, s.MaxOutputBytes)
-	s.finishRun(runID, proj.Name, output.String(), taskResults, err, opts.SourceSessions, startedAt)
+	s.finishRun(runID, proj.Name, output.String(), taskResults, err, opts.SourceSessions, startedAt, opts.ResolvedSecretValues)
 }
 
 // redactTaskResults returns a copy of results with each Output field
@@ -903,10 +907,12 @@ func redactTaskResults(results []domain.TaskResult, values []string, maxOutputBy
 	return out
 }
 
-func (s *RunService) finishRun(runID int, projectName string, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager, startedAt time.Time) {
+func (s *RunService) finishRun(runID int, projectName string, output string, taskResults []domain.TaskResult, runErr error, sourceSessions domain.SourceSessionManager, startedAt time.Time, secrets []string) {
 	status, errMsg := runStatus(taskResults, runErr)
 	if s.runStore != nil {
-		_ = s.runStore.FinishRun(runID, status, output, errMsg, taskResults)
+		if err := s.runStore.FinishRun(runID, status, output, errMsg, taskResults); err != nil {
+			slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(err, secrets))
+		}
 		if status == "canceled" {
 			s.persistCanceledByIfLost(runID)
 		}

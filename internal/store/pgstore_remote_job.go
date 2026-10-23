@@ -270,6 +270,7 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 // column, so CompleteJob can put the completing claim's output on the task's
 // result.
 func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
+	chunk = storable(chunk)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("begin trace append: %w", err)
@@ -395,6 +396,8 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 // service can finish the run itself once it has decided what the completion
 // unblocked - see remote-run-waits-for-dependents design.md D1.
 func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
+	output = storable(output)
+	taskError = storable(taskError)
 	return s.completeJob(jobID, epoch, status, output, taskError, callerRunnerID, maxOutputBytes, false)
 }
 
@@ -419,6 +422,8 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 // every port-driven completion - the completion leaves the run's status alone
 // and the service finishes the run itself.
 func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int, finishRun bool) (bool, error) {
+	output = storable(output)
+	taskError = storable(taskError)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("begin complete job: %w", err)

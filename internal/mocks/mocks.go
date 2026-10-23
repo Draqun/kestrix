@@ -198,6 +198,7 @@ type MockRunStore struct {
 	AppendTaskCalls      []domain.TaskResult
 	AppendTaskErr        error
 	FlushRunCalls        []string
+	FlushRunErr          error
 	CancelRunCalls       []cancelRunCall
 	CancelRunErr         error
 	// CancelRunNoChange makes CancelRun report changed=false (as if a
@@ -290,8 +291,9 @@ func (m *MockRunStore) AppendTaskResult(runID int, tr domain.TaskResult) error {
 func (m *MockRunStore) FlushRunOutput(runID int, output string) error {
 	m.mu.Lock()
 	m.FlushRunCalls = append(m.FlushRunCalls, output)
+	err := m.FlushRunErr
 	m.mu.Unlock()
-	return nil
+	return err
 }
 func (m *MockRunStore) UpdateRunSources(_ int, sources []domain.AcquiredSource) error {
 	m.mu.Lock()
