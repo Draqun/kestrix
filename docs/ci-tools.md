@@ -73,10 +73,9 @@ container.
 ### Remote mode
 
 On a `remote`-mode project, a single-task re-run dispatches a job to a runner
-rather than executing on the Kestrix host - asynchronous, no local process. A
-manual gate is out of scope in remote mode: a manual task is never
-dispatched, never recorded, and never approvable - see
-[When a remote run finishes](remote-runners.md#when-a-remote-run-finishes).
+rather than executing on the Kestrix host - asynchronous, no local process.
+Triggered manual tasks wait for human approval before execution - see
+[Manual tasks and include_manual](remote-runners.md#manual-tasks-and-include_manual).
 
 A `remote`-mode run's trace may interleave two tasks' lines unpredictably.
 Every other mode has one sequential writer owning a run's output, so its

@@ -242,16 +242,22 @@ A single-task re-run dispatches one job, for that task, and nothing else.
 Completing it does not dispatch, skip, or record any other task of the run,
 whatever the pipeline's triggers say: a negated trigger such as
 `!repo.docs.changed` holds for any set of changes, which is why a re-run of
-`build` used to start `lint` and `deploy` as well. A manual gate is out of
-scope in remote mode: a manual task is never dispatched, never recorded, and
-never approvable - see
-[When a remote run finishes](#when-a-remote-run-finishes). Kestrix resumes
-only runs that were started with a source snapshot, and a re-run has none.
+`build` used to start `lint` and `deploy` as well. Kestrix resumes only runs
+that were started with a source snapshot, and a re-run has none.
 
 The run is recorded with `rerun_task` set to the task's name and an empty
 `changed`, and is labelled **Re-run: build** in the run list and the run
 detail. Re-runs recorded before this label existed keep showing
 **Changed: build**.
+
+### Manual tasks and include_manual
+
+In a `remote`-mode project, manual tasks pause execution and wait for human approval:
+
+- **When a gate appears:** In a run started without `include_manual`, each triggered manual task is recorded as `manual` when the run starts, before its first job is created. The run stays `running`, and tasks depending on the manual task wait.
+- **Approving a gate:** An operator can approve the waiting manual task via `POST /api/projects/{name}/runs/{id}/tasks/{task}/run`. Approving re-opens the run's recorded source from origin, creates a remote job for the gate, and leaves the task `pending` and the run `running`.
+- **Failed dependency:** If a dependency of a manual task fails, is canceled, or is skipped, Kestrix records the manual task as `skipped` with error `dependency failed`. This allows the run to resolve to `failed` rather than hanging indefinitely waiting for approval that can never succeed. Approving a `skipped` gate is rejected with `400 Bad Request`.
+- **`include_manual`:** When a run starts with `include_manual` enabled, manual tasks behave like ordinary tasks: they are dispatched automatically once their dependencies pass, without requiring manual approval.
 
 ### When a remote run finishes
 
@@ -260,8 +266,7 @@ completes. After a task completes, Kestrix first decides what that completion
 unblocks: a dependent whose own dependencies have all passed is dispatched as
 a new job, a dependent of a failed task is recorded `skipped` - unless one of
 its other dependencies is still undecided. A dependent waits for every one of
-its dependencies to be decided, so a dependency that is never decided - a
-manual gate - leaves it neither dispatched nor recorded. Only then does the
+its dependencies to be decided. Only then does the
 run take its final status - `passed`, `failed` or `canceled`.
 
 Silent-runner recovery is another way a run ends: a job that exhausts its
@@ -278,16 +283,13 @@ startup sweep marks such a run `failed` (`interrupted by server restart`) when
 the process restarts. Finishing them `passed` would hide the tasks that were
 never dispatched.
 
-A manual gate is out of scope for a remote run: the walker never dispatches a
-manual task and no result is recorded for it, so the run takes the status its
-other results imply - the gate is neither run nor approvable.
-
-So a run reads `running` while a dependent waits for a runner, and a gate that
-waits for `passed` never sees a run whose last task has not run yet. A
-dependent that cannot be dispatched - the job could not be created - is
-recorded `failed`, naming the failure, and the run ends `failed` instead of
-staying `running` with a task that has no job. A run canceled while a job was
-in flight keeps its `canceled` status; the late result is not recorded - only
+So a run reads `running` while a dependent waits for a runner, or while a
+manual gate awaits approval. A dependent that cannot be dispatched - the job
+could not be created - is recorded `failed`, naming the failure, and the run
+ends `failed` instead of staying `running` with a task that has no job. A run
+canceled while a job was in flight keeps its `canceled` status; the late result
+is not recorded - only its output is appended to the run's output - and it does
+not reopen the run.
 its output is appended to the run's output - and it does not reopen the run.
 
 ## Runner-job protocol

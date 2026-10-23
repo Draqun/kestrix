@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -780,7 +781,7 @@ func TestEligibleForDispatch_DiamondBlockedBranchSkipsInOnePass(t *testing.T) {
 	latest := map[string]domain.TaskResult{
 		"root": {Name: "root", Status: "failed"},
 	}
-	eligible, skipped := eligibleForDispatch(nodes, latest)
+	eligible, skipped, _ := eligibleForDispatch(nodes, latest, false)
 	if len(eligible) != 0 {
 		t.Fatalf("expected nothing eligible, got %+v", eligible)
 	}
@@ -849,7 +850,7 @@ func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) 
 				_, decided := tc.latest[dep]
 				nodes = append(nodes, dag.Node{Task: model.Task{Name: dep, Manual: !decided}})
 			}
-			eligible, skipped := eligibleForDispatch(nodes, tc.latest)
+			eligible, skipped, _ := eligibleForDispatch(nodes, tc.latest, false)
 			if len(eligible) != 0 || len(skipped) != 0 {
 				t.Fatalf("eligible=%v skipped=%v, want the task to wait for its undecided dependency", eligible, skipped)
 			}
@@ -863,7 +864,7 @@ func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) 
 func TestEligibleForDispatch_ManualTaskNeverAutoDispatched(t *testing.T) {
 	nodes := []dag.Node{{Task: model.Task{Name: "gate", Manual: true}}}
 	latest := map[string]domain.TaskResult{"gate": {Name: "gate", Status: "pending"}}
-	eligible, skipped := eligibleForDispatch(nodes, latest)
+	eligible, skipped, _ := eligibleForDispatch(nodes, latest, false)
 	if len(eligible) != 0 || len(skipped) != 0 {
 		t.Fatalf("expected a manual task to be left alone, got eligible=%v skipped=%v", eligible, skipped)
 	}
@@ -924,7 +925,7 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotEligible, gotSkipped := eligibleForDispatch(tt.nodes, tt.latest)
+			gotEligible, gotSkipped, _ := eligibleForDispatch(tt.nodes, tt.latest, false)
 			var eligibleNames []string
 			for _, task := range gotEligible {
 				eligibleNames = append(eligibleNames, task.Name)
@@ -992,5 +993,487 @@ func TestRunService_RemoteMode_SecretValuesReachEveryJob(t *testing.T) {
 	last := remoteJobs.CreateRemoteJobCalls[len(remoteJobs.CreateRemoteJobCalls)-1]
 	if last.TaskName != "b" || len(last.Payload.SecretValues) != 1 || last.Payload.SecretValues[0] != secrets[0] {
 		t.Fatalf("resumed job = %s with secret values %q, want b with %q", last.TaskName, last.Payload.SecretValues, secrets)
+	}
+}
+
+// remote-manual-gates 2.1: eligibleForDispatch manual gate behavior (design D1-D3).
+func TestEligibleForDispatch_ManualGates(t *testing.T) {
+	tests := []struct {
+		name          string
+		nodes         []dag.Node
+		latest        map[string]domain.TaskResult
+		includeManual bool
+		wantEligible  []string
+		wantSkipped   []string
+		wantGates     []string
+		checkLatest   map[string]string // task -> expected status in mutated latest
+	}{
+		{
+			name: "a gate is recorded whatever the state of its dependencies",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest:        map[string]domain.TaskResult{},
+			includeManual: false,
+			wantEligible:  []string{"build"},
+			wantSkipped:   nil,
+			wantGates:     []string{"gate"},
+			checkLatest: map[string]string{
+				"gate":  "manual",
+				"build": "pending",
+			},
+		},
+		{
+			name: "it is never returned as eligible",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "gate", Manual: true}},
+			},
+			latest: map[string]domain.TaskResult{
+				"gate": {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "manual",
+			},
+		},
+		{
+			name: "with a failed dependency it is skipped",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "failed"},
+				"gate":  {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   []string{"gate"},
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "skipped",
+			},
+		},
+		{
+			name: "with a canceled dependency it is skipped",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "canceled"},
+				"gate":  {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   []string{"gate"},
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "skipped",
+			},
+		},
+		{
+			name: "with a skipped dependency it is skipped",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "skipped"},
+				"gate":  {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   []string{"gate"},
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "skipped",
+			},
+		},
+		{
+			name: "with a pending dependency it stays manual",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "pending"},
+				"gate":  {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "manual",
+			},
+		},
+		{
+			name: "with a passed dependency it stays manual",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "passed"},
+				"gate":  {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "manual",
+			},
+		},
+		{
+			name: "dependents of a gate wait",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "gate", Manual: true}},
+				{Task: model.Task{Name: "worker", DependsOn: []string{"gate"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"gate": {Name: "gate", Status: "manual"},
+			},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     nil,
+		},
+		{
+			name: "a gate behind another gate",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "gate1", Manual: true}},
+				{Task: model.Task{Name: "gate2", Manual: true, DependsOn: []string{"gate1"}}},
+			},
+			latest:        map[string]domain.TaskResult{},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     []string{"gate1", "gate2"},
+			checkLatest: map[string]string{
+				"gate1": "manual",
+				"gate2": "manual",
+			},
+		},
+		{
+			name: "a gate declared before its dependency",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: model.Task{Name: "build"}},
+			},
+			latest:        map[string]domain.TaskResult{},
+			includeManual: false,
+			wantEligible:  []string{"build"},
+			wantSkipped:   nil,
+			wantGates:     []string{"gate"},
+			checkLatest: map[string]string{
+				"gate":  "manual",
+				"build": "pending",
+			},
+		},
+		{
+			name: "a gate with an outside dependency ignores it",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"outside"}}},
+			},
+			latest:        map[string]domain.TaskResult{},
+			includeManual: false,
+			wantEligible:  nil,
+			wantSkipped:   nil,
+			wantGates:     []string{"gate"},
+			checkLatest: map[string]string{
+				"gate": "manual",
+			},
+		},
+		{
+			name: "includeManual makes it an ordinary task (passed dependency dispatches)",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "passed"},
+			},
+			includeManual: true,
+			wantEligible:  []string{"gate"},
+			wantSkipped:   nil,
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "pending",
+			},
+		},
+		{
+			name: "includeManual makes it an ordinary task (failed dependency skips)",
+			nodes: []dag.Node{
+				{Task: model.Task{Name: "build"}},
+				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+			},
+			latest: map[string]domain.TaskResult{
+				"build": {Name: "build", Status: "failed"},
+			},
+			includeManual: true,
+			wantEligible:  nil,
+			wantSkipped:   []string{"gate"},
+			wantGates:     nil,
+			checkLatest: map[string]string{
+				"gate": "skipped",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotEligible, gotSkipped, gotGates := eligibleForDispatch(tt.nodes, tt.latest, tt.includeManual)
+
+			var eligibleNames []string
+			for _, task := range gotEligible {
+				eligibleNames = append(eligibleNames, task.Name)
+			}
+			if len(eligibleNames) != len(tt.wantEligible) {
+				t.Fatalf("eligible = %v, want %v", eligibleNames, tt.wantEligible)
+			}
+			for i := range eligibleNames {
+				if eligibleNames[i] != tt.wantEligible[i] {
+					t.Fatalf("eligible[%d] = %q, want %q", i, eligibleNames[i], tt.wantEligible[i])
+				}
+			}
+
+			var skippedNames []string
+			for _, tr := range gotSkipped {
+				skippedNames = append(skippedNames, tr.Name)
+				if tr.Status != "skipped" || tr.Error != "dependency failed" {
+					t.Fatalf("skipped task result = %+v, want skipped with 'dependency failed'", tr)
+				}
+			}
+			if len(skippedNames) != len(tt.wantSkipped) {
+				t.Fatalf("skipped = %v, want %v", skippedNames, tt.wantSkipped)
+			}
+			for i := range skippedNames {
+				if skippedNames[i] != tt.wantSkipped[i] {
+					t.Fatalf("skipped[%d] = %q, want %q", i, skippedNames[i], tt.wantSkipped[i])
+				}
+			}
+
+			var gateNames []string
+			for _, g := range gotGates {
+				gateNames = append(gateNames, g.Name)
+				if g.Status != "manual" {
+					t.Fatalf("gate task result = %+v, want manual", g)
+				}
+			}
+			if len(gateNames) != len(tt.wantGates) {
+				t.Fatalf("gates = %v, want %v", gateNames, tt.wantGates)
+			}
+			for i := range gateNames {
+				if gateNames[i] != tt.wantGates[i] {
+					t.Fatalf("gates[%d] = %q, want %q", i, gateNames[i], tt.wantGates[i])
+				}
+			}
+
+			for taskName, expectedStatus := range tt.checkLatest {
+				actual, ok := tt.latest[taskName]
+				if !ok {
+					t.Fatalf("expected task %q in latest, not found", taskName)
+				}
+				if actual.Status != expectedStatus {
+					t.Fatalf("latest[%q].Status = %q, want %q", taskName, actual.Status, expectedStatus)
+				}
+			}
+		})
+	}
+}
+
+type recordingRunStore struct {
+	*mocks.MockRunStore
+	events *[]string
+}
+
+func (r *recordingRunStore) AppendTaskResult(runID int, tr domain.TaskResult) error {
+	*r.events = append(*r.events, fmt.Sprintf("append:%s:%s", tr.Name, tr.Status))
+	return r.MockRunStore.AppendTaskResult(runID, tr)
+}
+
+type recordingJobStore struct {
+	*mocks.MockRemoteJobStore
+	events *[]string
+}
+
+func (r *recordingJobStore) CreateRemoteJob(runID int, taskName string, payload domain.RemoteJobPayload) (int, error) {
+	*r.events = append(*r.events, fmt.Sprintf("createJob:%s", taskName))
+	return r.MockRemoteJobStore.CreateRemoteJob(runID, taskName, payload)
+}
+
+// remote-manual-gates 2.2: Unit test with a recording mock that the gate is appended before the first CreateRemoteJob.
+func TestRunService_StartRemote_GateAppendedBeforeFirstCreateRemoteJob(t *testing.T) {
+	proj := &model.Project{
+		Name:  "test-order-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
+		},
+	}
+
+	var events []string
+	runStore := &recordingRunStore{
+		MockRunStore: &mocks.MockRunStore{CreateRunID: 100},
+		events:       &events,
+	}
+	jobStore := &recordingJobStore{
+		MockRemoteJobStore: &mocks.MockRemoteJobStore{},
+		events:             &events,
+	}
+
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(jobStore)
+
+	runID, err := svc.Start(context.Background(), "test-order-proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode:    "remote",
+		WorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if runID != 100 {
+		t.Fatalf("runID = %d, want 100", runID)
+	}
+
+	gateAppendIdx := -1
+	firstJobIdx := -1
+	for i, ev := range events {
+		if ev == "append:deploy:manual" && gateAppendIdx == -1 {
+			gateAppendIdx = i
+		}
+		if strings.HasPrefix(ev, "createJob:") && firstJobIdx == -1 {
+			firstJobIdx = i
+		}
+	}
+
+	if gateAppendIdx == -1 {
+		t.Fatalf("append:deploy:manual not found in events: %v", events)
+	}
+	if firstJobIdx == -1 {
+		t.Fatalf("createJob not found in events: %v", events)
+	}
+	if gateAppendIdx >= firstJobIdx {
+		t.Fatalf("gate append at index %d is not before first job create at index %d: events = %v", gateAppendIdx, firstJobIdx, events)
+	}
+}
+
+type plainRunStore struct {
+	domain.RunStore
+}
+
+// remote-manual-gates 2.3: a store without RunSourceStore is skipped.
+func TestRunService_StartRemote_StoreWithoutRunSourceStoreIsSkipped(t *testing.T) {
+	proj := &model.Project{
+		Name:  "test-no-source-store-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+		},
+	}
+	baseStore := &mocks.MockRunStore{CreateRunID: 200}
+	store := &plainRunStore{RunStore: baseStore}
+	jobStore := &mocks.MockRemoteJobStore{}
+
+	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(jobStore)
+
+	runID, err := svc.Start(context.Background(), "test-no-source-store-proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode:           "remote",
+		WorkDir:        t.TempDir(),
+		InitialSources: []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("Start returned unexpected error: %v", err)
+	}
+	if runID != 200 {
+		t.Fatalf("runID = %d, want 200", runID)
+	}
+}
+
+// remote-manual-gates 2.3: a failing UpdateRunSources returns the error.
+func TestRunService_StartRemote_FailingUpdateRunSourcesReturnsError(t *testing.T) {
+	proj := &model.Project{
+		Name:  "test-failing-sources-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+		},
+	}
+	expectedErr := errors.New("update sources db failure")
+	store := &mocks.MockRunStore{CreateRunID: 300, UpdateSourcesErr: expectedErr}
+	jobStore := &mocks.MockRemoteJobStore{}
+
+	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(jobStore)
+
+	_, err := svc.Start(context.Background(), "test-failing-sources-proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode:           "remote",
+		WorkDir:        t.TempDir(),
+		InitialSources: []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("err = %v, want errors.Is expectedErr (%v)", err, expectedErr)
+	}
+}
+
+// remote-manual-gates 2.2: resumeRemoteRun records an unrecorded gate it finds, and propagates append error.
+func TestResumeRemoteRun_RecordsUnrecordedGate(t *testing.T) {
+	proj := &model.Project{
+		Name:  "test-unrecorded-gate-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
+		},
+	}
+	runStore := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          456,
+			ProjectName: proj.Name,
+			Changed:     []string{"app"},
+			PipelineDef: proj,
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: "passed"},
+			},
+		},
+	}
+	jobStore := &mocks.MockRemoteJobStore{}
+	_ = jobStore.SetRemoteRunSnapshot(456, []byte("tar-bytes"), nil, nil)
+
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(jobStore)
+
+	decided, err := svc.resumeRemoteRun(456)
+	if err != nil || !decided {
+		t.Fatalf("resumeRemoteRun = %v, %v, want true, nil", decided, err)
+	}
+
+	foundGate := false
+	for _, tr := range runStore.AppendTaskCalls {
+		if tr.Name == "deploy" && tr.Status == "manual" {
+			foundGate = true
+		}
+	}
+	if !foundGate {
+		t.Fatalf("expected deploy gate recorded manual, got calls: %+v", runStore.AppendTaskCalls)
+	}
+
+	// Error path: failing AppendTaskResult propagates error
+	appendErr := errors.New("cannot append gate")
+	runStore.AppendTaskErr = appendErr
+	_, err = svc.resumeRemoteRun(456)
+	if err == nil || !errors.Is(err, appendErr) {
+		t.Fatalf("err = %v, want errors.Is %v", err, appendErr)
 	}
 }

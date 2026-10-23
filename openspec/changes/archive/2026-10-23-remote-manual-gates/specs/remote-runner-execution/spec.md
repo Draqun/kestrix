@@ -2,15 +2,12 @@
 
 ### Requirement: Manual tasks in a remote run
 
-In a remote-mode run started without `include_manual`, Kestrix SHALL record
-each triggered manual task as `manual` when the run starts, before it creates
-the run's first job, and SHALL NOT dispatch it until it is approved. While a
-task is `manual`, the run SHALL stay `running` and the tasks that depend on it
-SHALL wait. If a dependency of a `manual` task fails, is canceled or is
-skipped, Kestrix SHALL record that task `skipped` with the error
-`dependency failed`. In a run started with `include_manual`, a manual task
-SHALL be an ordinary task. Kestrix SHALL record the sources a remote run
-started from, so that approving one of its tasks can re-open them.
+In a remote-mode run without `include_manual`, Kestrix SHALL record each triggered
+manual task as `manual` before creating any job, and SHALL keep the run `running`
+while tasks await approval. A manual task SHALL NOT be dispatched until approved.
+If its dependency fails, is canceled, or is skipped, Kestrix SHALL record the task
+as `skipped` with `dependency failed`. With `include_manual`, a manual task SHALL
+be an ordinary task. Kestrix SHALL record the sources a remote run started from.
 
 #### Scenario: A manual task waits for approval
 - **WHEN** `deploy` is manual and depends on `build`, and a run starts without `include_manual`
