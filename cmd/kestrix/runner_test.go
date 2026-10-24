@@ -907,3 +907,26 @@ func TestRunJob_ReportsTaskErrorWithoutOutput(t *testing.T) {
 		t.Fatalf("completion = %v, want failed with a non-empty error", *complete)
 	}
 }
+
+// remote-task-artifacts D2: after a task exits 0, a missing declared path
+// fails it with artifact "<path>" not found.
+func TestRunJob_MissingArtifactFailsTask(t *testing.T) {
+	ts, _, complete := recordingRunnerServer(t)
+	job := &domain.RemoteJob{ID: 1, ClaimEpoch: 1, Payload: domain.RemoteJobPayload{
+		Task: domain.Task{
+			Name:      "build",
+			Artifacts: []string{"dist/"},
+			Execute:   domain.ExecuteSpec{Repo: "app", Script: "true"},
+		},
+		Repos:   []domain.Repo{{Name: "app", Path: "app"}},
+		Archive: buildTestArchive(t, map[string]string{"app/.keep": ""}),
+	}}
+	runJob(context.Background(), ts.Client(), ts.URL, "tok", "local", job)
+	if (*complete)["status"] != "failed" {
+		t.Fatalf("status = %v, want failed", (*complete)["status"])
+	}
+	msg, _ := (*complete)["error"].(string)
+	if !strings.Contains(msg, `artifact "dist/" not found`) {
+		t.Fatalf("error = %q, want containing 'artifact \"dist/\" not found'", msg)
+	}
+}

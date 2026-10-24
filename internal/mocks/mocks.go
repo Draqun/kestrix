@@ -631,6 +631,11 @@ type MockRemoteJobStore struct {
 	SetRemoteRunSnapshotCalls int
 	GetRemoteRunSnapshotErr   error
 	GetRemoteRunSnapshotCalls int
+
+	Artifacts          map[string][]byte
+	PutArtifactErr     error
+	ListArtifactsErr   error
+	DeleteArtifactsErr error
 }
 
 // CreateRemoteJobCall records one CreateRemoteJob invocation.
@@ -720,6 +725,45 @@ func (m *MockRemoteJobStore) DeleteTerminalRemoteSecrets() error {
 	defer m.mu.Unlock()
 	m.deleteSecretsCalls++
 	return m.DeleteSecretsErr
+}
+
+func (m *MockRemoteJobStore) PutRemoteArtifact(runID int, taskName string, archive []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.PutArtifactErr != nil {
+		return m.PutArtifactErr
+	}
+	if m.Artifacts == nil {
+		m.Artifacts = make(map[string][]byte)
+	}
+	key := fmt.Sprintf("%d:%s", runID, taskName)
+	m.Artifacts[key] = archive
+	return nil
+}
+
+func (m *MockRemoteJobStore) ListRemoteArtifactsByTasks(runID int, taskNames []string) (map[string][]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ListArtifactsErr != nil {
+		return nil, m.ListArtifactsErr
+	}
+	out := make(map[string][]byte)
+	for _, taskName := range taskNames {
+		key := fmt.Sprintf("%d:%s", runID, taskName)
+		if arch, ok := m.Artifacts[key]; ok {
+			out[taskName] = arch
+		}
+	}
+	return out, nil
+}
+
+func (m *MockRemoteJobStore) DeleteTerminalRemoteArtifacts() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.DeleteArtifactsErr != nil {
+		return m.DeleteArtifactsErr
+	}
+	return nil
 }
 
 // DeleteSecretsCallCount returns the number of DeleteTerminalRemoteSecrets

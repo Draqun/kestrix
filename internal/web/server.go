@@ -99,7 +99,10 @@ type Config struct {
 	// remote-runner-registration design.md D4.
 	RunnerJobMaxBodyBytes       int64
 	RunnerJobMaxConcurrentPolls int
-	Metrics                     MetricsConfig
+	// RunnerArtifactMaxBytes bounds task artifact archives uploaded by runners;
+	// zero means the default (50 MiB). See remote-task-artifacts design D3.
+	RunnerArtifactMaxBytes int64
+	Metrics                MetricsConfig
 }
 
 // MetricsConfig controls the GET /metrics endpoint; see observability
@@ -295,6 +298,15 @@ func (s *Server) runnerJobMaxBodyBytes() int64 {
 		return s.cfg.RunnerJobMaxBodyBytes
 	}
 	return defaultRunnerJobMaxBytes
+}
+
+const defaultRunnerArtifactMaxBytes = int64(52428800) // 50 MiB
+
+func (s *Server) runnerArtifactMaxBytes() int64 {
+	if s.cfg.RunnerArtifactMaxBytes > 0 {
+		return s.cfg.RunnerArtifactMaxBytes
+	}
+	return defaultRunnerArtifactMaxBytes
 }
 
 func (s *Server) runnerJobMaxConcurrentPolls() int {
@@ -602,11 +614,14 @@ func (s *Server) buildRouter() chi.Router {
 	// for its own independent auth; see remote-runner-registration
 	// design.md D4 and tasks.md 3.1.
 	r.Route("/api/runner-jobs", func(r chi.Router) {
-		r.Use(maxBody(s.runnerJobMaxBodyBytes()))
 		r.Use(s.requireRunnerAuth)
-		r.Get("/next", s.handleRunnerJobNext)
-		r.Patch("/{id}/trace", s.handleRunnerJobTrace)
-		r.Put("/{id}/complete", s.handleRunnerJobComplete)
+		r.Group(func(r chi.Router) {
+			r.Use(maxBody(s.runnerJobMaxBodyBytes()))
+			r.Get("/next", s.handleRunnerJobNext)
+			r.Patch("/{id}/trace", s.handleRunnerJobTrace)
+			r.Put("/{id}/complete", s.handleRunnerJobComplete)
+		})
+		r.With(maxBody(s.runnerArtifactMaxBytes())).Put("/{id}/artifacts", s.handleRunnerJobArtifacts)
 	})
 
 	// Metrics - registered only when enabled, so a disabled instance

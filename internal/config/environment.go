@@ -100,6 +100,8 @@ type Environment struct {
 	RunnerMaxConcurrentRuns int
 	RunHistoryLimit         int
 	RunnerMaxOutputBytes    int
+	// RunnerArtifactMaxBytes bounds uploaded task artifact archives; defaults to 52428800 (50 MiB).
+	RunnerArtifactMaxBytes int
 	// HTTPReadTimeout, HTTPWriteTimeout, and HTTPIdleTimeout bound the HTTP
 	// listener's connection lifetime; see webhook-ingress-hardening design.md
 	// D5. Defaults to 30s, 120s, and 120s.
@@ -374,6 +376,11 @@ func LoadEnvironment(environ []string) *Environment {
 		validationErr = err
 	}
 
+	runnerArtifactMaxBytes, err := parsePositiveIntEnv(values, "RUNNER_ARTIFACT_MAX_BYTES", 52428800)
+	if err != nil && validationErr == nil {
+		validationErr = err
+	}
+
 	httpReadTimeout := 30 * time.Second
 	if raw := values[Prefix+"HTTP_READ_TIMEOUT"]; raw != "" {
 		parsed, err := time.ParseDuration(raw)
@@ -566,6 +573,7 @@ func LoadEnvironment(environ []string) *Environment {
 		RunnerMaxConcurrentRuns:     runnerMaxConcurrentRuns,
 		RunHistoryLimit:             runHistoryLimit,
 		RunnerMaxOutputBytes:        runnerMaxOutputBytes,
+		RunnerArtifactMaxBytes:      runnerArtifactMaxBytes,
 		HTTPReadTimeout:             httpReadTimeout,
 		HTTPWriteTimeout:            httpWriteTimeout,
 		HTTPIdleTimeout:             httpIdleTimeout,

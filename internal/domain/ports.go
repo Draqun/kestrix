@@ -250,6 +250,13 @@ const (
 	RemoteJobStatusCanceled = "canceled"
 )
 
+// IsTerminalJobStatus reports whether a remote job status is terminal.
+func IsTerminalJobStatus(status string) bool {
+	return status == RemoteJobStatusPassed ||
+		status == RemoteJobStatusFailed ||
+		status == RemoteJobStatusCanceled
+}
+
 // RemoteJobPayload is what a runner receives from GET /api/runner-jobs/next:
 // the task to execute, its fully-resolved variables (flattened - no
 // control-plane variable is ever included, per task-execution-isolation),
@@ -281,6 +288,9 @@ type RemoteJobPayload struct {
 	// column uses its own type that has neither field (D2).
 	SecretValues []string `json:"secret_values,omitempty"`
 	Archive      []byte   `json:"archive"`
+	// Artifacts carries the archives of every passed ancestor of the task,
+	// ordered topologically with ties broken by declaration order (remote-task-artifacts design D4).
+	Artifacts [][]byte `json:"artifacts,omitempty"`
 }
 
 // RemoteJob is one task dispatched to a remote runner instead of executed
@@ -399,6 +409,13 @@ type RemoteJobStore interface {
 	// values of every terminal job and run (remote-runner-fixes design.md
 	// D2). One sweep covers every way a job or run can end.
 	DeleteTerminalRemoteSecrets() error
+	// PutRemoteArtifact stores an artifact archive produced by taskName in runID.
+	// A repeated upload replaces the existing archive (remote-task-artifacts).
+	PutRemoteArtifact(runID int, taskName string, archive []byte) error
+	// ListRemoteArtifactsByTasks retrieves stored artifact archives for the given tasks in runID (remote-task-artifacts).
+	ListRemoteArtifactsByTasks(runID int, taskNames []string) (map[string][]byte, error)
+	// DeleteTerminalRemoteArtifacts deletes stored artifacts of terminal runs (remote-task-artifacts).
+	DeleteTerminalRemoteArtifacts() error
 	// OutstandingJobRunIDsForProject returns the IDs of projectName's runs
 	// that have a job in pending/claimed/running status - the store-backed
 	// half of ActiveRunIDsForProject's remote-mode carve-out (design.md

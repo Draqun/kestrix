@@ -438,6 +438,9 @@ func TestLoadEnvironmentRunConcurrencyAndRetentionDefaults(t *testing.T) {
 	if env.RunnerMaxOutputBytes != 10485760 {
 		t.Errorf("RunnerMaxOutputBytes = %d, want 10485760", env.RunnerMaxOutputBytes)
 	}
+	if env.RunnerArtifactMaxBytes != 52428800 {
+		t.Errorf("RunnerArtifactMaxBytes = %d, want 52428800", env.RunnerArtifactMaxBytes)
+	}
 }
 
 func TestLoadEnvironmentRunConcurrencyAndRetentionExplicitValues(t *testing.T) {
@@ -445,6 +448,7 @@ func TestLoadEnvironmentRunConcurrencyAndRetentionExplicitValues(t *testing.T) {
 		"KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=4",
 		"KESTRIX_RUN_HISTORY_LIMIT=500",
 		"KESTRIX_RUNNER_MAX_OUTPUT_BYTES=2048",
+		"KESTRIX_RUNNER_ARTIFACT_MAX_BYTES=1048576",
 	})
 	if err := env.ValidationError(); err != nil {
 		t.Fatal(err)
@@ -457,6 +461,18 @@ func TestLoadEnvironmentRunConcurrencyAndRetentionExplicitValues(t *testing.T) {
 	}
 	if env.RunnerMaxOutputBytes != 2048 {
 		t.Errorf("RunnerMaxOutputBytes = %d, want 2048", env.RunnerMaxOutputBytes)
+	}
+	if env.RunnerArtifactMaxBytes != 1048576 {
+		t.Errorf("RunnerArtifactMaxBytes = %d, want 1048576", env.RunnerArtifactMaxBytes)
+	}
+}
+
+func TestLoadEnvironmentRunnerArtifactMaxBytesRejectsNonPositive(t *testing.T) {
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		env := LoadEnvironment([]string{"KESTRIX_RUNNER_ARTIFACT_MAX_BYTES=" + raw})
+		if err := env.ValidationError(); err == nil {
+			t.Fatalf("KESTRIX_RUNNER_ARTIFACT_MAX_BYTES=%q: ValidationError() = nil, want error", raw)
+		}
 	}
 }
 

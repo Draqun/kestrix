@@ -36,6 +36,9 @@ type Task struct {
 	// remote mode, normalised by NormalizeRunnerTags; ignored in every other
 	// mode (remote-runner-management).
 	RunnerTags []string `hcl:"runner_tags,optional" json:"runner_tags,omitempty"`
+	// Artifacts names paths relative to the task's working directory that
+	// the task produces for tasks depending on it (remote-task-artifacts).
+	Artifacts []string `hcl:"artifacts,optional" json:"artifacts,omitempty"`
 }
 
 // Variable is a pipeline variable with optional repository/job scope.
