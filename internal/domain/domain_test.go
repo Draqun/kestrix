@@ -206,3 +206,16 @@ func TestIsTerminalRunStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTerminalJobStatus(t *testing.T) {
+	for _, status := range []string{RemoteJobStatusPassed, RemoteJobStatusFailed, RemoteJobStatusCanceled} {
+		if !IsTerminalJobStatus(status) {
+			t.Errorf("IsTerminalJobStatus(%q) = false, want true", status)
+		}
+	}
+	for _, status := range []string{"", "running", "claimed", "pending"} {
+		if IsTerminalJobStatus(status) {
+			t.Errorf("IsTerminalJobStatus(%q) = true, want false", status)
+		}
+	}
+}

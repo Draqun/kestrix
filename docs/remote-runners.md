@@ -236,6 +236,18 @@ If [silent-runner recovery](#silent-runner-recovery) returned the job to the
 queue, the task shows only the claim that completed it, while the aggregate
 output keeps what every claim streamed.
 
+### Task artifacts
+
+In `remote` mode, each task runs in an isolated temporary directory on a runner. By default, changes made to the workspace do not persist across jobs or machines.
+
+When tasks produce outputs needed by downstream tasks (e.g. build binaries, generated assets), declare them using `artifacts` in the task definition (see [Pipeline Definition](pipeline-definition.md#artifacts)):
+
+1. **Upload**: After a task completes successfully (exit code 0) and passes the missing-artifact check, the runner packages the declared paths into a gzip-compressed tar archive and uploads it to Kestrix via `PUT /api/runner-jobs/{id}/artifacts?epoch=N`.
+2. **Size limit**: Uploads are bounded by `KESTRIX_RUNNER_ARTIFACT_MAX_BYTES` (default 50 MiB / `52428800` bytes). If an upload exceeds this limit, Kestrix rejects the request with HTTP `413 Payload Too Large`, and the runner fails the task naming the limit.
+3. **Delivery to dependents**: When downstream tasks become eligible, Kestrix delivers the stored artifact archives of all passed ancestor tasks in the job payload. The runner unpacks them in topological dependency order (ties broken by declaration order in the pipeline file) over the clean source workspace before running the task script.
+4. **Lifetime**: Artifacts live only as long as the run. Once the run reaches a terminal state (`passed`, `failed`, or `canceled`), the periodic terminal cleanup sweeps and deletes all `remote_artifacts` rows. Run retention cascading deletes any remaining rows if a run is pruned.
+5. **Security notice**: Artifacts are stored unencrypted and are not redacted, as they are files rather than task output logs. **Do not declare paths containing sensitive secrets or private keys as artifacts.**
+
 ### Re-running one task
 
 A single-task re-run dispatches one job, for that task, and nothing else.
@@ -347,6 +359,7 @@ when it cannot check the token at all; that is transient, so retry.
 | Setting | Env var | Default |
 |---------|---------|---------|
 | Runner-job request body bound | `KESTRIX_RUNNER_JOB_MAX_BODY_BYTES` | 20971520 (20 MiB) |
+| Runner artifact archive size bound | `KESTRIX_RUNNER_ARTIFACT_MAX_BYTES` | 52428800 (50 MiB) |
 | Concurrent long-polls per runner token | `KESTRIX_RUNNER_JOB_MAX_CONCURRENT_POLLS` | 2 |
 | Silent-runner timeout | `KESTRIX_RUNNER_JOB_TIMEOUT` | 120s |
 | Max reclaim attempts before failing a job | `KESTRIX_RUNNER_JOB_MAX_RECLAIMS` | 3 |

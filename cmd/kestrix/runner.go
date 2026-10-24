@@ -181,6 +181,14 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
 		return
 	}
+	for _, artArchive := range job.Payload.Artifacts {
+		if err := unpackArchive(artArchive, workDir); err != nil {
+			fmt.Fprintf(os.Stderr, "kestrix runner: unpack artifact: %v\n", err)
+			msg := "runner: unpack artifact: " + err.Error()
+			reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+			return
+		}
+	}
 
 	project := model.Project{
 		Repos:        job.Payload.Repos,
@@ -205,6 +213,18 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 		fmt.Fprintf(os.Stderr, "kestrix runner: task %q: %v\n", job.Payload.Task.Name, runErr)
 		if taskError == "" {
 			taskError = runErr.Error()
+		}
+	}
+	if status == "passed" && len(job.Payload.Task.Artifacts) > 0 {
+		archive, err := archiveDeclaredArtifacts(workDir, job.Payload.Repos, job.Payload.Task)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kestrix runner: archive artifacts: %v\n", err)
+			status = "failed"
+			taskError = err.Error()
+		} else if err := uploadArtifacts(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, archive); err != nil {
+			fmt.Fprintf(os.Stderr, "kestrix runner: %v\n", err)
+			status = "failed"
+			taskError = err.Error()
 		}
 	}
 	// output is left empty: every byte of it already streamed via
@@ -393,4 +413,135 @@ func safeSymlinkTarget(destDir, entryTarget, linkname string) error {
 		return fmt.Errorf("symlink target %q escapes the extraction directory", linkname)
 	}
 	return nil
+}
+
+func uploadArtifacts(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, archive []byte) error {
+	url := fmt.Sprintf("%s/api/runner-jobs/%d/artifacts?epoch=%d", baseURL, jobID, epoch)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(archive))
+	if err != nil {
+		return fmt.Errorf("create artifact request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/gzip")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload artifacts: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	msg := serverMessage(body)
+	if msg != "" {
+		return fmt.Errorf("upload artifacts: %s", msg)
+	}
+	return fmt.Errorf("upload artifacts: %s", resp.Status)
+}
+
+func archiveDeclaredArtifacts(workDir string, repos []domain.Repo, task domain.Task) ([]byte, error) {
+	var repoPath string
+	for _, r := range repos {
+		if r.Name == task.Execute.Repo {
+			repoPath = r.Path
+			break
+		}
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	for _, art := range task.Artifacts {
+		targetPath := filepath.Join(workDir, repoPath, art)
+		baseRel := filepath.Clean(filepath.Join(repoPath, art))
+		if baseRel == "." {
+			baseRel = ""
+		}
+
+		info, err := os.Lstat(targetPath)
+		if err != nil {
+			return nil, fmt.Errorf("artifact %q: %w", art, err)
+		}
+
+		if !info.IsDir() {
+			if err := addTarEntry(tw, targetPath, baseRel, info); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		dirRel := baseRel
+		if dirRel != "" && !strings.HasSuffix(dirRel, "/") {
+			dirRel += "/"
+		}
+		if dirRel != "" {
+			hdr, _ := tar.FileInfoHeader(info, "")
+			hdr.Name = dirRel
+			if err := tw.WriteHeader(hdr); err != nil {
+				return nil, err
+			}
+		}
+
+		err = filepath.Walk(targetPath, func(path string, walkInfo os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if path == targetPath {
+				return nil
+			}
+			subRel, err := filepath.Rel(targetPath, path)
+			if err != nil {
+				return err
+			}
+			entryName := filepath.ToSlash(filepath.Join(baseRel, subRel))
+			if walkInfo.IsDir() && !strings.HasSuffix(entryName, "/") {
+				entryName += "/"
+			}
+			return addTarEntry(tw, path, entryName, walkInfo)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func addTarEntry(tw *tar.Writer, path, entryName string, info os.FileInfo) error {
+	entryName = filepath.ToSlash(entryName)
+	if info.IsDir() {
+		if !strings.HasSuffix(entryName, "/") {
+			entryName += "/"
+		}
+		hdr, _ := tar.FileInfoHeader(info, "")
+		hdr.Name = entryName
+		return tw.WriteHeader(hdr)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		link, _ := os.Readlink(path)
+		hdr, _ := tar.FileInfoHeader(info, link)
+		hdr.Name = entryName
+		return tw.WriteHeader(hdr)
+	}
+	hdr, _ := tar.FileInfoHeader(info, "")
+	hdr.Name = entryName
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(tw, f)
+	return err
 }

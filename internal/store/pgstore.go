@@ -204,6 +204,14 @@ func migrate(db *sql.DB, defaultMode string) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_jobs_run_task_active
 			ON remote_jobs(run_id, task_name)
 			WHERE status NOT IN ('passed', 'failed', 'canceled');
+
+		CREATE TABLE IF NOT EXISTS remote_artifacts (
+			run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+			task_name       TEXT NOT NULL,
+			archive         BYTEA NOT NULL,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (run_id, task_name)
+		);
 	`); err != nil {
 		return fmt.Errorf("create base schema: %w", err)
 	}
@@ -266,6 +274,13 @@ func migrate(db *sql.DB, defaultMode string) error {
 		// here (a new claim empties it), so CompleteJob can put the completing
 		// claim's output on the task's result - remote-run-ux design.md D1.
 		{"add remote job output", `ALTER TABLE remote_jobs ADD COLUMN IF NOT EXISTS output TEXT NOT NULL DEFAULT ''`},
+		{"create remote artifacts", `CREATE TABLE IF NOT EXISTS remote_artifacts (
+			run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+			task_name       TEXT NOT NULL,
+			archive         BYTEA NOT NULL,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (run_id, task_name)
+		)`},
 	}
 	for _, statement := range statements {
 		if _, err := tx.Exec(statement.sql); err != nil {

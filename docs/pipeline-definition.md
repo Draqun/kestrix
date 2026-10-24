@@ -72,6 +72,7 @@ ci_task "build" {
   trigger    = "repo.auth.changed"
   depends_on = ["lint"]
   manual     = false
+  artifacts  = ["dist/"]
 
   execute {
     repo   = "auth"
@@ -86,7 +87,37 @@ ci_task "build" {
 | `trigger` | string | Yes | Boolean expression deciding if the task runs |
 | `depends_on` | list(string) | No | Tasks that must complete before this one starts |
 | `manual` | bool | No | If `true`, requires human approval before execution |
+| `artifacts` | list(string) | No | Paths produced by the task to preserve for dependent tasks |
 | `runner_tags` | list(string) | No | Tags a runner must carry to execute the task in `remote` mode; ignored in other modes (see [remote runners](remote-runners.md#runner-tags)) |
+
+### Artifacts
+
+Tasks can declare file or directory paths they produce that must be available to dependent tasks:
+
+```hcl
+ci_task "build" {
+  artifacts = ["dist/", "bin/app"]
+  execute {
+    repo   = "auth"
+    script = "go build -o bin/app ./cmd/app"
+  }
+}
+
+ci_task "deploy" {
+  depends_on = ["build"]
+  execute {
+    repo   = "auth"
+    script = "bin/app --version"
+  }
+}
+```
+
+Rules for declared artifacts:
+- Paths are relative to the task repo's working directory (`repo.path`).
+- Paths must be relative, cannot be empty, and cannot contain `..`.
+- At most 32 artifact paths may be declared per task.
+- **Verification in all modes**: After a task exits 0, every declared path must exist on disk. If any declared path is missing, the task fails with `artifact "<path>" not found`. This check runs in `local`, `docker`, and `remote` execution modes alike, preventing pipelines from passing locally while failing on remote runners.
+- **Delivery to dependents**: In `remote` mode, when a task passes, its declared artifacts are packaged and uploaded to Kestrix. When any dependent task is dispatched, all passed ancestor tasks' artifacts are delivered to the runner and unpacked in topological dependency order over the workspace before the task script executes.
 
 ### Execute Block
 

@@ -100,6 +100,7 @@ type storedRemoteJobPayload struct {
 	Repos        []domain.Repo `json:"repos"`
 	DefaultImage string        `json:"default_image,omitempty"`
 	Archive      []byte        `json:"archive"`
+	Artifacts    [][]byte      `json:"artifacts,omitempty"`
 }
 
 // CreateRemoteJob dispatches one task of runID as a pending job. The
@@ -115,7 +116,13 @@ func (s *PGStore) CreateRemoteJob(runID int, taskName string, payload domain.Rem
 	if err != nil {
 		return 0, fmt.Errorf("encrypt remote job secrets: %w", err)
 	}
-	b, err := json.Marshal(storedRemoteJobPayload{Task: payload.Task, Repos: payload.Repos, DefaultImage: payload.DefaultImage, Archive: payload.Archive})
+	b, err := json.Marshal(storedRemoteJobPayload{
+		Task:         payload.Task,
+		Repos:        payload.Repos,
+		DefaultImage: payload.DefaultImage,
+		Archive:      payload.Archive,
+		Artifacts:    payload.Artifacts,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("marshal remote job payload: %w", err)
 	}
@@ -163,6 +170,7 @@ func (s *PGStore) scanRemoteJob(row interface {
 	}
 	j.Payload = domain.RemoteJobPayload{
 		Task: stored.Task, Repos: stored.Repos, DefaultImage: stored.DefaultImage, Archive: stored.Archive,
+		Artifacts: stored.Artifacts,
 		Variables: secrets.Variables, SecretValues: secrets.SecretValues,
 	}
 	return &j, nil
@@ -701,6 +709,65 @@ func (s *PGStore) DeleteTerminalRemoteSecrets() error {
 		`UPDATE runs SET remote_secrets_enc = NULL WHERE remote_secrets_enc IS NOT NULL AND status IN ('passed', 'failed', 'canceled')`,
 	); err != nil {
 		return fmt.Errorf("delete terminal run secrets: %w", err)
+	}
+	if err := s.DeleteTerminalRemoteArtifacts(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// PutRemoteArtifact persists an artifact archive produced by taskName in runID.
+// Repeated calls for the same run and task replace the archive (remote-task-artifacts design D3).
+func (s *PGStore) PutRemoteArtifact(runID int, taskName string, archive []byte) error {
+	_, err := s.db.Exec(
+		`INSERT INTO remote_artifacts (run_id, task_name, archive, created_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (run_id, task_name) DO UPDATE
+		 SET archive = EXCLUDED.archive, created_at = now()`,
+		runID, taskName, archive,
+	)
+	if err != nil {
+		return fmt.Errorf("put remote artifact for run %d task %q: %w", runID, taskName, err)
+	}
+	return nil
+}
+
+// ListRemoteArtifactsByTasks retrieves the artifact archives stored for the given tasks
+// of runID, mapped by task name (remote-task-artifacts design D4).
+func (s *PGStore) ListRemoteArtifactsByTasks(runID int, taskNames []string) (map[string][]byte, error) {
+	if len(taskNames) == 0 {
+		return make(map[string][]byte), nil
+	}
+	rows, err := s.db.Query(
+		`SELECT task_name, archive FROM remote_artifacts WHERE run_id = $1 AND task_name = ANY($2)`,
+		runID, taskNames,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list remote artifacts for run %d: %w", runID, err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]byte, len(taskNames))
+	for rows.Next() {
+		var name string
+		var archive []byte
+		if err := rows.Scan(&name, &archive); err != nil {
+			return nil, fmt.Errorf("scan remote artifact for run %d: %w", runID, err)
+		}
+		out[name] = archive
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate remote artifacts for run %d: %w", runID, err)
+	}
+	return out, nil
+}
+
+// DeleteTerminalRemoteArtifacts deletes stored artifacts for all finished runs (remote-task-artifacts design D5).
+func (s *PGStore) DeleteTerminalRemoteArtifacts() error {
+	if _, err := s.db.Exec(
+		`DELETE FROM remote_artifacts WHERE run_id IN (SELECT id FROM runs WHERE status IN ('passed', 'failed', 'canceled'))`,
+	); err != nil {
+		return fmt.Errorf("delete terminal remote artifacts: %w", err)
 	}
 	return nil
 }

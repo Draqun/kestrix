@@ -239,6 +239,12 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 
 	runErr := cmd.Run()
 
+	if runErr == nil {
+		if err := checkArtifacts(taskDir, task.Artifacts); err != nil {
+			return taskOut.String(), err
+		}
+	}
+
 	return taskOut.String(), runErr
 }
 
@@ -279,7 +285,24 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	runErr := cmd.Run()
 	stopCancelTimer()
 
+	if runErr == nil {
+		if err := checkArtifacts(taskDir, task.Artifacts); err != nil {
+			return taskOut.String(), err
+		}
+	}
+
 	return taskOut.String(), runErr
+}
+
+// checkArtifacts verifies that every declared artifact path exists under taskDir.
+func checkArtifacts(taskDir string, artifacts []string) error {
+	for _, art := range artifacts {
+		p := filepath.Join(taskDir, art)
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("artifact %q not found", art)
+		}
+	}
+	return nil
 }
 
 // taskLoop iterates over ordered nodes, skipping manual/blocked tasks and

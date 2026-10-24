@@ -1,10 +1,17 @@
 package web
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -404,4 +411,115 @@ func (s *Server) handleRevokeRunner(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "revoked"})
+}
+
+// handleRunnerJobArtifacts implements PUT /api/runner-jobs/{id}/artifacts?epoch=N
+// (remote-task-artifacts design D3): accepts a gzip tar archive of declared paths,
+// epoch- and ownership-fenced, capped by KESTRIX_RUNNER_ARTIFACT_MAX_BYTES (default 50 MiB).
+func (s *Server) handleRunnerJobArtifacts(w http.ResponseWriter, r *http.Request) {
+	jobID, err := strconv.Atoi(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	runnerID, ok := runnerIDFromContext(r.Context())
+	if !ok || s.remoteJobStore == nil {
+		writeError(w, http.StatusInternalServerError, "runner jobs not configured")
+		return
+	}
+	epochStr := r.URL.Query().Get("epoch")
+	epoch, err := strconv.Atoi(epochStr)
+	if err != nil || epoch <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid or missing epoch")
+		return
+	}
+
+	job, err := s.remoteJobStore.GetRemoteJob(jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load remote job")
+		return
+	}
+	if job == nil || job.ClaimEpoch != epoch || domain.IsTerminalJobStatus(job.Status) || job.RunnerID == nil || *job.RunnerID != runnerID {
+		writeError(w, http.StatusConflict, "stale epoch, job not owned by this runner, or job already terminal")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifact archive exceeds limit of %d bytes", s.runnerArtifactMaxBytes()))
+			return
+		}
+		writeError(w, http.StatusBadRequest, "read artifact body")
+		return
+	}
+
+	if err := validateArtifactArchive(body, job.Payload.Repos, job.Payload.Task); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.remoteJobStore.PutRemoteArtifact(job.RunID, job.TaskName, body); err != nil {
+		writeError(w, http.StatusInternalServerError, "store remote artifact")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// validateArtifactArchive validates that body is a valid gzip tar archive and that
+// every entry is within the task's declared artifact paths (design D1/D3).
+func validateArtifactArchive(body []byte, repos []domain.Repo, task domain.Task) error {
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("invalid gzip archive: %w", err)
+	}
+	defer gz.Close()
+
+	var repoPath string
+	for _, r := range repos {
+		if r.Name == task.Execute.Repo {
+			repoPath = r.Path
+			break
+		}
+	}
+
+	allowedPrefixes := make([]string, 0, len(task.Artifacts))
+	for _, art := range task.Artifacts {
+		clean := filepath.ToSlash(filepath.Clean(filepath.Join(repoPath, art)))
+		if clean == "." {
+			clean = ""
+		}
+		allowedPrefixes = append(allowedPrefixes, clean)
+	}
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar entry: %w", err)
+		}
+		name := filepath.ToSlash(filepath.Clean(hdr.Name))
+		if name == "." || name == ".." || strings.HasPrefix(name, "../") || strings.HasPrefix(name, "/") {
+			return fmt.Errorf("artifact entry %q is outside declared paths", hdr.Name)
+		}
+		matched := false
+		for _, prefix := range allowedPrefixes {
+			if prefix == "" {
+				matched = true
+				break
+			}
+			if name == prefix || strings.HasPrefix(name, prefix+"/") {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("artifact entry %q is outside declared paths", hdr.Name)
+		}
+	}
+	return nil
 }

@@ -182,6 +182,7 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 		MaxBodyBytes:                env.HTTPMaxBodyBytes,
 		WebhookMaxBodyBytes:         env.WebhookMaxBodyBytes,
 		RunnerJobMaxBodyBytes:       env.RunnerJobMaxBodyBytes,
+		RunnerArtifactMaxBytes:      int64(env.RunnerArtifactMaxBytes),
 		RunnerJobMaxConcurrentPolls: env.RunnerJobMaxConcurrentPolls,
 		Signature: web.SignatureConfig{
 			Secret: cfg.Webhook.Secret,

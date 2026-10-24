@@ -244,14 +244,26 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, 
 // domain.VariableResolver only ever surfaces pipeline-declared values, not
 // host environment or KESTRIX_RUNNER_ENV_PASSTHROUGH names), and the source
 // archive, plus the run's resolved secret values so the runner can redact
-// its own output (remote-runner-fixes design.md D1). It names no execution
-// engine or image (design.md D3).
-func buildRemoteJobPayload(task model.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte, secretValues []string) domain.RemoteJobPayload {
+// its own output (remote-runner-fixes design.md D1), and passed ancestors'
+// artifacts in dependency order (remote-task-artifacts design.md D4).
+func buildRemoteJobPayload(task model.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte, secretValues []string, artifacts ...[][]byte) domain.RemoteJobPayload {
 	var vars map[string]string
 	if resolver != nil {
 		vars = resolver.Get(task.Execute.Repo, task.Name, "")
 	}
-	return domain.RemoteJobPayload{Task: task, Repos: sanitizeReposForPayload(repos), DefaultImage: defaultImage, Variables: vars, SecretValues: secretValues, Archive: archive}
+	var arts [][]byte
+	if len(artifacts) > 0 {
+		arts = artifacts[0]
+	}
+	return domain.RemoteJobPayload{
+		Task:         task,
+		Repos:        sanitizeReposForPayload(repos),
+		DefaultImage: defaultImage,
+		Variables:    vars,
+		SecretValues: secretValues,
+		Archive:      archive,
+		Artifacts:    arts,
+	}
 }
 
 // sanitizeReposForPayload strips URL and CredentialRef from repos, keeping
@@ -527,6 +539,12 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 	// due gets either a job or a recorded failure, and the run's status is
 	// decided once, after the batch -
 	// remote-run-waits-for-dependents design.md D5.
+	passedTasks := make(map[string]bool)
+	for name, tr := range latest {
+		if tr.Status == "passed" {
+			passedTasks[name] = true
+		}
+	}
 	var dispatchErrs []error
 	for _, task := range eligible {
 		if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"}); err != nil {
@@ -539,10 +557,21 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
 			continue
 		}
-		payload := domain.RemoteJobPayload{
-			Task: task, Repos: sanitizeReposForPayload(run.PipelineDef.Repos), DefaultImage: run.PipelineDef.DefaultImage,
-			Variables: variables[task.Name], SecretValues: secretValues, Archive: archive,
+		ancestors := orderedPassedAncestors(*run.PipelineDef, task, passedTasks)
+		var artifacts [][]byte
+		if len(ancestors) > 0 {
+			artMap, err := s.remoteJobStore.ListRemoteArtifactsByTasks(runID, ancestors)
+			if err != nil {
+				return false, fmt.Errorf("list ancestors artifacts for task %q: %w", task.Name, err)
+			}
+			for _, anc := range ancestors {
+				if data, ok := artMap[anc]; ok && len(data) > 0 {
+					artifacts = append(artifacts, data)
+				}
+			}
 		}
+		payload := buildRemoteJobPayload(task, run.PipelineDef.Repos, run.PipelineDef.DefaultImage, nil, archive, secretValues, artifacts)
+		payload.Variables = variables[task.Name]
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
 			if errors.Is(err, domain.ErrRemoteJobExists) {
 				// The task already has an active job: it is dispatched,
@@ -649,4 +678,67 @@ func (s *RunService) dispatchSingleTask(runID int, proj *model.Project, taskName
 		_, _ = s.runStore.ApplyTaskResult(runID, tr, "")
 	}
 	return tr, true, nil
+}
+
+// orderedPassedAncestors computes the passed transitive dependencies of task,
+// ordered topologically with ties broken by declaration order in proj.Tasks
+// (remote-task-artifacts design D4).
+func orderedPassedAncestors(proj model.Project, task model.Task, passed map[string]bool) []string {
+	allTasksByName := make(map[string]model.Task, len(proj.Tasks))
+	for _, t := range proj.Tasks {
+		allTasksByName[t.Name] = t
+	}
+
+	ancestorSet := make(map[string]bool)
+	var collectAncestors func(t model.Task)
+	collectAncestors = func(t model.Task) {
+		for _, depName := range t.DependsOn {
+			if !ancestorSet[depName] {
+				ancestorSet[depName] = true
+				if depTask, ok := allTasksByName[depName]; ok {
+					collectAncestors(depTask)
+				}
+			}
+		}
+	}
+	collectAncestors(task)
+
+	passedAncestors := make(map[string]bool)
+	for name := range ancestorSet {
+		if passed[name] {
+			passedAncestors[name] = true
+		}
+	}
+	if len(passedAncestors) == 0 {
+		return nil
+	}
+
+	var topo []string
+	visited := make(map[string]bool, len(proj.Tasks))
+	var visit func(name string)
+	visit = func(name string) {
+		if visited[name] {
+			return
+		}
+		t, ok := allTasksByName[name]
+		if !ok {
+			return
+		}
+		for _, dep := range t.DependsOn {
+			visit(dep)
+		}
+		visited[name] = true
+		topo = append(topo, name)
+	}
+	for _, t := range proj.Tasks {
+		visit(t.Name)
+	}
+
+	var result []string
+	for _, name := range topo {
+		if passedAncestors[name] {
+			result = append(result, name)
+		}
+	}
+	return result
 }

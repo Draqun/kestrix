@@ -200,6 +200,17 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
 				return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
 			}
 			t.RunnerTags = tags
+		case "artifacts":
+			var items []string
+			if tc, ok := attr.Expr.(*hclsyntax.TupleConsExpr); ok {
+				items, _ = tupleStrings(tc)
+			} else {
+				items = splitList(val)
+			}
+			if err := domain.ValidateArtifacts(t.Name, items); err != nil {
+				return model.Task{}, err
+			}
+			t.Artifacts = items
 		}
 	}
 
