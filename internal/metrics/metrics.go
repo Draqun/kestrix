@@ -153,19 +153,20 @@ func (r *Registry) WebhookDelivery(outcome string) {
 // so the rendering format is exercised by a pure function independent of a
 // live Registry - see design.md's golden-fixture test (task 3.2).
 type Snapshot struct {
-	RunTotal         map[string]map[string]uint64
-	DurationCounts   []uint64
-	DurationCountInf uint64
-	DurationSum      float64
-	WebhookTotal     map[string]uint64
-	RunsRunning      int
-	RunsQueued       int
-	BuildVersion     string
+	RunTotal            map[string]map[string]uint64
+	DurationCounts      []uint64
+	DurationCountInf    uint64
+	DurationSum         float64
+	WebhookTotal        map[string]uint64
+	RunsRunning         int
+	RunsQueued          int
+	RemoteJobsUnmatched int
+	BuildVersion        string
 }
 
 // Snapshot copies the Registry's current state plus the supplied gauges and
 // build version into a Snapshot ready for Render.
-func (r *Registry) Snapshot(running, queued int, buildVersion string) Snapshot {
+func (r *Registry) Snapshot(running, queued, remoteJobsUnmatched int, buildVersion string) Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -182,14 +183,15 @@ func (r *Registry) Snapshot(running, queued int, buildVersion string) Snapshot {
 		webhookTotal[outcome] = n
 	}
 	return Snapshot{
-		RunTotal:         runTotal,
-		DurationCounts:   append([]uint64(nil), r.durationCounts...),
-		DurationCountInf: r.durationCountInf,
-		DurationSum:      r.durationSum,
-		WebhookTotal:     webhookTotal,
-		RunsRunning:      running,
-		RunsQueued:       queued,
-		BuildVersion:     buildVersion,
+		RunTotal:            runTotal,
+		DurationCounts:      append([]uint64(nil), r.durationCounts...),
+		DurationCountInf:    r.durationCountInf,
+		DurationSum:         r.durationSum,
+		WebhookTotal:        webhookTotal,
+		RunsRunning:         running,
+		RunsQueued:          queued,
+		RemoteJobsUnmatched: remoteJobsUnmatched,
+		BuildVersion:        buildVersion,
 	}
 }
 
@@ -259,6 +261,10 @@ func Render(s Snapshot) []byte {
 	for _, outcome := range sortedKeys(s.WebhookTotal) {
 		fmt.Fprintf(&b, "kestrix_webhook_deliveries_total{outcome=\"%s\"} %d\n", escapeLabelValue(outcome), s.WebhookTotal[outcome])
 	}
+
+	b.WriteString("# HELP kestrix_remote_jobs_unmatched Number of pending remote jobs that no registered runner can take.\n")
+	b.WriteString("# TYPE kestrix_remote_jobs_unmatched gauge\n")
+	fmt.Fprintf(&b, "kestrix_remote_jobs_unmatched %d\n", s.RemoteJobsUnmatched)
 
 	b.WriteString("# HELP kestrix_build_info Kestrix build information. Value is always 1.\n")
 	b.WriteString("# TYPE kestrix_build_info gauge\n")

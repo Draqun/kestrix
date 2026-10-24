@@ -202,4 +202,7 @@ type TaskResult struct {
 	// ApprovedAt is when ApprovedBy approved the task. nil for a task never
 	// approved.
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	// WaitingReason is set on the latest result of an unmatched pending task
+	// (remote-unmatched-job-alert design D2). Omitted when empty.
+	WaitingReason string `json:"waiting_reason,omitempty"`
 }

@@ -258,8 +258,9 @@ scrape_configs:
 With no token set, only a signed-in account (viewer role or above) can read
 `/metrics` - fine for an ad hoc check, not for a scraper. The endpoint covers
 run counts by terminal status, the running/queued gauges, a run-duration
-histogram, webhook delivery outcomes, and build info; see the
-`observability` spec for the full metric set.
+histogram, webhook delivery outcomes, the unmatched pending remote jobs gauge
+(`kestrix_remote_jobs_unmatched`), and build info; see the `observability` spec
+for the full metric set.
 
 Process logs are one JSON object per line on stdout, replacing the previous
 free-text `log.Printf` format - **a parser reading the old format needs

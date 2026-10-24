@@ -47,6 +47,12 @@ func setupRunServer(t *testing.T, projectStore domain.ProjectStore, runStore dom
 		runService:     runService,
 		sourceSessions: &testSourceSessions{},
 	}
+	if runners, ok := runStore.(domain.RunnerStore); ok {
+		srv.runnerStore = runners
+	}
+	if remoteJobs, ok := runStore.(domain.RemoteJobStore); ok {
+		srv.remoteJobStore = remoteJobs
+	}
 	return srv
 }
 
@@ -410,6 +416,12 @@ func runTaskServer(t *testing.T, projectConfig *domain.ProjectConfig, runStore d
 		projectService: service.NewProjectService(&mocks.MockProjectStore{}),
 		runService:     runService,
 		sourceSessions: &testSourceSessions{},
+	}
+	if runners, ok := runStore.(domain.RunnerStore); ok {
+		srv.runnerStore = runners
+	}
+	if remoteJobs, ok := runStore.(domain.RemoteJobStore); ok {
+		srv.remoteJobStore = remoteJobs
 	}
 	return srv
 }
@@ -1494,5 +1506,236 @@ func TestHandleRunProject_ActorNotSpoofable(t *testing.T) {
 	}
 	if len(mockRun.CreateRunCalls) != 1 || mockRun.CreateRunCalls[0].StartedBy != "user:frank" {
 		t.Fatalf("CreateRunCalls = %+v, want StartedBy=user:frank (not user:mallory)", mockRun.CreateRunCalls)
+	}
+}
+
+func TestHandleGetRun_WaitingReason_Scenarios(t *testing.T) {
+	run := &domain.Run{
+		ID:          1,
+		ProjectName: "demo",
+		Status:      "running",
+		TaskResults: []domain.TaskResult{
+			{Name: "build", Status: domain.RemoteJobStatusPending},
+		},
+	}
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: run,
+		MockRemoteJobStore: mocks.MockRemoteJobStore{
+			UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+				{ID: 10, RunID: 1, TaskName: "build", RequiredTags: []string{"gpu", "arm64"}},
+			},
+		},
+		MockRunnerStore: mocks.MockRunnerStore{
+			ListRunnersResult: []domain.Runner{}, // no runners registered
+		},
+	}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, mockRun)
+
+	// Scenario: No runner registered at all
+	{
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/1", nil), "name", "demo", "runID", "1")
+		srv.handleGetRun(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var got domain.Run
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.TaskResults) != 1 || got.TaskResults[0].WaitingReason != "no runner is registered" {
+			t.Fatalf("waiting_reason = %q, want %q", got.TaskResults[0].WaitingReason, "no runner is registered")
+		}
+	}
+
+	// Scenario: Untagged runner registered (no runner has required tags gpu, arm64)
+	{
+		mockRun.MockRunnerStore.ListRunnersResult = []domain.Runner{
+			{ID: 1, Name: "default-runner", Tags: []string{}},
+		}
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/1", nil), "name", "demo", "runID", "1")
+		srv.handleGetRun(w, r)
+		var got domain.Run
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		want := "no registered runner has tags: arm64, gpu"
+		if got.TaskResults[0].WaitingReason != want {
+			t.Fatalf("waiting_reason = %q, want %q", got.TaskResults[0].WaitingReason, want)
+		}
+	}
+
+	// Scenario: Registering a matching runner clears the reason (no unmatched jobs)
+	{
+		runMatched := &domain.Run{
+			ID:          1,
+			ProjectName: "demo",
+			Status:      "running",
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: domain.RemoteJobStatusPending},
+			},
+		}
+		mockRun.GetRunResult = runMatched
+		mockRun.MockRemoteJobStore.UnmatchedPendingJobsResult = nil
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/1", nil), "name", "demo", "runID", "1")
+		srv.handleGetRun(w, r)
+		var got domain.Run
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskResults[0].WaitingReason != "" {
+			t.Fatalf("waiting_reason should be empty when matched, got %q", got.TaskResults[0].WaitingReason)
+		}
+	}
+
+	// Scenario: Absent for local/docker runs (not in remote unmatched jobs)
+	{
+		localRun := &domain.Run{
+			ID:          2,
+			ProjectName: "demo",
+			Status:      "running",
+			TaskResults: []domain.TaskResult{
+				{Name: "local-task", Status: domain.RemoteJobStatusPending},
+			},
+		}
+		mockRun.GetRunResult = localRun
+		mockRun.MockRemoteJobStore.UnmatchedPendingJobsResult = []domain.UnmatchedPendingJob{
+			{ID: 10, RunID: 1, TaskName: "build", RequiredTags: []string{"gpu"}},
+		}
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs/2", nil), "name", "demo", "runID", "2")
+		srv.handleGetRun(w, r)
+		var got domain.Run
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.TaskResults[0].WaitingReason != "" {
+			t.Fatalf("waiting_reason for local run should be empty, got %q", got.TaskResults[0].WaitingReason)
+		}
+	}
+}
+
+func TestHandleListRuns_WaitingReason_Populated(t *testing.T) {
+	runs := []domain.Run{
+		{
+			ID:          1,
+			ProjectName: "demo",
+			Status:      "running",
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: domain.RemoteJobStatusPending},
+			},
+		},
+		{
+			ID:          2,
+			ProjectName: "demo",
+			Status:      "running",
+			TaskResults: []domain.TaskResult{
+				{Name: "test", Status: domain.RemoteJobStatusRunning},
+			},
+		},
+	}
+	mockRun := &mocks.MockRunStore{
+		ListRunsResult:  runs,
+		CountRunsResult: 2,
+		MockRemoteJobStore: mocks.MockRemoteJobStore{
+			UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+				{ID: 10, RunID: 1, TaskName: "build", RequiredTags: []string{"gpu"}},
+			},
+		},
+		MockRunnerStore: mocks.MockRunnerStore{
+			ListRunnersResult: []domain.Runner{
+				{ID: 1, Name: "default", Tags: []string{"cpu"}},
+			},
+		},
+	}
+	srv := setupRunServer(t, &mocks.MockProjectStore{}, mockRun)
+
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("GET", "/api/projects/demo/runs", nil), "name", "demo")
+	srv.handleListRuns(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp struct {
+		Items []domain.Run `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(resp.Items))
+	}
+	if resp.Items[0].TaskResults[0].WaitingReason != "no registered runner has tags: gpu" {
+		t.Fatalf("run 1 waiting_reason = %q, want %q", resp.Items[0].TaskResults[0].WaitingReason, "no registered runner has tags: gpu")
+	}
+	if resp.Items[1].TaskResults[0].WaitingReason != "" {
+		t.Fatalf("run 2 task is running; waiting_reason should be empty, got %q", resp.Items[1].TaskResults[0].WaitingReason)
+	}
+}
+
+func TestAnnotateWaitingReasons_EdgeCases(t *testing.T) {
+	// Nil remoteJobStore
+	srv := &Server{}
+	srv.annotateWaitingReasons(&domain.Run{})
+
+	// Empty runs or nil run
+	srv.remoteJobStore = &mocks.MockRemoteJobStore{}
+	srv.annotateWaitingReasons()
+	srv.annotateWaitingReasons(nil)
+
+	// No pending tasks
+	runPassed := &domain.Run{
+		ID: 1,
+		TaskResults: []domain.TaskResult{
+			{Name: "build", Status: "passed"},
+		},
+	}
+	srv.annotateWaitingReasons(runPassed)
+
+	// Latest result is running, earlier is pending
+	runUpdated := &domain.Run{
+		ID: 1,
+		TaskResults: []domain.TaskResult{
+			{Name: "build", Status: domain.RemoteJobStatusPending},
+			{Name: "build", Status: domain.RemoteJobStatusRunning},
+		},
+	}
+	mockRemote := &mocks.MockRemoteJobStore{
+		UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+			{ID: 10, RunID: 1, TaskName: "build"},
+		},
+	}
+	srv.remoteJobStore = mockRemote
+	srv.annotateWaitingReasons(runUpdated)
+	if runUpdated.TaskResults[0].WaitingReason != "" || runUpdated.TaskResults[1].WaitingReason != "" {
+		t.Fatalf("waiting_reason should not be set when latest status is running")
+	}
+
+	// Task not in unmatched jobs and runs slice with nil element
+	runNotUnmatched := &domain.Run{
+		ID: 1,
+		TaskResults: []domain.TaskResult{
+			{Name: "other-task", Status: domain.RemoteJobStatusPending},
+		},
+	}
+	srv.annotateWaitingReasons(nil, runNotUnmatched)
+	if runNotUnmatched.TaskResults[0].WaitingReason != "" {
+		t.Fatalf("waiting_reason should not be set when task is not in unmatched jobs")
+	}
+
+	// Error from UnmatchedPendingJobs
+	mockRemote.UnmatchedPendingJobsErr = errors.New("db error")
+	runPending := &domain.Run{
+		ID: 1,
+		TaskResults: []domain.TaskResult{
+			{Name: "build", Status: domain.RemoteJobStatusPending},
+		},
+	}
+	srv.annotateWaitingReasons(runPending)
+	if runPending.TaskResults[0].WaitingReason != "" {
+		t.Fatalf("waiting_reason should not be set on store error")
 	}
 }

@@ -22,9 +22,20 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.runService != nil {
 		running, queued = s.runService.Counts()
 	}
-	snap := metrics.Snapshot{RunsRunning: running, RunsQueued: queued, BuildVersion: version.Version}
+	var unmatched int
+	if s.remoteJobStore != nil {
+		if jobs, err := s.remoteJobStore.UnmatchedPendingJobs(nil); err == nil {
+			unmatched = len(jobs)
+		}
+	}
+	snap := metrics.Snapshot{
+		RunsRunning:         running,
+		RunsQueued:          queued,
+		RemoteJobsUnmatched: unmatched,
+		BuildVersion:        version.Version,
+	}
 	if reg, ok := s.metrics.(*metrics.Registry); ok {
-		snap = reg.Snapshot(running, queued, version.Version)
+		snap = reg.Snapshot(running, queued, unmatched, version.Version)
 	}
 	w.Header().Set("Content-Type", metricsContentType)
 	w.Write(metrics.Render(snap))

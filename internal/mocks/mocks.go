@@ -620,6 +620,10 @@ type MockRemoteJobStore struct {
 	DeleteSecretsErr           error
 	deleteSecretsCalls         int
 
+	UnmatchedPendingJobsResult []domain.UnmatchedPendingJob
+	UnmatchedPendingJobsErr    error
+	UnmatchedPendingJobsCalls  []*int
+
 	// SecretValues is what RemoteJobSecretValues returns for a job ID.
 	SecretValues    map[int][]string
 	SecretValuesErr error
@@ -820,6 +824,25 @@ func (m *MockRemoteJobStore) GetRemoteRunSnapshot(runID int) ([]byte, map[string
 		return nil, nil, nil, nil
 	}
 	return snap.archive, snap.variables, snap.secretValues, nil
+}
+
+func (m *MockRemoteJobStore) UnmatchedPendingJobs(runID *int) ([]domain.UnmatchedPendingJob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.UnmatchedPendingJobsCalls = append(m.UnmatchedPendingJobsCalls, runID)
+	if m.UnmatchedPendingJobsErr != nil {
+		return nil, m.UnmatchedPendingJobsErr
+	}
+	if runID != nil && len(m.UnmatchedPendingJobsResult) > 0 {
+		var out []domain.UnmatchedPendingJob
+		for _, j := range m.UnmatchedPendingJobsResult {
+			if j.RunID == *runID {
+				out = append(out, j)
+			}
+		}
+		return out, nil
+	}
+	return m.UnmatchedPendingJobsResult, nil
 }
 
 // remoteRunSnapshotMock is MockRemoteJobStore's in-memory stand-in for the

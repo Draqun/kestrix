@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
 	"kestrix/internal/service"
 )
@@ -136,4 +139,59 @@ func TestStartRemoteJobReclaimLoop_SecretSweepErrorStillReclaims(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+func TestLogUnmatchedPendingJobs_LoggedOnceAndPruned(t *testing.T) {
+	buf := captureSlog(t)
+	remoteJobs := &mocks.MockRemoteJobStore{
+		UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+			{ID: 42, RunID: 10, TaskName: "build", RequiredTags: []string{"gpu"}},
+		},
+	}
+	srv := &Server{remoteJobStore: remoteJobs}
+
+	// Tick 1: first discovery -> logged once
+	srv.logUnmatchedPendingJobs()
+	out1 := buf.String()
+	if !strings.Contains(out1, "remote job unmatched by any registered runner") ||
+		!strings.Contains(out1, `"run_id":10`) ||
+		!strings.Contains(out1, `"task":"build"`) {
+		t.Fatalf("expected unmatched log line on tick 1, got:\n%s", out1)
+	}
+
+	// Tick 2: same job still unmatched -> NOT logged again
+	buf.Reset()
+	srv.logUnmatchedPendingJobs()
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log on tick 2 for same job, got:\n%s", buf.String())
+	}
+
+	// Tick 3: job leaves the set -> pruned
+	remoteJobs.UnmatchedPendingJobsResult = nil
+	srv.logUnmatchedPendingJobs()
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log on tick 3 when empty, got:\n%s", buf.String())
+	}
+
+	// Tick 4: job re-enters the set -> logged again
+	remoteJobs.UnmatchedPendingJobsResult = []domain.UnmatchedPendingJob{
+		{ID: 42, RunID: 10, TaskName: "build", RequiredTags: []string{"gpu"}},
+	}
+	srv.logUnmatchedPendingJobs()
+	out4 := buf.String()
+	if !strings.Contains(out4, "remote job unmatched by any registered runner") {
+		t.Fatalf("expected unmatched log line on tick 4 after re-entering, got:\n%s", out4)
+	}
+
+	// Error handling
+	buf.Reset()
+	remoteJobs.UnmatchedPendingJobsErr = errors.New("query failed")
+	srv.logUnmatchedPendingJobs()
+	if !strings.Contains(buf.String(), "checking unmatched pending jobs failed") {
+		t.Fatalf("expected error log when query fails, got:\n%s", buf.String())
+	}
+
+	// Nil store returns cleanly
+	nilStoreSrv := &Server{}
+	nilStoreSrv.logUnmatchedPendingJobs()
 }

@@ -210,6 +210,52 @@ func (s *PGStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) {
 	return j, nil
 }
 
+// UnmatchedPendingJobs returns pending remote jobs that no non-revoked
+// registered runner can match (remote-unmatched-job-alert design D1).
+// When runID is non-nil, only jobs of that run are returned.
+func (s *PGStore) UnmatchedPendingJobs(runID *int) ([]domain.UnmatchedPendingJob, error) {
+	query := `SELECT rj.id, rj.run_id, rj.task_name, array_to_json(rj.required_tags)::text
+FROM remote_jobs rj
+WHERE rj.status = $1
+  AND NOT EXISTS (SELECT 1 FROM runners r
+                  WHERE r.revoked_at IS NULL AND rj.required_tags <@ r.tags)`
+	var rows *sql.Rows
+	var err error
+	if runID != nil {
+		query += ` AND rj.run_id = $2 ORDER BY rj.id`
+		rows, err = s.db.Query(query, domain.RemoteJobStatusPending, *runID)
+	} else {
+		query += ` ORDER BY rj.id`
+		rows, err = s.db.Query(query, domain.RemoteJobStatusPending)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query unmatched pending jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var jobs []domain.UnmatchedPendingJob
+	for rows.Next() {
+		var j domain.UnmatchedPendingJob
+		var tagsJSON string
+		if err := rows.Scan(&j.ID, &j.RunID, &j.TaskName, &tagsJSON); err != nil {
+			return nil, fmt.Errorf("scan unmatched pending job: %w", err)
+		}
+		if tagsJSON != "" && tagsJSON != "null" {
+			if err := json.Unmarshal([]byte(tagsJSON), &j.RequiredTags); err != nil {
+				return nil, fmt.Errorf("decode required tags: %w", err)
+			}
+		}
+		if j.RequiredTags == nil {
+			j.RequiredTags = []string{}
+		}
+		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate unmatched pending jobs: %w", err)
+	}
+	return jobs, nil
+}
+
 // ClaimNextJob atomically claims the oldest pending job via SELECT ... FOR
 // UPDATE SKIP LOCKED - Postgres's native pattern for multiple workers
 // polling one queue with no application-level lock or busy-retry loop

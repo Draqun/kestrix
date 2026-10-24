@@ -165,3 +165,46 @@ func TestHandleMetrics_PublicRouteSetUnchanged(t *testing.T) {
 		t.Fatalf("GET /api/health status = %d, want 200 (still public)", w.Code)
 	}
 }
+
+func TestHandleMetrics_TracksUnmatchedJobsQuery(t *testing.T) {
+	srv := metricsAuthTestServer(t, "token")
+	mockRemote := &mocks.MockRemoteJobStore{
+		UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+			{ID: 1, RunID: 10, TaskName: "build"},
+			{ID: 2, RunID: 11, TaskName: "deploy"},
+		},
+	}
+	srv.remoteJobStore = mockRemote
+
+	// Scrape with 2 unmatched jobs
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer token")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "# HELP kestrix_remote_jobs_unmatched Number of pending remote jobs that no registered runner can take.\n# TYPE kestrix_remote_jobs_unmatched gauge\nkestrix_remote_jobs_unmatched 2") {
+		t.Fatalf("metrics body does not contain expected gauge = 2:\n%s", body)
+	}
+
+	// Scrape when query returns 0 jobs
+	mockRemote.UnmatchedPendingJobsResult = nil
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	body = w.Body.String()
+	if !strings.Contains(body, "kestrix_remote_jobs_unmatched 0") {
+		t.Fatalf("metrics body does not contain expected gauge = 0:\n%s", body)
+	}
+
+	// Scrape when query fails with error
+	mockRemote.UnmatchedPendingJobsErr = http.ErrHandlerTimeout
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	body = w.Body.String()
+	if !strings.Contains(body, "kestrix_remote_jobs_unmatched 0") {
+		t.Fatalf("metrics body does not contain expected gauge = 0 on error:\n%s", body)
+	}
+}

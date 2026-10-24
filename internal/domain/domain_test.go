@@ -78,6 +78,47 @@ func TestTaskResult_ApprovalPresentWhenSet(t *testing.T) {
 	}
 }
 
+func TestTaskResult_WaitingReasonOmitEmpty(t *testing.T) {
+	tr := TaskResult{Name: "t", Status: "pending"}
+	data, _ := json.Marshal(tr)
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	if _, ok := m["waiting_reason"]; ok {
+		t.Error("empty WaitingReason should be omitted from JSON")
+	}
+}
+
+func TestTaskResult_WaitingReasonPresentWhenSet(t *testing.T) {
+	tr := TaskResult{Name: "t", Status: "pending", WaitingReason: "no runner is registered"}
+	data, _ := json.Marshal(tr)
+	var m map[string]json.RawMessage
+	json.Unmarshal(data, &m)
+	if _, ok := m["waiting_reason"]; !ok {
+		t.Error("WaitingReason should be present when set")
+	}
+}
+
+func TestUnmatchedPendingJob_JSON(t *testing.T) {
+	job := UnmatchedPendingJob{
+		ID:           12,
+		RunID:        42,
+		TaskName:     "build",
+		RequiredTags: []string{"gpu", "linux"},
+	}
+	data, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded UnmatchedPendingJob
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.ID != job.ID || decoded.RunID != job.RunID || decoded.TaskName != job.TaskName ||
+		len(decoded.RequiredTags) != 2 || decoded.RequiredTags[0] != "gpu" || decoded.RequiredTags[1] != "linux" {
+		t.Fatalf("decoded mismatch: got %+v, want %+v", decoded, job)
+	}
+}
+
 func TestProject_JSONRoundTrip(t *testing.T) {
 	proj := Project{
 		Name:         "demo",

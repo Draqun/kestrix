@@ -79,7 +79,7 @@ func TestNewServerWithDeps_MetricsEnabledUsesRealRegistry(t *testing.T) {
 	}
 
 	reg.RunFinished("passed", "demo", time.Second)
-	snap := reg.Snapshot(0, 0, "test")
+	snap := reg.Snapshot(0, 0, 0, "test")
 	if snap.RunTotal["passed"]["demo"] != 1 {
 		t.Fatalf("recorded through srv.metrics, read back = %+v", snap.RunTotal)
 	}
