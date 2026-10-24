@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
 	"kestrix/internal/source"
@@ -356,7 +357,7 @@ func TestNewServerEWiresUserAndGrantStoresWhenSupported(t *testing.T) {
 }
 
 func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
-	projectStore := &mocks.MockProjectStore{}
+	projectStore := &mockServerStoreWithLockAndCheck{}
 	runStore := &mocks.MockRunStore{}
 	oldStores, oldSource := newPGStores, newSourceSessionManager
 	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) { return projectStore, runStore, nil }
@@ -369,6 +370,9 @@ func TestNewServerESourceCacheFailureAndMaintenanceWarning(t *testing.T) {
 	}
 	if server, err := NewServerE(Config{DatabaseURL: "postgres://valid", MasterKeyPath: validMasterKeyPath(t), JWTSigningKeyPath: validSigningKeyPath(t)}); err == nil || server != nil || !strings.Contains(err.Error(), "source cache") {
 		t.Fatalf("server=%v error=%v", server, err)
+	}
+	if !projectStore.closed {
+		t.Fatal("expected projectStore to be closed on source cache failure")
 	}
 
 	manager := &failingMaintenanceSessions{testSourceSessions: &testSourceSessions{}}
@@ -408,5 +412,108 @@ func TestNewServerDoesNotAutoRegisterPipelineDirectory(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("startup auto-registered projects: %v", projects)
+	}
+}
+
+type mockServerStoreWithLockAndCheck struct {
+	mocks.MockProjectStore
+	checkErr error
+	holdErr  error
+	closed   bool
+	locked   bool
+}
+
+func (m *mockServerStoreWithLockAndCheck) CheckMasterKey(credentials.MasterKeyProvider) error {
+	return m.checkErr
+}
+
+func (m *mockServerStoreWithLockAndCheck) HoldServerLock(context.Context) error {
+	if m.holdErr != nil {
+		return m.holdErr
+	}
+	m.locked = true
+	return nil
+}
+
+func (m *mockServerStoreWithLockAndCheck) Close() error {
+	m.closed = true
+	m.locked = false
+	return nil
+}
+
+func TestNewServerE_MasterKeyMismatchRefusesStartup(t *testing.T) {
+	old := newPGStores
+	fake := &mockServerStoreWithLockAndCheck{
+		checkErr: errors.New("the configured master key does not decrypt stored credentials; restore the previous key or complete a rotation with 'kestrix keys rotate-master'"),
+	}
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
+		return fake, &mocks.MockRunStore{}, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+	})
+	if err == nil || server != nil {
+		t.Fatalf("server=%v error=%v, want mismatch error", server, err)
+	}
+	wantMsg := "the configured master key does not decrypt stored credentials; restore the previous key or complete a rotation with 'kestrix keys rotate-master'"
+	if !strings.Contains(err.Error(), wantMsg) {
+		t.Fatalf("error=%v, want it to contain %q", err, wantMsg)
+	}
+	if !fake.closed {
+		t.Fatalf("expected store to be closed after failed startup")
+	}
+}
+
+func TestNewServerE_ServerLockAcquisitionFailure(t *testing.T) {
+	old := newPGStores
+	fake := &mockServerStoreWithLockAndCheck{
+		holdErr: errors.New("advisory lock error"),
+	}
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
+		return fake, &mocks.MockRunStore{}, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+	})
+	if err == nil || server != nil || !strings.Contains(err.Error(), "acquire server lock") {
+		t.Fatalf("server=%v error=%v, want acquire server lock error", server, err)
+	}
+	if !fake.closed {
+		t.Fatalf("expected store to be closed after lock failure")
+	}
+}
+
+func TestNewServerE_HoldsServerLockAndCloseReleases(t *testing.T) {
+	old := newPGStores
+	fake := &mockServerStoreWithLockAndCheck{}
+	newPGStores = func(string, string) (domain.ProjectStore, domain.RunStore, error) {
+		return fake, &mocks.MockRunStore{}, nil
+	}
+	t.Cleanup(func() { newPGStores = old })
+
+	server, err := NewServerE(Config{
+		DatabaseURL:       "postgres://valid",
+		MasterKeyPath:     validMasterKeyPath(t),
+		JWTSigningKeyPath: validSigningKeyPath(t),
+	})
+	if err != nil || server == nil {
+		t.Fatalf("server=%v error=%v", server, err)
+	}
+	if !fake.locked {
+		t.Fatalf("expected store to be locked")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("server.Close: %v", err)
+	}
+	if !fake.closed || fake.locked {
+		t.Fatalf("expected store to be unlocked and closed")
 	}
 }

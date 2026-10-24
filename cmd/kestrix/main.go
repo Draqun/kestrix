@@ -61,6 +61,8 @@ func main() {
 		cmdVariables(os.Args[2:])
 	case "user":
 		cmdUser(os.Args[2:])
+	case "keys":
+		cmdKeys(os.Args[2:])
 	case "version":
 		fmt.Println(version.Version)
 	case "help", "-h", "--help":
@@ -86,6 +88,7 @@ Usage:
   kestrix user list
   kestrix user passwd <name>
   kestrix user delete <name>
+  kestrix keys rotate-master --new-key-path PATH [--database-url postgres://...]
   kestrix version`)
 }
 
@@ -303,6 +306,7 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
 		os.Exit(1)
 	}
+	defer server.Close()
 	if err := reconcileInterruptedRuns(server, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "server startup error: %v\n", err)
 		os.Exit(1)

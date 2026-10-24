@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -431,6 +432,9 @@ func NewServerE(cfg Config) (*Server, error) {
 		Resolver: s.credentialResolver(),
 	})
 	if err != nil {
+		if closer, ok := projectStore.(io.Closer); ok {
+			_ = closer.Close()
+		}
 		return nil, fmt.Errorf("initialize source cache: %w", err)
 	}
 	s.sourceSessions = cache
@@ -519,6 +523,26 @@ func initStores(cfg Config) (domain.ProjectStore, domain.RunStore, error) {
 		SetCredentialMasterKeyProvider(credentials.MasterKeyProvider)
 	}); ok {
 		setter.SetCredentialMasterKeyProvider(provider)
+	}
+	if checker, ok := projectStore.(interface {
+		CheckMasterKey(credentials.MasterKeyProvider) error
+	}); ok {
+		if err := checker.CheckMasterKey(provider); err != nil {
+			if closer, ok := projectStore.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			return nil, nil, err
+		}
+	}
+	if locker, ok := projectStore.(interface {
+		HoldServerLock(context.Context) error
+	}); ok {
+		if err := locker.HoldServerLock(context.Background()); err != nil {
+			if closer, ok := projectStore.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			return nil, nil, fmt.Errorf("acquire server lock: %w", err)
+		}
 	}
 	if setter, ok := projectStore.(interface{ SetWebhookHistoryLimit(int) }); ok {
 		setter.SetWebhookHistoryLimit(cfg.WebhookHistoryLimit)
@@ -790,8 +814,17 @@ func (s *Server) logUnmatchedPendingJobs() {
 	s.unmatchedLoggedIDs = current
 }
 
+// Close releases any held server advisory locks and associated connections.
+func (s *Server) Close() error {
+	if closer, ok := s.projectStore.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 // ListenAndServe starts the server.
 func (s *Server) ListenAndServe() error {
+	defer s.Close()
 	slog.Info("Kestrix server listening", "addr", s.cfg.ListenAddr)
 	return serveHTTP(s.httpServer())
 }

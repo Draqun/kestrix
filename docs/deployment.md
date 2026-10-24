@@ -230,6 +230,62 @@ KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:<previous-tag> docker compose 
 See [Cutting a release](usage.md#cutting-a-release) for removing a bad tag
 and Release at the source instead of just rolling a deployment back from it.
 
+## 12. Rotating keys
+
+### Master Key Rotation
+The master key protects stored repository credentials, remote job secrets, and remote run secrets via envelope encryption. Rotation re-encrypts all stored ciphertexts in a single database transaction. `kestrix serve` holds an advisory lock for its lifetime, preventing concurrent access during offline rotation; the CLI refuses to rotate while a server is connected.
+
+To rotate the master key:
+1. Generate a new key file (mode `0600`, 32 bytes raw or 64 hex characters):
+   ```bash
+   (umask 077 && openssl rand -hex 32 > /srv/kestrix/secrets/master-new.key)
+   ```
+2. Stop the Kestrix server:
+   ```bash
+   docker compose -f docker-compose.prod.yml stop kestrix
+   ```
+3. Run the rotation CLI via a temporary container mounting the secrets directory:
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm \
+     -v /srv/kestrix/secrets:/secrets:ro \
+     -e KESTRIX_MASTER_KEY_PATH=/secrets/master.key \
+     kestrix kestrix keys rotate-master --new-key-path /secrets/master-new.key
+   ```
+   (On bare metal or script installs, run: `kestrix keys rotate-master --new-key-path /path/to/master-new.key`).
+   The command validates both keys, acquires the advisory lock, re-encrypts all three ciphertext columns, verifies every row with the new key, reports counts per kind, and exits 0.
+4. Replace the old master key file with the new key file:
+   ```bash
+   mv /srv/kestrix/secrets/master-new.key /srv/kestrix/secrets/master.key
+   ```
+5. Start Kestrix:
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d kestrix
+   ```
+   On startup, Kestrix verifies that the configured key can decrypt stored credentials. If an operator replaces the key file without running the rotation, startup fails with:
+   `the configured master key does not decrypt stored credentials; restore the previous key or complete a rotation with 'kestrix keys rotate-master'`.
+
+### JWT Signing Key Rotation
+The JWT signing key authenticates API and web sessions. Rotating it requires no database updates:
+1. Generate a new key file (mode `0600`):
+   ```bash
+   (umask 077 && openssl rand -hex 32 > /srv/kestrix/secrets/jwt-new.key)
+   mv /srv/kestrix/secrets/jwt-new.key /srv/kestrix/secrets/jwt.key
+   ```
+2. Restart Kestrix:
+   ```bash
+   docker compose -f docker-compose.prod.yml restart kestrix
+   ```
+3. Every session token signed with the previous key is immediately rejected with `401 Unauthorized`, ending all active browser and API sessions and requiring users to sign in again. Registered runner tokens and the Prometheus metrics token are independent and keep working without interruption.
+
+## 13. Suspected key leak
+
+If a master key or JWT signing key is suspected of being compromised or leaked, execute the following checklist:
+- [ ] **1. Rotate the master key** using the offline rotation procedure above (`kestrix keys rotate-master`).
+- [ ] **2. Rotate the JWT signing key** and restart Kestrix to terminate all active sessions.
+- [ ] **3. Revoke and re-register all remote runners** via the UI or `DELETE /api/runners/{id}` and `POST /api/runners`.
+- [ ] **4. Rotate the metrics scrape token** (`KESTRIX_METRICS_TOKEN`) in `.env` and restart.
+- [ ] **5. Rotate underlying repository and runtime credentials** at their upstream Git providers (GitLab tokens, GitHub PATs, SSH deploy keys) and update them in Kestrix, since an attacker holding the master key could have decrypted the stored secrets.
+
 ## Metrics and structured logs
 
 `GET /metrics` (Prometheus text exposition) is disabled by default. Enable it
