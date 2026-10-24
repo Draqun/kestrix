@@ -45,6 +45,9 @@ const DefaultRunHistoryLimit = 1000
 // CancelRun) must not overwrite the operator's cancel. Canceled writes stay
 // allowed so recording a cancellation itself is idempotent.
 func (s *PGStore) FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error {
+	output = storable(output)
+	errMsg = storable(errMsg)
+	taskResults = cleanTaskResults(taskResults)
 	taskResultsJSON := "[]"
 	if len(taskResults) > 0 {
 		b, _ := json.Marshal(taskResults)
@@ -207,6 +210,7 @@ func (s *PGStore) AppendTaskResult(runID int, tr TaskResult) error {
 func appendTaskResult(exec interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }, runID int, tr TaskResult) error {
+	tr = cleanTaskResult(tr)
 	b, _ := json.Marshal(tr)
 	_, err := exec.Exec(
 		`UPDATE runs SET task_results = task_results::jsonb || $1::jsonb WHERE id = $2`,
@@ -225,6 +229,7 @@ func (s *PGStore) UpdateRunSources(runID int, sources []domain.AcquiredSource) e
 
 // FlushRunOutput overwrites the run's aggregate output (called periodically during execution).
 func (s *PGStore) FlushRunOutput(runID int, output string) error {
+	output = storable(output)
 	_, err := s.db.Exec(`UPDATE runs SET output = $1 WHERE id = $2`, output, runID)
 	return err
 }
@@ -537,6 +542,8 @@ func lineBreakBefore(existing, chunk string) string {
 // a result committed concurrently by another writer is not lost: the run's
 // results are the only source of its final status.
 func (s *PGStore) ApplyTaskResult(id int, tr TaskResult, outputExtra string) (string, error) {
+	tr = cleanTaskResult(tr)
+	outputExtra = storable(outputExtra)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", fmt.Errorf("begin apply task result: %w", err)

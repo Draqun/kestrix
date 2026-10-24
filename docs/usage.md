@@ -63,8 +63,10 @@ history and output it keeps:
   limit are deleted; a `running`, `queued`, or manual-approval-pending run is
   never deleted by retention.
 - `KESTRIX_RUNNER_MAX_OUTPUT_BYTES` (default `10485760`, 10 MiB) caps stored
-  run output. Output beyond the bound is dropped and the stored output ends
-  with a marker line naming the bound; the run's status is unaffected.
+  run output. Output is stored as text; bytes that are not valid UTF-8 and NUL
+  bytes are stored as U+FFFD, and the bound limits what is taken from the task
+  rather than the bytes stored. Output beyond the bound is dropped and the stored
+  output ends with a marker line naming the bound; the run's status is unaffected.
 
 All three must be positive integers; an invalid value fails startup naming
 the setting. Upgrading an existing deployment applies retention starting from
