@@ -171,9 +171,43 @@ and at most 32 are allowed. They are copied onto the job when it is
 dispatched, so editing the pipeline later does not retarget a job already
 waiting. Outside `remote` mode `runner_tags` is accepted and ignored.
 
-**A task whose tags no runner has stays `pending`** until a matching runner
-is registered or the run is canceled; Kestrix does not warn about it.
-Silent-runner recovery never fails a job that was never claimed.
+### Unmatched pending jobs
+
+A pending remote job is **unmatched** when no non-revoked registered runner has
+every tag the job requires, or when no runner is registered at all for an
+untagged job. Offline registered runners still count as matches since offline
+status is transient.
+
+When a task is unmatched:
+- **API**: run responses (`GET /api/projects/{name}/runs/{id}` and
+  `GET /api/projects/{name}/runs`) attach
+  `waiting_reason: "no registered runner has tags: <tags>"` (sorted) or
+  `"no runner is registered"` to the latest result of the pending task.
+- **UI**: the run detail view renders the `waiting_reason` as an amber warning
+  alert under the pending chip and in the task detail pane. The warning clears
+  automatically on the next poll as soon as a matching runner is registered.
+- **Logs**: Kestrix logs a warning once per unmatched job on the periodic reclaim
+  tick: `remote job unmatched by any registered runner` with `run_id`, `task`,
+  and `required_tags`.
+- **Metrics**: `kestrix_remote_jobs_unmatched` reports the current number of
+  unmatched pending jobs.
+
+Unmatched jobs remain `pending` and are not canceled or failed automatically;
+operators can register matching runners or cancel runs manually. Silent-runner
+recovery never fails a job that was never claimed.
+
+#### Sample Prometheus alert rule
+
+```yaml
+- alert: KestrixRemoteJobsUnmatched
+  expr: kestrix_remote_jobs_unmatched > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Remote jobs waiting for matching runners"
+    description: "{{ $value }} pending remote job(s) cannot be claimed because no registered runner satisfies their tags."
+```
 
 ## Runner liveness
 

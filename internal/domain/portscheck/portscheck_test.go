@@ -55,6 +55,14 @@ func TestCompileTime_GrantStore_PGStore(t *testing.T) {
 	var _ domain.GrantStore = (*store.PGStore)(nil)
 }
 
+func TestCompileTime_RemoteJobStore_PGStore(t *testing.T) {
+	var _ domain.RemoteJobStore = (*store.PGStore)(nil)
+}
+
+func TestCompileTime_RunnerStore_PGStore(t *testing.T) {
+	var _ domain.RunnerStore = (*store.PGStore)(nil)
+}
+
 func TestCompileTime_IdentityCache_InMemoryIdentityCache(t *testing.T) {
 	var _ domain.IdentityCache = (*auth.InMemoryIdentityCache)(nil)
 }

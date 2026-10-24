@@ -327,6 +327,11 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
                           }}
                         />
                       </ListItemButton>
+                      {job.waiting_reason && (
+                        <Alert severity="warning" sx={{ mt: 0.5, mx: 1, py: 0, px: 1, fontSize: '0.75rem' }}>
+                          {job.waiting_reason}
+                        </Alert>
+                      )}
                       {canOperate && canRun && (
                         <Button size="small" variant="contained" color="info" sx={{ mt: 0.5, mx: 1 }}
                           disabled={!!approving} onClick={() => handleApprove(job.name)}>
@@ -377,6 +382,9 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
                 )}
                 {activeJob.error && activeJob.status !== 'manual' && (
                   <Alert severity="error" sx={{ mb: 1, mx: 1 }}>{activeJob.error}</Alert>
+                )}
+                {activeJob.waiting_reason && (
+                  <Alert severity="warning" sx={{ mb: 1, mx: 1 }}>{activeJob.waiting_reason}</Alert>
                 )}
                 {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
                   <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>

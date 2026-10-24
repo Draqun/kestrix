@@ -26,7 +26,7 @@ func TestRegistry_RunFinished_CountsAndDuration(t *testing.T) {
 	reg.RunFinished("passed", "kestrix", 90*time.Second)
 	reg.RunFinished("failed", "kestrix", 5*time.Second)
 
-	snap := reg.Snapshot(0, 0, "test")
+	snap := reg.Snapshot(0, 0, 0, "test")
 	if got := snap.RunTotal["passed"]["kestrix"]; got != 2 {
 		t.Fatalf("passed count = %d, want 2", got)
 	}
@@ -74,7 +74,7 @@ func TestRegistry_RunFinished_NegativeDurationClampedToZero(t *testing.T) {
 	reg := NewRegistry()
 	reg.RunFinished("passed", "kestrix", -5*time.Second)
 
-	snap := reg.Snapshot(0, 0, "test")
+	snap := reg.Snapshot(0, 0, 0, "test")
 	if snap.DurationSum != 0 {
 		t.Fatalf("duration sum = %v, want 0 (negative clamped)", snap.DurationSum)
 	}
@@ -92,7 +92,7 @@ func TestRegistry_WebhookDelivery(t *testing.T) {
 	reg.WebhookDelivery("accepted")
 	reg.WebhookDelivery("rejected")
 
-	snap := reg.Snapshot(0, 0, "test")
+	snap := reg.Snapshot(0, 0, 0, "test")
 	if snap.WebhookTotal["accepted"] != 2 {
 		t.Fatalf("accepted = %d, want 2", snap.WebhookTotal["accepted"])
 	}
@@ -112,7 +112,7 @@ func TestRegistry_ProjectLabelCap(t *testing.T) {
 	reg.RunFinished("passed", "project-101", time.Second)
 	reg.RunFinished("passed", "project-102", time.Second)
 
-	snap := reg.Snapshot(0, 0, "test")
+	snap := reg.Snapshot(0, 0, 0, "test")
 	byProject := snap.RunTotal["passed"]
 	if len(byProject) != maxProjectLabels+1 {
 		t.Fatalf("distinct series = %d, want %d (cap + 1 overflow)", len(byProject), maxProjectLabels+1)
@@ -149,9 +149,10 @@ func TestRender_GoldenFixture(t *testing.T) {
 			"accepted": 2,
 			"rejected": 1,
 		},
-		RunsRunning:  1,
-		RunsQueued:   2,
-		BuildVersion: "v1.2.3",
+		RunsRunning:         1,
+		RunsQueued:          2,
+		RemoteJobsUnmatched: 3,
+		BuildVersion:        "v1.2.3",
 	}
 	want := `# HELP kestrix_runs_total Total number of runs that reached each terminal status.
 # TYPE kestrix_runs_total counter
@@ -183,6 +184,9 @@ kestrix_run_duration_seconds_count 3
 # TYPE kestrix_webhook_deliveries_total counter
 kestrix_webhook_deliveries_total{outcome="accepted"} 2
 kestrix_webhook_deliveries_total{outcome="rejected"} 1
+# HELP kestrix_remote_jobs_unmatched Number of pending remote jobs that no registered runner can take.
+# TYPE kestrix_remote_jobs_unmatched gauge
+kestrix_remote_jobs_unmatched 3
 # HELP kestrix_build_info Kestrix build information. Value is always 1.
 # TYPE kestrix_build_info gauge
 kestrix_build_info{version="v1.2.3"} 1

@@ -387,6 +387,36 @@ func TestMockPipelineRunner_RunTaskBranches(t *testing.T) {
 	}
 }
 
+func TestMockRemoteJobStore_UnmatchedPendingJobs(t *testing.T) {
+	m := &MockRemoteJobStore{
+		UnmatchedPendingJobsResult: []domain.UnmatchedPendingJob{
+			{ID: 1, RunID: 10, TaskName: "build"},
+			{ID: 2, RunID: 20, TaskName: "test"},
+		},
+	}
+	all, err := m.UnmatchedPendingJobs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("len(all) = %d, want 2", len(all))
+	}
+
+	run10 := 10
+	filtered, err := m.UnmatchedPendingJobs(&run10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != 1 {
+		t.Fatalf("filtered = %+v, want job 1", filtered)
+	}
+
+	m.UnmatchedPendingJobsErr = errors.New("boom")
+	if _, err := m.UnmatchedPendingJobs(nil); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 var errNotFound = &notFoundErr{}
 
 type notFoundErr struct{}

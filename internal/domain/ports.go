@@ -441,6 +441,19 @@ type RemoteJobStore interface {
 	// completion) - remote-runner-fixes design.md D1. Nil once the job's
 	// values have been deleted, or when the job does not exist.
 	RemoteJobSecretValues(jobID int) ([]string, error)
+	// UnmatchedPendingJobs returns pending remote jobs that no non-revoked
+	// registered runner can match (remote-unmatched-job-alert design D1).
+	// When runID is non-nil, only jobs of that run are returned.
+	UnmatchedPendingJobs(runID *int) ([]UnmatchedPendingJob, error)
+}
+
+// UnmatchedPendingJob is a pending remote job that no non-revoked runner can match;
+// see remote-unmatched-job-alert design D1.
+type UnmatchedPendingJob struct {
+	ID           int      `json:"id"`
+	RunID        int      `json:"run_id"`
+	TaskName     string   `json:"task_name"`
+	RequiredTags []string `json:"required_tags"`
 }
 
 // RunnerStore is the port for registering and authenticating remote

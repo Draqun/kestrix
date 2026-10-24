@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"kestrix/internal/domain"
@@ -236,6 +238,11 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	if runs == nil {
 		runs = []domain.Run{}
 	}
+	runPtrs := make([]*domain.Run, len(runs))
+	for i := range runs {
+		runPtrs[i] = &runs[i]
+	}
+	s.annotateWaitingReasons(runPtrs...)
 	pathPrefix := fmt.Sprintf("/api/projects/%s/runs", name)
 	next, prev := pagination.Links(offset, limit, total, pathPrefix)
 	resp := map[string]interface{}{
@@ -268,8 +275,90 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
+	s.annotateWaitingReasons(run)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(run)
+}
+
+// annotateWaitingReasons sets waiting_reason on the latest result of each
+// unmatched pending task in runs (remote-unmatched-job-alert design D2).
+func (s *Server) annotateWaitingReasons(runs ...*domain.Run) {
+	if s.remoteJobStore == nil || len(runs) == 0 {
+		return
+	}
+	hasPending := false
+	for _, r := range runs {
+		if r == nil {
+			continue
+		}
+		for _, tr := range r.TaskResults {
+			if tr.Status == domain.RemoteJobStatusPending {
+				hasPending = true
+				break
+			}
+		}
+		if hasPending {
+			break
+		}
+	}
+	if !hasPending {
+		return
+	}
+
+	var runIDFilter *int
+	if len(runs) == 1 && runs[0] != nil {
+		id := runs[0].ID
+		runIDFilter = &id
+	}
+	unmatched, err := s.remoteJobStore.UnmatchedPendingJobs(runIDFilter)
+	if err != nil || len(unmatched) == 0 {
+		return
+	}
+
+	hasRunners := false
+	if s.runnerStore != nil {
+		if runners, err := s.runnerStore.ListRunners(); err == nil && len(runners) > 0 {
+			hasRunners = true
+		}
+	}
+
+	type jobKey struct {
+		runID    int
+		taskName string
+	}
+	unmatchedMap := make(map[jobKey]domain.UnmatchedPendingJob, len(unmatched))
+	for _, u := range unmatched {
+		unmatchedMap[jobKey{runID: u.RunID, taskName: u.TaskName}] = u
+	}
+
+	for _, r := range runs {
+		if r == nil {
+			continue
+		}
+		latestIdx := make(map[string]int)
+		for i, tr := range r.TaskResults {
+			latestIdx[tr.Name] = i
+		}
+		for taskName, idx := range latestIdx {
+			if r.TaskResults[idx].Status != domain.RemoteJobStatusPending {
+				continue
+			}
+			job, ok := unmatchedMap[jobKey{runID: r.ID, taskName: taskName}]
+			if !ok {
+				continue
+			}
+			r.TaskResults[idx].WaitingReason = waitingReason(job.RequiredTags, hasRunners)
+		}
+	}
+}
+
+func waitingReason(tags []string, hasRunners bool) string {
+	if !hasRunners || len(tags) == 0 {
+		return "no runner is registered"
+	}
+	sorted := append([]string(nil), tags...)
+	slices.Sort(sorted)
+	return fmt.Sprintf("no registered runner has tags: %s", strings.Join(sorted, ", "))
 }
 
 // handleApproveManualTask runs a manual task that is waiting for approval on a run.

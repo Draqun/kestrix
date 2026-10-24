@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"kestrix/internal/auth"
@@ -189,7 +190,9 @@ type Server struct {
 	remoteJobStore domain.RemoteJobStore
 	// runnerPollLimiter bounds concurrent GET /api/runner-jobs/next
 	// long-polls per authenticated runner token (design.md D4).
-	runnerPollLimiter *runnerPollLimiter
+	runnerPollLimiter  *runnerPollLimiter
+	unmatchedMu        sync.Mutex
+	unmatchedLoggedIDs map[int]bool
 }
 
 // knownSecrets returns the control-plane secret values that could plausibly
@@ -741,6 +744,7 @@ func (s *Server) StartRemoteJobReclaimLoop(ctx context.Context) {
 				if s.runService == nil {
 					continue
 				}
+				s.logUnmatchedPendingJobs()
 				if err := s.runService.DeleteTerminalRemoteSecrets(); err != nil {
 					slog.Warn("deleting finished remote jobs' secrets failed", "err", redact.Err(err, s.knownSecrets()))
 				}
@@ -757,6 +761,33 @@ func (s *Server) StartRemoteJobReclaimLoop(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// logUnmatchedPendingJobs logs a warning for each unmatched pending job not yet
+// logged, and prunes the tracked set to the current result (remote-unmatched-job-alert design D4).
+func (s *Server) logUnmatchedPendingJobs() {
+	if s.remoteJobStore == nil {
+		return
+	}
+	jobs, err := s.remoteJobStore.UnmatchedPendingJobs(nil)
+	if err != nil {
+		slog.Warn("checking unmatched pending jobs failed", "err", redact.Err(err, s.knownSecrets()))
+		return
+	}
+	s.unmatchedMu.Lock()
+	defer s.unmatchedMu.Unlock()
+	current := make(map[int]bool, len(jobs))
+	for _, j := range jobs {
+		current[j.ID] = true
+		if !s.unmatchedLoggedIDs[j.ID] {
+			slog.Warn("remote job unmatched by any registered runner",
+				"run_id", j.RunID,
+				"task", j.TaskName,
+				"required_tags", j.RequiredTags,
+			)
+		}
+	}
+	s.unmatchedLoggedIDs = current
 }
 
 // ListenAndServe starts the server.
