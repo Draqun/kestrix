@@ -32,3 +32,10 @@ its non-terminal task results are marked `failed` (was `running`) or `skipped`
 interruption. A run only waiting on manual approval is left alone - it remains
 `running` and approvable. Interrupted tasks are not resumed or retried; the
 operator re-runs explicitly.
+
+## Scalability & Future Architecture
+
+For in-depth analysis and future architectural proposals:
+- [Scaling Remote Runners](remote-runner-scaling.md) – Analysis of long-polling bottlenecks, connection overhead, and gRPC/PubSub evolution paths.
+- [Artifact Storage at Scale](artifact-storage-architecture.md) – Decoupling large binary artifacts from PostgreSQL into S3/MinIO with presigned direct transfers.
+
