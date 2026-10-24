@@ -37,6 +37,23 @@ account recovery, revocation latency, login throttling, and the security
 response headers. All of that section's environment variables beyond the two
 key paths above are optional and default to sane values.
 
+## Master key validation and rotation
+
+On startup, Kestrix verifies that `KESTRIX_MASTER_KEY_PATH` can decrypt stored
+credentials before accepting requests. If an invalid or unrotated key file is
+provided, the server refuses to start to prevent data corruption.
+
+To rotate the credential master key:
+```bash
+# Rotate ciphertext across credentials, remote jobs, and runs in a single transaction
+kestrix keys rotate-master --new-key-path /path/to/new.key
+
+# Then replace the file at KESTRIX_MASTER_KEY_PATH with the new key and restart
+```
+
+See [Rotating keys](deployment.md#12-rotating-keys) for the full procedure and
+the suspected key leak checklist.
+
 ## Database profiles
 
 Local development uses PostgreSQL database `kestrix_local` on host port `5433`

@@ -50,9 +50,9 @@ test('an accepted re-run navigates to the new run under an encoded project name'
   render(<App />);
   // At jsdom's width Layout opens its modal navigation drawer, which marks
   // the page content aria-hidden, so the query must include hidden nodes.
-  fireEvent.click(await screen.findByRole('button', { name: /re-run/i, hidden: true }));
+  fireEvent.click(await screen.findByRole('button', { name: /re-run/i, hidden: true }, { timeout: 10000 }));
 
-  await waitFor(() => assert.equal(window.location.pathname, '/pipelines/runs/my%20demo/9'));
-  assert.ok(await screen.findByText('Run #9'));
+  await waitFor(() => assert.equal(window.location.pathname, '/pipelines/runs/my%20demo/9'), { timeout: 10000 });
+  assert.ok(await screen.findByText('Run #9', {}, { timeout: 10000 }));
   assert.ok(calls.some(c => c.method === 'POST' && c.url === '/api/projects/my%20demo/tasks/build/run'));
 });

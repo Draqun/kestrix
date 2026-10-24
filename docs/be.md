@@ -6,7 +6,7 @@ The Kestrix backend is a Go HTTP server that serves as the CI/CD control plane. 
 
 | Package | Responsibility |
 |---------|---------------|
-| `cmd/kestrix` | CLI entry point (serve, run, resolve, validate) |
+| `cmd/kestrix` | CLI entry point (serve, run, resolve, validate, user, keys) |
 | `internal/parser` | HCL → `model.Project` |
 | `internal/dag` | Trigger expression evaluation + task ordering |
 | `internal/dispatch` | GitLab CI pipeline dispatch |

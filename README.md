@@ -127,6 +127,9 @@ The CLI works on a pipeline file and needs no server:
 # Manage accounts directly against the database
 ./bin/kestrix user list
 
+# Rotate the master encryption key across stored secrets
+./bin/kestrix keys rotate-master --new-key-path /path/to/new.key
+
 # Print the running build's version - a released build reports its tag,
 # e.g. v0.3.0; an unversioned local build reports dev
 ./bin/kestrix version
