@@ -25,3 +25,6 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 - [Usage guide](usage.md)
 - [Authentication](authentication.md)
 - [Architecture overview](architecture.md)
+- [Remote runners scaling](remote-runner-scaling.md)
+- [Artifact storage architecture](artifact-storage-architecture.md)
+
