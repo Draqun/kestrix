@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"kestrix/internal/credentials"
@@ -23,6 +24,9 @@ type PGStore struct {
 	// this store connected, per remote-runner-registration design.md D2. It
 	// never overwrites a Mode a caller (or a prior migration) already set.
 	defaultMode string
+
+	serverLockMu   *sync.Mutex
+	serverLockConn *sql.Conn
 }
 
 // NewPG creates a PGStore, connects to the database, and ensures the schema
@@ -52,7 +56,13 @@ func NewPG(databaseURL, defaultMode string) (*PGStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &PGStore{db: db, webhookHistoryLimit: DefaultWebhookHistoryLimit, runHistoryLimit: DefaultRunHistoryLimit, defaultMode: defaultMode}, nil
+	return &PGStore{
+		db:                  db,
+		webhookHistoryLimit: DefaultWebhookHistoryLimit,
+		runHistoryLimit:     DefaultRunHistoryLimit,
+		defaultMode:         defaultMode,
+		serverLockMu:        &sync.Mutex{},
+	}, nil
 }
 
 // SetWebhookHistoryLimit bounds how many webhook events are retained. A

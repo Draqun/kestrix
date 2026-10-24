@@ -276,6 +276,8 @@ Keeping them separate means a leaked signing key does not also expose
 credential plaintext, and rotating one never forces rotating the other.
 Restarting Kestrix with the same signing key file keeps existing unexpired
 tokens valid; changing the file invalidates every outstanding token.
+See [Rotating keys](deployment.md#rotating-keys) for key rotation procedures
+and the [Suspected key leak checklist](deployment.md#suspected-key-leak).
 
 ## Creating and recovering accounts
 

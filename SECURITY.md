@@ -37,7 +37,9 @@ A finding in one of these areas is the highest priority to report privately:
 
 - **Credential storage and the master key** — repository credentials are
   encrypted at rest under a master key; losing or exposing that key exposes
-  every stored credential. See [Repository credentials](docs/repository-credentials.md).
+  every stored credential. See [Repository credentials](docs/repository-credentials.md),
+  [Rotating keys](docs/deployment.md#rotating-keys), and the
+  [Suspected key leak checklist](docs/deployment.md#suspected-key-leak).
 - **Webhook signature verification** — `/webhook` must reject any delivery
   that doesn't verify against a configured secret. See
   [Webhook receiver: Authentication](docs/webhook-receiver.md#authentication).
