@@ -35,8 +35,22 @@ export default function WebhookSetupPanel({ hasProjectSecret }) {
           steps above are what GitLab&apos;s own webhook UI sends. If your operator switched this
           server to HMAC mode, GitLab cannot be used as-is: GitLab does not send an HMAC signature.
           HMAC mode verifies <code>X-Hub-Signature-256</code> instead, so it needs a Git host that
-          signs deliveries that way (GitHub and compatible) using this project&apos;s webhook secret
-          as the signing key.
+          signs deliveries that way using this project&apos;s webhook secret as the signing key.
+          The server&apos;s configured method decides which one is verified for GitLab.
+        </Typography>
+
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom sx={{ mt: 2 }}>In GitHub</Typography>
+        <Box component="ol" sx={{ pl: 2.5, m: 0, mb: 2 }}>
+          <Typography component="li" variant="body2">Open <strong>Settings → Webhooks → Add webhook</strong> on the repository.</Typography>
+          <Typography component="li" variant="body2">Paste the URL above into <strong>Payload URL</strong>.</Typography>
+          <Typography component="li" variant="body2">Set <strong>Content type</strong> to <code>application/json</code>.</Typography>
+          <Typography component="li" variant="body2">Put this project's webhook secret into <strong>Secret</strong>.</Typography>
+          <Typography component="li" variant="body2">Select <strong>Just the push event</strong>, then add the webhook.</Typography>
+        </Box>
+
+        <Typography variant="body2" color="text.secondary">
+          GitHub deliveries are always verified by <code>X-Hub-Signature-256</code> using HMAC-SHA256,
+          regardless of the server&apos;s configured method.
         </Typography>
 
         {!hasProjectSecret && (

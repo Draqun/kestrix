@@ -106,6 +106,194 @@ func TestParseGitLabPushEventInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseGitHubPushEvent(t *testing.T) {
+	// Branch push with multiple commits unioning changed files
+	payload := `{
+		"ref": "refs/heads/main",
+		"before": "1111111111111111111111111111111111111111",
+		"after": "2222222222222222222222222222222222222222",
+		"deleted": false,
+		"repository": {
+			"full_name": "octocat/Hello-World",
+			"default_branch": "main",
+			"clone_url": "https://github.com/octocat/Hello-World.git",
+			"ssh_url": "git@github.com:octocat/Hello-World.git",
+			"html_url": "https://github.com/octocat/Hello-World"
+		},
+		"commits": [
+			{
+				"id": "c1",
+				"message": "first commit",
+				"added": ["file1.go", "file2.go"],
+				"modified": [],
+				"removed": []
+			},
+			{
+				"id": "c2",
+				"message": "second commit",
+				"added": [],
+				"modified": ["file2.go", "file3.go"],
+				"removed": ["old.go"]
+			}
+		]
+	}`
+
+	event, err := ParseGitHubPushEvent([]byte(payload))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if event.Repo != "octocat/Hello-World" {
+		t.Errorf("repo = %q, want octocat/Hello-World", event.Repo)
+	}
+	if event.Branch != "main" {
+		t.Errorf("branch = %q, want main", event.Branch)
+	}
+	if !event.IsBranch {
+		t.Errorf("expected IsBranch = true")
+	}
+	if event.IsTag {
+		t.Errorf("expected IsTag = false")
+	}
+	if event.Deleted {
+		t.Errorf("expected Deleted = false")
+	}
+	if event.CheckoutSHA != "2222222222222222222222222222222222222222" {
+		t.Errorf("checkout SHA = %q, want 2222222222222222222222222222222222222222", event.CheckoutSHA)
+	}
+	if event.DefaultBranch != "main" {
+		t.Errorf("default branch = %q, want main", event.DefaultBranch)
+	}
+	if event.CommitCount != 2 {
+		t.Errorf("commit count = %d, want 2", event.CommitCount)
+	}
+	if event.GitLabProjectID != 0 {
+		t.Errorf("gitLab project ID = %d, want 0", event.GitLabProjectID)
+	}
+	// Files unioned across both commits: file1.go, file2.go, file3.go, old.go (4 files)
+	if len(event.FilesChanged) != 4 {
+		t.Errorf("files changed count = %d, want 4", len(event.FilesChanged))
+	}
+	for _, f := range []string{"file1.go", "file2.go", "file3.go", "old.go"} {
+		if !event.FilesChanged[f] {
+			t.Errorf("expected file %q in FilesChanged", f)
+		}
+	}
+	// RepoURLs
+	wantURLs := []string{
+		"https://github.com/octocat/Hello-World.git",
+		"git@github.com:octocat/Hello-World.git",
+		"https://github.com/octocat/Hello-World",
+	}
+	if len(event.RepoURLs) != 3 {
+		t.Fatalf("repo URLs = %v, want %v", event.RepoURLs, wantURLs)
+	}
+	for i := range wantURLs {
+		if event.RepoURLs[i] != wantURLs[i] {
+			t.Errorf("repo URL %d = %q, want %q", i, event.RepoURLs[i], wantURLs[i])
+		}
+	}
+}
+
+func TestParseGitHubPushEventTag(t *testing.T) {
+	payload := `{
+		"ref": "refs/tags/v1.2.3",
+		"after": "abcdef1234567890abcdef1234567890abcdef12",
+		"deleted": false,
+		"repository": {
+			"full_name": "octocat/Hello-World",
+			"default_branch": "main"
+		},
+		"commits": []
+	}`
+
+	event, err := ParseGitHubPushEvent([]byte(payload))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event.Branch != "v1.2.3" {
+		t.Errorf("branch = %q, want v1.2.3", event.Branch)
+	}
+	if event.IsBranch {
+		t.Errorf("expected IsBranch = false")
+	}
+	if !event.IsTag {
+		t.Errorf("expected IsTag = true")
+	}
+	if event.Deleted {
+		t.Errorf("expected Deleted = false")
+	}
+}
+
+func TestParseGitHubPushEventDeleted(t *testing.T) {
+	// deleted: true explicitly
+	payload := `{
+		"ref": "refs/heads/feature-branch",
+		"after": "0000000000000000000000000000000000000000",
+		"deleted": true,
+		"repository": {
+			"full_name": "octocat/Hello-World",
+			"default_branch": "main"
+		},
+		"commits": []
+	}`
+
+	event, err := ParseGitHubPushEvent([]byte(payload))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !event.Deleted {
+		t.Errorf("expected Deleted = true")
+	}
+
+	// deleted: false but after is all zero SHA
+	payloadZeroAfter := `{
+		"ref": "refs/heads/feature-branch",
+		"after": "0000000000000000000000000000000000000000",
+		"deleted": false,
+		"repository": {
+			"full_name": "octocat/Hello-World",
+			"default_branch": "main"
+		},
+		"commits": []
+	}`
+	eventZero, err := ParseGitHubPushEvent([]byte(payloadZeroAfter))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !eventZero.Deleted {
+		t.Errorf("expected Deleted = true for zero SHA after")
+	}
+}
+
+func TestParseGitHubPushEventMissingOptionalURLs(t *testing.T) {
+	// Only clone_url present; ssh_url and html_url omitted
+	payload := `{
+		"ref": "refs/heads/main",
+		"after": "abc123",
+		"repository": {
+			"full_name": "octocat/Hello-World",
+			"clone_url": "https://github.com/octocat/Hello-World.git"
+		},
+		"commits": []
+	}`
+
+	event, err := ParseGitHubPushEvent([]byte(payload))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(event.RepoURLs) != 1 || event.RepoURLs[0] != "https://github.com/octocat/Hello-World.git" {
+		t.Errorf("expected only clone_url in RepoURLs, got %v", event.RepoURLs)
+	}
+}
+
+func TestParseGitHubPushEventInvalidJSON(t *testing.T) {
+	_, err := ParseGitHubPushEvent([]byte("not json"))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
 func TestParseGitLabPushEventTag(t *testing.T) {
 	payload := `{
 		"object_kind": "push",

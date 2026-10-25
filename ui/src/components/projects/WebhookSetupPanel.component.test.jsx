@@ -48,10 +48,20 @@ test('copying places exactly the delivery URL on the clipboard', async () => {
 test('the panel names both accepted header forms and the GitLab steps', () => {
   render(<WebhookSetupPanel hasProjectSecret />);
   assert.ok(screen.getByText(/X-Gitlab-Token/));
-  assert.ok(screen.getByText(/X-Hub-Signature-256/));
-  assert.ok(screen.getByText(/Settings → Webhooks/));
+  assert.ok(screen.getAllByText(/X-Hub-Signature-256/).length >= 1);
+  assert.ok(screen.getAllByText(/Settings → Webhooks/).length >= 1);
   assert.ok(screen.getByText(/Secret token/));
   assert.ok(screen.getByText(/Push events/));
+});
+
+test('the panel shows GitHub steps and states deliveries are always verified by X-Hub-Signature-256', () => {
+  render(<WebhookSetupPanel hasProjectSecret />);
+  assert.ok(screen.getByText(/In GitHub/));
+  assert.ok(screen.getByText(/Payload URL/));
+  assert.ok(screen.getByText(/application\/json/));
+  assert.ok(screen.getByText(/Just the push event/));
+  assert.ok(screen.getByText(/GitHub deliveries are always verified by/));
+  assert.ok(screen.getAllByText(/X-Hub-Signature-256/).length >= 2);
 });
 
 test('a project without its own secret is warned that the global secret is in use', () => {
