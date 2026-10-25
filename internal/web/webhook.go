@@ -276,3 +276,93 @@ func collectRepoURLs(p GitLabProject) []string {
 	}
 	return urls
 }
+
+// --- GitHub Webhook Payload ---
+
+// GitHubPushEvent represents the JSON payload sent by GitHub on a push event.
+// Only the fields we need are extracted; unknown fields are silently ignored.
+type GitHubPushEvent struct {
+	Ref        string           `json:"ref"`
+	After      string           `json:"after"`
+	Deleted    bool             `json:"deleted"`
+	Repository GitHubRepository `json:"repository"`
+	Commits    []GitHubCommit   `json:"commits"`
+}
+
+// GitHubRepository holds repository metadata from a GitHub webhook.
+type GitHubRepository struct {
+	FullName      string `json:"full_name"`
+	CloneURL      string `json:"clone_url"`
+	SSHURL        string `json:"ssh_url"`
+	HTMLURL       string `json:"html_url"`
+	DefaultBranch string `json:"default_branch"`
+}
+
+// GitHubCommit holds a single commit's file-change data from a GitHub webhook.
+type GitHubCommit struct {
+	ID       string   `json:"id"`
+	Message  string   `json:"message"`
+	Added    []string `json:"added"`
+	Modified []string `json:"modified"`
+	Removed  []string `json:"removed"`
+}
+
+// collectGitHubRepoURLs returns the repository URLs a GitHub payload's
+// repository object carries (clone_url, ssh_url, html_url), in that order,
+// with empty values dropped.
+func collectGitHubRepoURLs(r GitHubRepository) []string {
+	var urls []string
+	for _, u := range []string{r.CloneURL, r.SSHURL, r.HTMLURL} {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
+}
+
+// ParseGitHubPushEvent parses raw JSON from a GitHub push webhook into a
+// normalized PushEvent.
+func ParseGitHubPushEvent(payload []byte) (*PushEvent, error) {
+	var raw GitHubPushEvent
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("parse webhook JSON: %w", err)
+	}
+
+	isBranch := strings.HasPrefix(raw.Ref, "refs/heads/")
+	isTag := strings.HasPrefix(raw.Ref, "refs/tags/")
+
+	// Normalize branch: "refs/heads/main" → "main", "refs/tags/v1.0" → "v1.0"
+	branch := strings.TrimPrefix(raw.Ref, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "refs/tags/")
+
+	// Collect all changed files across all commits.
+	files := make(map[string]bool)
+	for _, c := range raw.Commits {
+		for _, f := range c.Added {
+			files[f] = true
+		}
+		for _, f := range c.Modified {
+			files[f] = true
+		}
+		for _, f := range c.Removed {
+			files[f] = true
+		}
+	}
+
+	checkoutSHA := strings.TrimSpace(raw.After)
+	deleted := raw.Deleted || isZeroSHA(checkoutSHA)
+
+	return &PushEvent{
+		Repo:            raw.Repository.FullName,
+		Branch:          branch,
+		FilesChanged:    files,
+		CommitCount:     len(raw.Commits),
+		GitLabProjectID: 0,
+		CheckoutSHA:     checkoutSHA,
+		RepoURLs:        collectGitHubRepoURLs(raw.Repository),
+		IsBranch:        isBranch,
+		IsTag:           isTag,
+		Deleted:         deleted,
+		DefaultBranch:   raw.Repository.DefaultBranch,
+	}, nil
+}

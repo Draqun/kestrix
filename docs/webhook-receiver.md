@@ -6,8 +6,9 @@ The webhook receiver processes Git push events, classifies changed files, resolv
 
 When a push event arrives at `POST /webhook`, the receiver:
 
-1. Validates the request (optional `X-Gitlab-Token` check).
-2. Parses the GitLab push event JSON into a normalized `PushEvent`, including
+1. Validates the request: HMAC signature verification (`X-Hub-Signature-256`) for
+   GitHub deliveries, or the configured token/HMAC check for GitLab.
+2. Parses the GitLab or GitHub push event JSON into a normalized `PushEvent`, including
    the repository URLs the payload carries.
 3. Resolves the registered project(s) the pushed repository belongs to (see
    [Project Resolution](#project-resolution)).
@@ -28,15 +29,24 @@ When a push event arrives at `POST /webhook`, the receiver:
 POST /webhook
 ```
 
-### Authentication
+### Provider Selection and Authentication
 
 Every delivery is authenticated before any part of its payload is trusted,
 and verification fails closed: there is no configuration in which `/webhook`
 accepts an unverified delivery.
 
-A delivery is accepted only if it verifies, using the configured method
-(`KESTRIX_WEBHOOK_METHOD`: `gitlab` header comparison, or `hmac` body
-signature), against either of two secrets, checked in this order:
+The Git host provider is selected based on incoming headers:
+- **GitHub**: Deliveries carrying an `X-GitHub-Event` header are identified as
+  GitHub deliveries. They are **always** verified using HMAC-SHA256 over the raw
+  request body via the `X-Hub-Signature-256` header, regardless of the server's
+  configured verification method.
+- **GitLab**: Deliveries without `X-GitHub-Event` are treated as GitLab deliveries
+  and verified using the configured method (`KESTRIX_WEBHOOK_METHOD` or `--method`:
+  `gitlab` token comparison via `X-Gitlab-Token`, or `hmac` body signature via
+  `X-Hub-Signature-256`).
+
+A delivery is accepted only if it verifies against either of two secrets, checked
+in this order:
 
 1. The matched registered project's own `webhook_secret` (set via
    `PUT /api/projects/{name}`), when the project is registered and has one.
@@ -48,10 +58,10 @@ verifies against neither, including one for which no secret is configured at
 all, is rejected with `401 {"error":"unauthorized"}` and is **not** recorded
 in webhook history. The rejection is byte-identical whether the project is
 unknown, has no secret, or presented a wrong secret: a distinct message would
-let a caller enumerate which GitLab project IDs are registered. Secret
+let a caller enumerate which repository URLs or GitLab project IDs are registered. Secret
 comparison is constant time.
 
-Verification runs before the body is parsed as a GitLab push event, so a
+Verification runs before the body is parsed as a push event, so a
 delivery that fails verification answers `401`, never `400`, regardless of
 whether its payload is well-formed.
 
@@ -59,10 +69,34 @@ The request body is read at most once and is bounded by
 `KESTRIX_WEBHOOK_MAX_BODY_BYTES`; a body over that bound is rejected with
 `413` and is not recorded either.
 
+#### GitHub Ping, Event Types, and Content Type
+
+- **Ping event**: When a webhook is created, GitHub sends an `X-GitHub-Event: ping`
+  delivery. If verification succeeds, Kestrix answers `200 {"status": "pong"}` and
+  does **not** write a history row (preventing eviction of real history). An unverified
+  ping is rejected with `401`.
+- **Event types**: Only `push` events are parsed and processed. Any other event
+  (such as `pull_request` or `issues`) is rejected with `400 Bad Request`.
+- **Content type**: GitHub's default webhook format is `application/x-www-form-urlencoded`.
+  Kestrix requires JSON; a verified delivery sent as form-encoded answers `400 Bad Request`
+  with `set the webhook content type to application/json`.
+- **Commit limits**: GitHub push event payloads list up to 2,048 commits (compared to
+  GitLab's 20 commits). Files changed only in commits beyond this limit are not detected.
+
+#### Setup
+
 A per-project secret can be set from the browser as well as from the API: the
 project detail page's **Webhook setup** panel shows the delivery URL and the
-Git host steps, and the create/edit dialogs set the secret. See
+Git host steps for both GitLab and GitHub, and the create/edit dialogs set the secret. See
 [Frontend](fe.md) - Project webhook setup.
+
+**GitHub setup steps:**
+1. Open **Settings → Webhooks → Add webhook** on the repository.
+2. In **Payload URL**, paste the delivery URL (`<origin>/webhook`).
+3. Set **Content type** to `application/json`.
+4. Put the project's webhook secret (or global secret) in **Secret**.
+5. Under "Which events would you like to trigger this webhook?", select **Just the push event**.
+6. Click **Add webhook**. GitHub will send a `ping` event, which Kestrix responds to with `pong`.
 
 **BREAKING**: a deployment with no `KESTRIX_WEBHOOK_SECRET` and no
 per-project secret rejects every delivery with `401`. See

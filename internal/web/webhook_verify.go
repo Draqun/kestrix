@@ -9,6 +9,20 @@ import (
 	"strings"
 )
 
+const (
+	providerGitLab = "gitlab"
+	providerGitHub = "github"
+)
+
+// webhookProvider returns providerGitHub if the X-GitHub-Event header is present,
+// otherwise providerGitLab. See design D1.
+func webhookProvider(h http.Header) string {
+	if h.Get("X-GitHub-Event") != "" {
+		return providerGitHub
+	}
+	return providerGitLab
+}
+
 // verifyGitLabToken reports whether header is the X-Gitlab-Token value
 // GitLab would send for secret, compared in constant time. An empty secret
 // never verifies: callers must not invoke this with an unconfigured secret.
@@ -53,11 +67,14 @@ type SignatureConfig struct {
 	Method string
 }
 
-// verifyOne checks body/headers under method against a single secret. An
+// verifyOne checks body/headers under provider and method against a single secret. An
 // empty secret never verifies.
-func verifyOne(method string, h http.Header, body []byte, secret string) bool {
+func verifyOne(provider, method string, h http.Header, body []byte, secret string) bool {
 	if secret == "" {
 		return false
+	}
+	if provider == providerGitHub {
+		return verifyHMAC(h.Get("X-Hub-Signature-256"), body, secret)
 	}
 	switch method {
 	case "hmac":
@@ -70,34 +87,59 @@ func verifyOne(method string, h http.Header, body []byte, secret string) bool {
 // verifyDelivery reports whether a webhook delivery is authenticated: it
 // verifies against projectSecret when non-empty, then against globalSecret
 // when non-empty, and returns false when neither is set or neither
-// verifies. See design.md D1/D2 - the project secret is tried first only so
-// the common case short-circuits, not for security; either match accepts
-// the delivery.
-func verifyDelivery(method string, h http.Header, body []byte, projectSecret, globalSecret string) bool {
-	if projectSecret != "" && verifyOne(method, h, body, projectSecret) {
+// verifies. See design.md D1/D2 - GitHub deliveries always verify HMAC,
+// while GitLab deliveries use the configured method.
+func verifyDelivery(provider, method string, h http.Header, body []byte, projectSecret, globalSecret string) bool {
+	if projectSecret != "" && verifyOne(provider, method, h, body, projectSecret) {
 		return true
 	}
-	if globalSecret != "" && verifyOne(method, h, body, globalSecret) {
+	if globalSecret != "" && verifyOne(provider, method, h, body, globalSecret) {
 		return true
 	}
 	return false
 }
 
 // webhookProbe reads just enough of a webhook body to route and authenticate
-// the delivery before anything else in it is trusted - see design.md D1 and
-// multi-source-projects D6: the project object's GitLab ID and repository
-// URLs. A body that is not JSON yields an empty project (ID 0, no URLs), so
-// only the global secret can accept it.
+// the delivery before anything else in it is trusted - see design.md D1, D3 and
+// multi-source-projects D6: repository URLs, plus the GitLab ID when the provider is GitLab.
 type webhookProbe struct {
-	Project GitLabProject `json:"project"`
+	GitLabProjectID int
+	RepoURLs        []string
 }
 
-// probeWebhook extracts the payload's project object from body without
+// probeWebhook extracts the payload's match data from body without
 // trusting anything else in it.
-func probeWebhook(body []byte) GitLabProject {
-	var probe webhookProbe
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return GitLabProject{}
+func probeWebhook(provider string, body []byte) webhookProbe {
+	if provider == providerGitHub {
+		var raw struct {
+			Repository struct {
+				CloneURL string `json:"clone_url"`
+				SSHURL   string `json:"ssh_url"`
+				HTMLURL  string `json:"html_url"`
+			} `json:"repository"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return webhookProbe{}
+		}
+		var urls []string
+		for _, u := range []string{raw.Repository.CloneURL, raw.Repository.SSHURL, raw.Repository.HTMLURL} {
+			if u = strings.TrimSpace(u); u != "" {
+				urls = append(urls, u)
+			}
+		}
+		return webhookProbe{
+			RepoURLs: urls,
+		}
 	}
-	return probe.Project
+
+	var raw struct {
+		Project GitLabProject `json:"project"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return webhookProbe{}
+	}
+	return webhookProbe{
+		GitLabProjectID: raw.Project.ID,
+		RepoURLs:        collectRepoURLs(raw.Project),
+	}
 }

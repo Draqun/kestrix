@@ -118,9 +118,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// payload is parsed. A project whose secret does not verify is skipped
 	// without a history row; a delivery no matched project and no global
 	// secret accepts answers 401. See design.md D6.
-	probe := probeWebhook(body)
-	keys := sourceMatchKeys(collectRepoURLs(probe))
-	matches, ignored, err := s.matchProjects(probe.ID, keys)
+	provider := webhookProvider(r.Header)
+	probe := probeWebhook(provider, body)
+	keys := sourceMatchKeys(probe.RepoURLs)
+	matches, ignored, err := s.matchProjects(provider, probe.GitLabProjectID, keys)
 	if err != nil {
 		slog.Warn("webhook: store lookup error", "err", redact.Err(err, s.knownSecrets()))
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
@@ -128,7 +129,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	verified := make([]webhookMatch, 0, len(matches))
 	for _, m := range matches {
-		if verifyDelivery(s.cfg.Signature.Method, r.Header, body, m.cfg.WebhookSecret, s.cfg.Signature.Secret) {
+		if verifyDelivery(provider, s.cfg.Signature.Method, r.Header, body, m.cfg.WebhookSecret, s.cfg.Signature.Secret) {
 			verified = append(verified, m)
 		}
 	}
@@ -139,7 +140,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if len(matches) == 0 && !verifyDelivery(s.cfg.Signature.Method, r.Header, body, "", s.cfg.Signature.Secret) {
+	if len(matches) == 0 && !verifyDelivery(provider, s.cfg.Signature.Method, r.Header, body, "", s.cfg.Signature.Secret) {
 		if s.metrics != nil {
 			s.metrics.WebhookDelivery("rejected")
 		}
@@ -148,7 +149,30 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	matches = verified
 
-	event, err := ParseGitLabPushEvent(body)
+	if provider == providerGitHub {
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+			writeError(w, http.StatusBadRequest, "set the webhook content type to application/json")
+			return
+		}
+		ghEvent := r.Header.Get("X-GitHub-Event")
+		if ghEvent == "ping" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"status": "pong"})
+			return
+		}
+		if ghEvent != "push" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported event kind %q (only \"push\" is supported)", ghEvent))
+			return
+		}
+	}
+
+	var event *PushEvent
+	if provider == providerGitHub {
+		event, err = ParseGitHubPushEvent(body)
+	} else {
+		event, err = ParseGitLabPushEvent(body)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -214,10 +238,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 // matchProjects finds every registered project the delivery belongs to: by
 // repository URL against derived sources first, then by GitLab project ID as
-// a fallback for registrations without a routable URL. ignored reports that a
+// a fallback for registrations without a routable URL (GitLab only). ignored reports that a
 // registered-project lookup was possible but found nothing; no matches and
 // not ignored means the receiver runs against its single pipeline directory.
-func (s *Server) matchProjects(gitlabProjectID int, keys []string) (matches []webhookMatch, ignored bool, err error) {
+func (s *Server) matchProjects(provider string, gitlabProjectID int, keys []string) (matches []webhookMatch, ignored bool, err error) {
 	if s.projectStore == nil {
 		return nil, false, nil
 	}
@@ -233,7 +257,7 @@ func (s *Server) matchProjects(gitlabProjectID int, keys []string) (matches []we
 			return matches, false, nil
 		}
 	}
-	if gitlabProjectID > 0 {
+	if provider == providerGitLab && gitlabProjectID > 0 {
 		p, err := s.projectStore.FindByGitLabID(gitlabProjectID)
 		if err != nil {
 			return nil, false, err
@@ -242,6 +266,9 @@ func (s *Server) matchProjects(gitlabProjectID int, keys []string) (matches []we
 			return nil, true, nil
 		}
 		return []webhookMatch{{cfg: p, source: primarySource(p)}}, false, nil
+	}
+	if len(keys) > 0 {
+		return nil, true, nil
 	}
 	return nil, false, nil
 }
