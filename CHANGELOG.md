@@ -4,6 +4,8 @@ All notable changes to Kestrix are documented here.
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-10-25
+
 ### Added
 
 - Pipeline variable interpolation: pipeline `.tf` files can now reference declared variables via `var.<name>` or string templates (`"...${var.<name>}..."`) in allowlisted fields: a task's `execute.image`, task `runner_tags` items, the project's `default_image`, and a `ci_repo`'s `url` and `ref`. Variables are eligible if they are project-scoped or unset, have a literal `value` or `default`, and are neither `masked`, `protected`, nor configured with `secret_ref`. Interpolated fields are evaluated at parse time and stored with the run snapshot. Non-allowlisted fields keep rejecting interpolation with informative diagnostics (`script` points to shell `$VAR` and `$${` escapes, while `trigger` points to its expression grammar). See [docs/pipeline-definition.md](docs/pipeline-definition.md#interpolation).
