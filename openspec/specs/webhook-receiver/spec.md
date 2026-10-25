@@ -11,9 +11,11 @@ The webhook receiver is an HTTP server that accepts push events from GitLab (and
 
 ### Requirement: HTTP Endpoint (implemented)
 
-The server SHALL expose a `POST /webhook` endpoint that accepts JSON payloads from GitLab push webhooks. The server SHALL also expose a `GET /api/health` endpoint that reports service status and stored counts, and a `GET /ping` heartbeat, for monitoring.
+The server SHALL expose a `POST /webhook` endpoint that accepts JSON payloads from GitLab and GitHub push webhooks. The server SHALL also expose a `GET /api/health` endpoint that reports service status and stored counts, and a `GET /ping` heartbeat, for monitoring.
 
-Every delivery to `POST /webhook` SHALL be authenticated before any part of its payload is trusted, and verification SHALL fail closed. A delivery is accepted only if it verifies, using the configured method (`gitlab` header comparison or `hmac` body signature), against either the matched registered project's own webhook secret or the global webhook secret. A delivery that verifies against neither, including one for which no secret is configured at all, SHALL be rejected with `401`, SHALL NOT be recorded in webhook history, and SHALL NOT trigger any pipeline load, source acquisition, resolution, or dispatch. Secret comparison SHALL be constant time. The rejection response SHALL be identical regardless of whether the project is unknown, has no secret, or presented a wrong secret, and SHALL NOT disclose which secret was consulted.
+Every delivery to `POST /webhook` SHALL be authenticated before any part of its payload is trusted, and verification SHALL fail closed. A delivery is accepted only if it verifies against either the matched registered project's own webhook secret or the global webhook secret. A delivery that verifies against neither, including one for which no secret is configured at all, SHALL be rejected with `401`, SHALL NOT be recorded in webhook history, and SHALL NOT trigger any pipeline load, source acquisition, resolution, or dispatch. Secret comparison SHALL be constant time. The rejection response SHALL be identical regardless of whether the project is unknown, has no secret, or presented a wrong secret, and SHALL NOT disclose which secret was consulted.
+
+A delivery carrying an `X-GitHub-Event` header SHALL be verified by HMAC-SHA256 over the raw body (`X-Hub-Signature-256`), regardless of the configured method. Every other delivery SHALL be verified with the configured method (`gitlab` header comparison or `hmac` body signature).
 
 The verification method SHALL be configurable by the `--method` command-line flag or, when the flag is unset, by the `KESTRIX_WEBHOOK_METHOD` environment variable — the same flag/environment-variable equivalence the webhook secret itself already has. When neither sets a method, the server SHALL default to `gitlab`.
 
@@ -98,16 +100,29 @@ The request body SHALL be read at most once and SHALL be bounded by the configur
 - **WHEN** a delivery fails verification and its body is also not a valid GitLab push event
 - **THEN** the server SHALL respond `401`, not `400`
 
+#### Scenario: GitHub delivery is verified by HMAC under the default method
+
+- **WHEN** the configured method is `gitlab`
+- **AND** a delivery carries `X-GitHub-Event: push` and an `X-Hub-Signature-256` header whose HMAC-SHA256 over the raw body matches the applicable secret
+- **THEN** the server SHALL accept the delivery
+
+#### Scenario: GitHub delivery cannot fall back to a token
+
+- **WHEN** a delivery carries `X-GitHub-Event: push` and a matching `X-Gitlab-Token` header but no valid `X-Hub-Signature-256`
+- **THEN** the server SHALL respond `401`
+
 ### Requirement: Push Event Parsing (implemented)
 
-The server SHALL parse GitLab push event payloads, extracting:
+The server SHALL parse GitLab and GitHub push event payloads, extracting:
 - Repository path_with_namespace
 - Repository URLs (HTTP and SSH clone URLs, and the web URL when present)
-- GitLab project ID
+- GitLab project ID (GitLab only)
 - Branch name (normalized from refs/heads/* or refs/tags/*)
 - Changed files (deduplicated across all commits)
 - Commit count
 - The immutable checkout SHA
+
+For a GitHub delivery the server SHALL read `repository.full_name`, `repository.clone_url`, `repository.ssh_url`, `repository.html_url`, `repository.default_branch`, `ref`, `after`, `deleted`, and `commits[].added`, `modified` and `removed`. A GitHub `ping` event SHALL be answered `200` with `{"status": "pong"}` after verification and SHALL NOT be recorded. Any other GitHub event SHALL be answered `400`. A verified GitHub delivery whose body is not JSON because it was sent form-encoded SHALL be answered `400` with a message naming `application/json` as the required content type.
 
 #### Scenario: Parse a push event
 
@@ -129,6 +144,28 @@ AND the branch SHALL be normalized (refs/heads/main → main)
 WHEN the server receives an event with object_kind != "push"
 THEN it SHALL respond with 400 Bad Request
 ```
+
+#### Scenario: Parse a GitHub push event
+
+- **WHEN** the server receives a verified GitHub `push` delivery for `refs/heads/main` whose commits added `src/a.go` and modified `src/b.go`
+- **THEN** the parsed event SHALL carry the branch `main`, the checkout SHA from `after`, and both files as changed
+- **AND** its repository URLs SHALL be the payload's `clone_url`, `ssh_url` and `html_url`
+
+#### Scenario: GitHub ping
+
+- **WHEN** a verified delivery carries `X-GitHub-Event: ping`
+- **THEN** the server SHALL respond `200` with `{"status": "pong"}`
+- **AND** SHALL NOT record a webhook event
+
+#### Scenario: Unsupported GitHub event
+
+- **WHEN** a verified delivery carries `X-GitHub-Event: pull_request`
+- **THEN** the server SHALL respond with `400 Bad Request`
+
+#### Scenario: Form-encoded GitHub delivery
+
+- **WHEN** a verified GitHub delivery has content type `application/x-www-form-urlencoded`
+- **THEN** the server SHALL respond `400` with a message naming `application/json`
 
 ### Requirement: File Classification (implemented)
 
@@ -225,7 +262,7 @@ The webhook receiver SHALL record every event it parses to durable webhook histo
 
 #### Scenario: Unparsed request not recorded
 
-- **WHEN** a request is rejected because its token does not match, its body cannot be read, or its payload is not a GitLab push event
+- **WHEN** a request is rejected because its token or signature does not match, its body cannot be read, or its payload is not a push event
 - **THEN** no webhook event SHALL be recorded
 
 #### Scenario: Recording failure does not fail the request
