@@ -10,6 +10,10 @@ project "demo-mono" {
 
   # ─── Variables ──────────────────────────────────────────────────────
   # Scoped like GitLab: project → repo → job (most specific wins).
+  variable "GO_VERSION" {
+    value = "1.26"
+  }
+
   variable "ENVIRONMENT" {
     value = "staging"
   }
@@ -62,7 +66,7 @@ project "demo-mono" {
     execute {
       repo   = "auth_service"
       script = "./scripts/build.sh"
-      image  = "golang:1.26"
+      image  = "golang:${var.GO_VERSION}"
     }
   }
 
