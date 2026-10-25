@@ -36,7 +36,7 @@
 ## 4. Verification
 
 - [x] 4.1 `scripts/test-all.sh` all layers, `make lint`, `make ui-lint` green; 100% unit coverage gate holds.
-- [ ] 4.2 Manual:
+- [x] 4.2 Manual:
   - point a real GitHub repository's webhook at a reachable Kestrix (e.g. through a tunnel);
   - the ping shows as delivered in GitHub;
   - a push to `repo_ref` starts a run;
