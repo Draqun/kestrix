@@ -1268,6 +1268,13 @@ const docTemplate = `{
         "domain.Task": {
             "type": "object",
             "properties": {
+                "artifacts": {
+                    "description": "Artifacts names paths relative to the task's working directory that\nthe task produces for tasks depending on it (remote-task-artifacts).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "depends_on": {
                     "type": "array",
                     "items": {
@@ -1320,6 +1327,10 @@ const docTemplate = `{
                 },
                 "status": {
                     "description": "passed, failed, skipped, running, pending, manual",
+                    "type": "string"
+                },
+                "waiting_reason": {
+                    "description": "WaitingReason is set on the latest result of an unmatched pending task\n(remote-unmatched-job-alert design D2). Omitted when empty.",
                     "type": "string"
                 }
             }
@@ -1616,7 +1627,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "0.2.0",
+	Version:          "0.3.0",
 	Host:             "localhost:8080",
 	BasePath:         "/",
 	Schemes:          []string{},

@@ -3,7 +3,7 @@
 // Kestrix — Repo-agnostic CI/CD Control Plane
 //
 // @title           Kestrix API
-// @version         0.2.0
+// @version         0.3.0
 // @description     Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 // @description     Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
 //

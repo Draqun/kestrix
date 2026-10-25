@@ -126,6 +126,13 @@ definitions:
     type: object
   domain.Task:
     properties:
+      artifacts:
+        description: |-
+          Artifacts names paths relative to the task's working directory that
+          the task produces for tasks depending on it (remote-task-artifacts).
+        items:
+          type: string
+        type: array
       depends_on:
         items:
           type: string
@@ -169,6 +176,11 @@ definitions:
         type: string
       status:
         description: passed, failed, skipped, running, pending, manual
+        type: string
+      waiting_reason:
+        description: |-
+          WaitingReason is set on the latest result of an unmatched pending task
+          (remote-unmatched-job-alert design D2). Omitted when empty.
         type: string
     type: object
   domain.Variable:
@@ -371,7 +383,7 @@ info:
     name: Kestrix Team
   description: GitLab webhook secret token for signature verification
   title: Kestrix API
-  version: 0.2.0
+  version: 0.3.0
 paths:
   /api/auth/login:
     post:

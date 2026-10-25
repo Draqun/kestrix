@@ -359,16 +359,19 @@ kestrix/
 
 ## API Endpoints
 
-Only `/api/health`, `/api/auth/login`, `/webhook` and `/docs/` are reachable
-without a bearer token. The rest require an account, and the role column says
+Only `/api/health`, `/api/auth/login`, `/api/setup`, `/webhook` and `/docs/` are reachable
+without a bearer token (along with `/metrics` when configured with a scrape token). The rest require an account, and the role column says
 the minimum needed.
 
 | Method | Path | Role | Description |
 |---|---|---|---|
 | GET | `/api/health` | — | Health check and stored counters |
 | POST | `/api/auth/login` | — | Exchange name and password for a token |
+| POST | `/api/auth/logout` | — | End session (clears session cookie) |
+| GET/POST | `/api/setup` | — | First-run administrator setup (available once on fresh instances) |
 | POST | `/webhook` | — | Git webhook receiver (verified by secret) |
 | GET | `/docs/` | — | Swagger UI |
+| GET | `/metrics` | —* | Prometheus metrics (`KESTRIX_METRICS_ENABLED`; scrape token or viewer role) |
 | GET | `/api/dashboard` | viewer | Aggregated dashboard counters |
 | GET | `/api/version` | viewer | Build version |
 | GET | `/api/pipeline`, `/api/pipeline/raw` | viewer | Parse or read HCL from the configured pipeline root |
@@ -391,6 +394,7 @@ the minimum needed.
 | GET/POST | `/api/credentials` | admin | List and create credentials (metadata only in responses) |
 | GET/PUT/POST | `/api/credentials/{ref}`, `/api/credentials/{ref}/revoke` | admin | Read, rotate, revoke |
 | GET/POST/PUT/DELETE | `/api/users`, `/api/users/{user}/...` | admin | Accounts, roles and project grants |
+| GET/POST/DELETE | `/api/runners`, `/api/runners/{id}` | admin | Remote runners: list, register with one-time token, revoke |
 
 ## Example Pipelines
 

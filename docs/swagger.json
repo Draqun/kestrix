@@ -7,7 +7,7 @@
             "name": "Kestrix Team",
             "email": "damian.giebas@gmail.com"
         },
-        "version": "0.2.0"
+        "version": "0.3.0"
     },
     "host": "localhost:8080",
     "basePath": "/",
@@ -1261,6 +1261,13 @@
         "domain.Task": {
             "type": "object",
             "properties": {
+                "artifacts": {
+                    "description": "Artifacts names paths relative to the task's working directory that\nthe task produces for tasks depending on it (remote-task-artifacts).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "depends_on": {
                     "type": "array",
                     "items": {
@@ -1313,6 +1320,10 @@
                 },
                 "status": {
                     "description": "passed, failed, skipped, running, pending, manual",
+                    "type": "string"
+                },
+                "waiting_reason": {
+                    "description": "WaitingReason is set on the latest result of an unmatched pending task\n(remote-unmatched-job-alert design D2). Omitted when empty.",
                     "type": "string"
                 }
             }
