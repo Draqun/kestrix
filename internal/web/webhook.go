@@ -75,6 +75,18 @@ type PushEvent struct {
 	// payload is parsed; they are carried here so the normalized event is
 	// complete for consumers of PushEvent, per the webhook-receiver spec.
 	RepoURLs []string
+
+	// IsBranch is true when the ref is a branch ("refs/heads/*").
+	IsBranch bool
+
+	// IsTag is true when the ref is a tag ("refs/tags/*").
+	IsTag bool
+
+	// Deleted is true when the push deleted the ref (all-zero checkout SHA or after).
+	Deleted bool
+
+	// DefaultBranch is the repository's default branch reported by the Git host.
+	DefaultBranch string
 }
 
 // IsEmpty returns true if the event contains no file changes.
@@ -195,6 +207,9 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 		return nil, fmt.Errorf("unsupported event kind %q (only \"push\" is supported)", raw.ObjectKind)
 	}
 
+	isBranch := strings.HasPrefix(raw.Ref, "refs/heads/")
+	isTag := strings.HasPrefix(raw.Ref, "refs/tags/")
+
 	// Normalize branch: "refs/heads/main" → "main"
 	branch := strings.TrimPrefix(raw.Ref, "refs/heads/")
 	branch = strings.TrimPrefix(branch, "refs/tags/")
@@ -220,6 +235,9 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 	if checkoutSHA == "" && len(raw.Commits) > 0 {
 		checkoutSHA = strings.TrimSpace(raw.Commits[len(raw.Commits)-1].ID)
 	}
+
+	deleted := isZeroSHA(checkoutSHA) || isZeroSHA(raw.After)
+
 	return &PushEvent{
 		Repo:            raw.Project.PathWithNamespace,
 		Branch:          branch,
@@ -228,7 +246,23 @@ func ParseGitLabPushEvent(payload []byte) (*PushEvent, error) {
 		GitLabProjectID: raw.Project.ID,
 		CheckoutSHA:     checkoutSHA,
 		RepoURLs:        collectRepoURLs(raw.Project),
+		IsBranch:        isBranch,
+		IsTag:           isTag,
+		Deleted:         deleted,
+		DefaultBranch:   raw.Project.DefaultBranch,
 	}, nil
+}
+
+func isZeroSHA(sha string) bool {
+	if sha == "" {
+		return false
+	}
+	for _, r := range sha {
+		if r != '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // collectRepoURLs returns the repository URLs a payload's project object

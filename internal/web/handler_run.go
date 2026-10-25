@@ -60,24 +60,13 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actor := actorFrom(r)
-	varStore, resolvedSecrets, err := service.BuildVarStore(r.Context(), &proj, s.secretResolver())
+	runID, err := s.startProjectRun(r.Context(), p, &proj, primary, executionChanged, actor, req.IncludeManual)
 	if err != nil {
-		primary.Cleanup()
-		s.failRunOnSecretError(name, &proj, executionChanged, "", req.IncludeManual, actor, err)
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	runID, err := runService.Start(context.Background(), name, &proj, executionChanged, domain.RunnerOptions{
-		WorkDir: primary.Root, IncludeManual: req.IncludeManual, Variables: varStore, Mode: p.Mode,
-		CredentialResolver:   s.credentialResolver(),
-		SourceSessions:       s.sourceSessions,
-		InitialSources:       []domain.AcquiredSource{primary.Source},
-		WorkspaceCleanup:     primary.Cleanup,
-		Actor:                actor,
-		ResolvedSecretValues: resolvedSecrets,
-	})
-	if err != nil {
-		primary.Cleanup()
+		var secErr secretResolutionError
+		if errors.As(err, &secErr) {
+			writeError(w, http.StatusBadRequest, secErr.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -534,4 +523,43 @@ func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, 
 	if s.metrics != nil {
 		s.metrics.RunFinished("failed", projectName, time.Since(startedAt))
 	}
+}
+
+type secretResolutionError string
+
+func (e secretResolutionError) Error() string { return string(e) }
+
+// startProjectRun initiates a pipeline run from an already-loaded project
+// pipeline and source session (design D1). It resolves variables and secrets
+// through BuildVarStore, records a failed run on secret resolution error, and
+// starts the run through RunService.Start. The session's cleanup is handed to
+// the run on success or called here on failure.
+func (s *Server) startProjectRun(ctx context.Context, cfg *domain.ProjectConfig, proj *domain.Project, session projectSourceSession, changed []string, actor string, includeManual ...bool) (int, error) {
+	var incManual bool
+	if len(includeManual) > 0 {
+		incManual = includeManual[0]
+	}
+	varStore, resolvedSecrets, err := service.BuildVarStore(ctx, proj, s.secretResolver())
+	if err != nil {
+		session.Cleanup()
+		s.failRunOnSecretError(cfg.Name, proj, changed, "", incManual, actor, err)
+		return 0, secretResolutionError(err.Error())
+	}
+	runID, err := s.runService.Start(context.Background(), cfg.Name, proj, changed, domain.RunnerOptions{
+		WorkDir:              session.Root,
+		IncludeManual:        incManual,
+		Variables:            varStore,
+		Mode:                 cfg.Mode,
+		CredentialResolver:   s.credentialResolver(),
+		SourceSessions:       s.sourceSessions,
+		InitialSources:       []domain.AcquiredSource{session.Source},
+		WorkspaceCleanup:     session.Cleanup,
+		Actor:                actor,
+		ResolvedSecretValues: resolvedSecrets,
+	})
+	if err != nil {
+		session.Cleanup()
+		return 0, err
+	}
+	return runID, nil
 }
