@@ -63,10 +63,31 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 	}
 	proj := model.Project{Name: blk.Labels[0]}
 
+	// Decode variable blocks first so we can build the interpolation evaluation context
+	// before decoding project attributes, repos and tasks.
+	for _, child := range blk.Body.Blocks {
+		if child.Type == "variable" {
+			v, err := decodeVariableBlock(child)
+			if err != nil {
+				return model.Project{}, fmt.Errorf("variable: %w", err)
+			}
+			proj.Variables = append(proj.Variables, v)
+		}
+	}
+
+	vc := buildVarEvalContext(proj.Variables)
+
 	// Iterate ALL top-level items of the body so we get both attributes and
 	// blocks, delegating each to the proper extractor.
 	for _, item := range blk.Body.Attributes {
-		val, err := literal(item.Expr)
+		var val string
+		var err error
+		switch item.Name {
+		case "default_image":
+			val, err = evalInterpolatedString(item.Expr, vc, "default_image")
+		default:
+			val, err = literal(item.Expr, item.Name)
+		}
 		if err != nil {
 			return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
 		}
@@ -78,24 +99,21 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 
 	for _, child := range blk.Body.Blocks {
 		switch child.Type {
+		case "variable":
+			// Already decoded in first pass.
+			continue
 		case "ci_repo":
-			r, err := decodeRepoBlock(child)
+			r, err := decodeRepoBlock(child, vc)
 			if err != nil {
 				return model.Project{}, fmt.Errorf("ci_repo: %w", err)
 			}
 			proj.Repos = append(proj.Repos, r)
 		case "ci_task":
-			t, err := decodeTaskBlock(child)
+			t, err := decodeTaskBlock(child, vc)
 			if err != nil {
 				return model.Project{}, fmt.Errorf("ci_task: %w", err)
 			}
 			proj.Tasks = append(proj.Tasks, t)
-		case "variable":
-			v, err := decodeVariableBlock(child)
-			if err != nil {
-				return model.Project{}, fmt.Errorf("variable: %w", err)
-			}
-			proj.Variables = append(proj.Variables, v)
 		default:
 			return model.Project{}, fmt.Errorf("unsupported child block %q in project", child.Type)
 		}
@@ -103,7 +121,7 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 	return proj, nil
 }
 
-func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
+func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Repo, error) {
 	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
 	// own syntax error for `ci_repo {}` (no labels) and `ci_repo "a" "b"`
 	// before this block-decoder runs. The guard stays as a defensive
@@ -111,9 +129,25 @@ func decodeRepoBlock(blk *hclsyntax.Block) (model.Repo, error) {
 	if len(blk.Labels) != 1 {
 		return model.Repo{}, fmt.Errorf("ci_repo requires 1 label")
 	}
+	var vc *varEvalContext
+	if len(vctx) > 0 && vctx[0] != nil {
+		vc = vctx[0]
+	} else {
+		vc = buildVarEvalContext(nil)
+	}
+
 	r := model.Repo{Name: blk.Labels[0]}
 	for name, attr := range attrsMap(blk.Body) {
-		val, err := literal(attr.Expr)
+		var val string
+		var err error
+		switch name {
+		case "url":
+			val, err = evalInterpolatedString(attr.Expr, vc, "url")
+		case "ref":
+			val, err = evalInterpolatedString(attr.Expr, vc, "ref")
+		default:
+			val, err = literal(attr.Expr, name)
+		}
 		if err != nil {
 			return model.Repo{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
@@ -172,18 +206,71 @@ func hasEmbeddedCredentials(raw string) bool {
 	return true
 }
 
-func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
+func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task, error) {
 	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
 	// own syntax error for `ci_task {}` (no labels) and `ci_task "a" "b"`
 	// before this block-decoder runs. Defensive guard only.
 	if len(blk.Labels) != 1 {
 		return model.Task{}, fmt.Errorf("ci_task requires 1 label")
 	}
+	var vc *varEvalContext
+	if len(vctx) > 0 && vctx[0] != nil {
+		vc = vctx[0]
+	} else {
+		vc = buildVarEvalContext(nil)
+	}
+
 	t := model.Task{Name: blk.Labels[0]}
 
-	// Top-level attributes of ci_task: trigger, manual, depends_on, runner_tags
+	// Top-level attributes of ci_task: trigger, manual, depends_on, runner_tags, artifacts
 	for name, attr := range attrsMap(blk.Body) {
-		val, err := literal(attr.Expr)
+		switch name {
+		case "runner_tags":
+			var items []string
+			if tc, ok := attr.Expr.(*hclsyntax.TupleConsExpr); ok {
+				for _, ex := range tc.Exprs {
+					itemVal, err := evalInterpolatedString(ex, vc, "runner_tags")
+					if err != nil {
+						return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+					}
+					items = append(items, itemVal)
+				}
+			} else {
+				itemVal, err := evalInterpolatedString(attr.Expr, vc, "runner_tags")
+				if err != nil {
+					return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+				}
+				items = splitList(itemVal)
+			}
+			tags, err := domain.NormalizeRunnerTags(items)
+			if err != nil {
+				return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+			}
+			t.RunnerTags = tags
+			continue
+		case "artifacts":
+			var items []string
+			if tc, ok := attr.Expr.(*hclsyntax.TupleConsExpr); ok {
+				var err error
+				items, err = tupleStrings(tc)
+				if err != nil {
+					return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
+				}
+			} else {
+				val, err := literal(attr.Expr, name)
+				if err != nil {
+					return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
+				}
+				items = splitList(val)
+			}
+			if err := domain.ValidateArtifacts(t.Name, items); err != nil {
+				return model.Task{}, err
+			}
+			t.Artifacts = items
+			continue
+		}
+
+		val, err := literal(attr.Expr, name)
 		if err != nil {
 			return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
@@ -194,23 +281,6 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
 			t.Manual = val == "true"
 		case "depends_on":
 			t.DependsOn = splitList(val)
-		case "runner_tags":
-			tags, err := domain.NormalizeRunnerTags(splitList(val))
-			if err != nil {
-				return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
-			}
-			t.RunnerTags = tags
-		case "artifacts":
-			var items []string
-			if tc, ok := attr.Expr.(*hclsyntax.TupleConsExpr); ok {
-				items, _ = tupleStrings(tc)
-			} else {
-				items = splitList(val)
-			}
-			if err := domain.ValidateArtifacts(t.Name, items); err != nil {
-				return model.Task{}, err
-			}
-			t.Artifacts = items
 		}
 	}
 
@@ -220,7 +290,14 @@ func decodeTaskBlock(blk *hclsyntax.Block) (model.Task, error) {
 		case "execute":
 			t.Execute = model.ExecuteSpec{}
 			for name, attr := range attrsMap(child.Body) {
-				val, err := literal(attr.Expr)
+				var val string
+				var err error
+				switch name {
+				case "image":
+					val, err = evalInterpolatedString(attr.Expr, vc, "image")
+				default:
+					val, err = literal(attr.Expr, name)
+				}
 				if err != nil {
 					return model.Task{}, fmt.Errorf("execute.%s: %w", name, err)
 				}
@@ -252,6 +329,152 @@ func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute {
 	return out
 }
 
+// varEvalContext holds an evaluation context and variable index for resolving
+// variable references in allowlisted fields.
+type varEvalContext struct {
+	evalCtx  *hcl.EvalContext
+	varIndex map[string]model.Variable
+}
+
+// checkVariableEligibility verifies that a variable meets the eligibility rules
+// defined in design D2 for interpolation into allowlisted fields.
+func checkVariableEligibility(v model.Variable, fieldName string) error {
+	prefix := ""
+	if fieldName != "" {
+		prefix = fmt.Sprintf("variable %q cannot be interpolated into %s: ", v.Key, fieldName)
+	} else {
+		prefix = fmt.Sprintf("variable %q: ", v.Key)
+	}
+	if v.SecretRef != "" {
+		return fmt.Errorf("%ssecret variables cannot be interpolated", prefix)
+	}
+	if v.Masked {
+		return fmt.Errorf("%smasked variables cannot be interpolated", prefix)
+	}
+	if v.Protected {
+		return fmt.Errorf("%sprotected variables cannot be interpolated", prefix)
+	}
+	if v.Scope != "" && v.Scope != "project" {
+		if v.Scope == "job" {
+			return fmt.Errorf("%sjob-scoped variables cannot be interpolated", prefix)
+		}
+		if v.Scope == "repo" {
+			return fmt.Errorf("%srepo-scoped variables cannot be interpolated", prefix)
+		}
+		return fmt.Errorf("%s%s-scoped variables cannot be interpolated", prefix, v.Scope)
+	}
+	if v.Value == "" && v.Default == "" {
+		return fmt.Errorf("%svariable has no value or default", prefix)
+	}
+	return nil
+}
+
+func buildVarEvalContext(vars []model.Variable) *varEvalContext {
+	varIndex := make(map[string]model.Variable, len(vars))
+	eligibleMap := make(map[string]cty.Value)
+
+	for _, v := range vars {
+		varIndex[v.Key] = v
+		if err := checkVariableEligibility(v, ""); err == nil {
+			val := v.Value
+			if val == "" {
+				val = v.Default
+			}
+			eligibleMap[v.Key] = cty.StringVal(val)
+		}
+	}
+
+	varObj := cty.EmptyObjectVal
+	if len(eligibleMap) > 0 {
+		varObj = cty.ObjectVal(eligibleMap)
+	}
+
+	evalCtx := &hcl.EvalContext{
+		Variables: map[string]cty.Value{
+			"var": varObj,
+		},
+	}
+	return &varEvalContext{
+		evalCtx:  evalCtx,
+		varIndex: varIndex,
+	}
+}
+
+func checkVariableRef(varName string, varIndex map[string]model.Variable, fieldName string) (model.Variable, error) {
+	v, ok := varIndex[varName]
+	if !ok {
+		return model.Variable{}, fmt.Errorf("variable %q cannot be interpolated into %s: unknown variable; variable/scoped references are not supported", varName, fieldName)
+	}
+	if err := checkVariableEligibility(v, fieldName); err != nil {
+		return model.Variable{}, err
+	}
+	return v, nil
+}
+
+func extractVarTraversal(traversal hcl.Traversal) (string, error) {
+	if len(traversal) != 2 {
+		return "", fmt.Errorf("only variable references are supported")
+	}
+	root, ok := traversal[0].(hcl.TraverseRoot)
+	if !ok || root.Name != "var" {
+		return "", fmt.Errorf("only variable references are supported")
+	}
+	attr, ok := traversal[1].(hcl.TraverseAttr)
+	if !ok {
+		return "", fmt.Errorf("only variable references are supported")
+	}
+	return attr.Name, nil
+}
+
+func evalInterpolatedString(expr hcl.Expression, vc *varEvalContext, fieldName string) (string, error) {
+	if expr == nil {
+		return "", nil
+	}
+	if wrap, ok := expr.(*hclsyntax.TemplateWrapExpr); ok {
+		expr = wrap.Wrapped
+	}
+
+	switch e := expr.(type) {
+	case *hclsyntax.LiteralValueExpr:
+		return toString(e.Val)
+	case *hclsyntax.ScopeTraversalExpr:
+		varName, err := extractVarTraversal(e.Traversal)
+		if err != nil {
+			return "", err
+		}
+		if _, err := checkVariableRef(varName, vc.varIndex, fieldName); err != nil {
+			return "", err
+		}
+		val, _ := e.Value(vc.evalCtx)
+		return toString(val)
+	case *hclsyntax.TemplateExpr:
+		for _, part := range e.Parts {
+			switch p := part.(type) {
+			case *hclsyntax.LiteralValueExpr:
+				// static literal part in template
+			case *hclsyntax.ScopeTraversalExpr:
+				varName, err := extractVarTraversal(p.Traversal)
+				if err != nil {
+					return "", err
+				}
+				if _, err := checkVariableRef(varName, vc.varIndex, fieldName); err != nil {
+					return "", err
+				}
+			default:
+				return "", fmt.Errorf("only variable references and string templates are supported")
+			}
+		}
+		val, _ := e.Value(vc.evalCtx)
+		return toString(val)
+	case *hclsyntax.FunctionCallExpr:
+		return "", fmt.Errorf("only variable references and string templates are supported")
+	case *hclsyntax.ObjectConsExpr:
+		return "", fmt.Errorf("object literals are not supported here")
+	default:
+		return "", fmt.Errorf("only variable references and string templates are supported")
+	}
+}
+
 // literal extracts the string value of a literal expression. We support:
 //   - string literals (e.g.  "foo")
 //   - tuple expressions (lists of literals), comma-separated
@@ -259,15 +482,39 @@ func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute {
 //
 // We deliberately do NOT support variable interpolation (functions, refs),
 // because pipeline configuration should be declarative and reproducible.
-func literal(expr hcl.Expression) (string, error) {
+func literal(expr hcl.Expression, fieldName ...string) (string, error) {
 	switch e := expr.(type) {
+	case *hclsyntax.TemplateWrapExpr:
+		var field string
+		if len(fieldName) > 0 {
+			field = fieldName[0]
+		}
+		switch field {
+		case "script":
+			return "", fmt.Errorf("interpolated strings are not supported in script; use $VAR for environment variables, or $${VAR} for a literal ${")
+		case "trigger":
+			return "", fmt.Errorf("interpolated strings are not supported in trigger; triggers use their own expression syntax")
+		default:
+			return "", fmt.Errorf("interpolated strings are not supported in pipeline config")
+		}
 	case *hclsyntax.TemplateExpr:
 		if len(e.Parts) == 1 {
 			if ts, ok := e.Parts[0].(*hclsyntax.LiteralValueExpr); ok {
 				return toString(ts.Val)
 			}
 		}
-		return "", fmt.Errorf("interpolated strings are not supported in pipeline config")
+		var field string
+		if len(fieldName) > 0 {
+			field = fieldName[0]
+		}
+		switch field {
+		case "script":
+			return "", fmt.Errorf("interpolated strings are not supported in script; use $VAR for environment variables, or $${VAR} for a literal ${")
+		case "trigger":
+			return "", fmt.Errorf("interpolated strings are not supported in trigger; triggers use their own expression syntax")
+		default:
+			return "", fmt.Errorf("interpolated strings are not supported in pipeline config")
+		}
 	case *hclsyntax.LiteralValueExpr:
 		return toString(e.Val)
 	case *hclsyntax.TupleConsExpr:
@@ -279,6 +526,16 @@ func literal(expr hcl.Expression) (string, error) {
 	case *hclsyntax.ObjectConsExpr:
 		return "", fmt.Errorf("object literals are not supported here")
 	case *hclsyntax.SplatExpr, *hclsyntax.RelativeTraversalExpr, *hclsyntax.ScopeTraversalExpr:
+		var field string
+		if len(fieldName) > 0 {
+			field = fieldName[0]
+		}
+		if field == "script" {
+			return "", fmt.Errorf("variable/scoped references are not supported in script; use $VAR for environment variables")
+		}
+		if field == "trigger" {
+			return "", fmt.Errorf("variable/scoped references are not supported in trigger; triggers use their own expression syntax")
+		}
 		return "", fmt.Errorf("variable/scoped references are not supported; use literal values only")
 	default:
 		return "", fmt.Errorf("unsupported expression type %T", expr)

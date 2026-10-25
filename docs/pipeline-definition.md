@@ -227,6 +227,36 @@ A `secret_ref` variable is resolved and injected as a normal pipeline
 variable, subject to the same `scope`/`repo`/`job` rules as a literal one. It
 is never forwarded to a dispatched GitLab pipeline.
 
+## Interpolation
+
+Pipelines can reference declared variables using `var.<name>` or string templates (`"...${var.<name>}..."`) in a fixed set of attributes:
+
+- `ci_task` → `execute.image` (e.g. `image = "golang:${var.GO_VERSION}"` or `image = var.APP_IMAGE`)
+- `ci_task` → `runner_tags` (e.g. `runner_tags = ["${var.ARCH}", "gpu"]`)
+- `project` → `default_image` (e.g. `default_image = "node:${var.NODE_VERSION}"`)
+- `ci_repo` → `url` and `ref` (e.g. `url = var.REPO_URL`, `ref = var.RELEASE_TAG`)
+
+Interpolated attributes are resolved at parse time from the file's own `variable` blocks and stored as plain strings in the run snapshot.
+
+### Variable Eligibility
+
+A variable can be interpolated only if:
+- Its scope is unset or `project`.
+- It defines a literal `value` or `default`.
+- It has no `secret_ref`.
+- It is neither `masked` nor `protected`.
+
+Interpolated values are recorded with each run and displayed in the UI, so secret, masked, and protected variables are strictly prohibited from interpolation. Job-scoped and repo-scoped variables are also prohibited because project-level and repo-level fields have no single job or repo context. Referencing an unknown or ineligible variable fails pipeline parsing immediately, naming the field, the variable, and the reason.
+
+### Why not `script` or `trigger`?
+
+Other attributes do not accept HCL interpolation:
+
+- **`script`**: Task scripts are executed by `bash`, where `$VAR` and `${VAR}` already evaluate environment variables at runtime. To output a literal `${` in an HCL string (such as in shell scripts), use HCL's `$${` escape sequence (e.g. `script = "echo $${PATH}"`).
+- **`trigger`**: Triggers use their own dedicated expression grammar (`repo.<name>.changed`, `&&`, `||`, `!`).
+
+Only variable references and string templates are supported in allowlisted fields: functions (such as `upper()`), arithmetic, and complex expressions are rejected.
+
 ## Multi-File Pipelines
 
 A pipeline directory can contain multiple `.tf` files. The parser reads all of them and merges:
@@ -250,9 +280,9 @@ The parser validates pipeline files at parse time:
 
 - Unknown top-level blocks are rejected.
 - Unknown child blocks inside `project` are rejected.
-- Interpolated strings (`"${var.name}"`) are not supported — only literal values.
+- Variable interpolation (`${var.name}` or `var.name`) is permitted only on allowlisted fields (`execute.image`, `runner_tags`, `default_image`, `url`, `ref`) using eligible project variables; other fields require literal values.
 - Object literals are not supported.
-- Variable references and scoped traversals are not supported.
+- Scoped traversals outside `var.<name>` are not supported.
 - Cross-file project name mismatches are rejected.
 
 ## Further Reading
