@@ -1,6 +1,6 @@
 # Webhook Receiver
 
-The webhook receiver processes Git push events, classifies changed files, resolves the affected pipeline tasks, and optionally dispatches the resolved pipeline to GitLab CI.
+The webhook receiver processes Git push events, classifies changed files, resolves the affected pipeline tasks, and automatically starts a pipeline run (or optionally dispatches to GitLab CI if configured).
 
 ## Overview
 
@@ -16,7 +16,9 @@ When a push event arrives at `POST /webhook`, the receiver:
 5. Classifies changed files as "code" or "non-code" using configurable patterns.
 6. Matches changed files to declared `ci_repo` blocks.
 7. Resolves the DAG to determine which tasks are triggered.
-8. Optionally dispatches the resolved pipeline to a GitLab project via the dispatch client.
+8. Starts a pipeline run when the push is to the configured ref and at least one
+   task is triggered (see [Run Execution](#run-execution)), or optionally dispatches
+   to GitLab CI if dispatch is configured.
 9. Records one event per matched project in durable webhook history.
 10. Returns a JSON response with one result per matched project.
 
@@ -80,18 +82,16 @@ are configured, and the CHANGELOG for the migration note.
       "changed": ["shared-lib"],
       "tasks": ["lint", "test", "build"],
       "count": 3,
-      "dispatched": true,
-      "pipeline_id": 12345,
-      "pipeline_url": "https://gitlab.com/org/my-service/-/pipelines/12345"
+      "run_id": "018f2d5e-1234-7000-8000-000000000001",
+      "dispatched": false
     }
   ],
   "project": "my-service",
   "changed": ["shared-lib"],
   "tasks": ["lint", "test", "build"],
   "count": 3,
-  "dispatched": true,
-  "pipeline_id": 12345,
-  "pipeline_url": "https://gitlab.com/org/my-service/-/pipelines/12345"
+  "run_id": "018f2d5e-1234-7000-8000-000000000001",
+  "dispatched": false
 }
 ```
 
@@ -101,7 +101,8 @@ are configured, and the CHANGELOG for the migration note.
 | `results` | One entry per matched project, in project-name order |
 | `results[].source_name` | The source the delivery matched: the project name for its primary repository, the `ci_repo` name for a secondary one |
 | `results[].status` | `"ok"` when the project's pipeline was loaded and its DAG resolved, `"error"` otherwise (with `error` carrying the message). A failed dispatch keeps `"ok"` with `dispatched: false` and `error` set, and is recorded as `error` in history |
-| `project`, `changed`, `tasks`, `count`, `dispatched`, `pipeline_id`, `pipeline_url` | Mirrored at the top level only when exactly one project matched, for callers written before fan-out |
+| `results[].run_id` | ID of the started pipeline run when triggered on configured ref without dispatch; omitted otherwise |
+| `project`, `changed`, `tasks`, `count`, `run_id`, `dispatched`, `pipeline_id`, `pipeline_url` | Mirrored at the top level only when exactly one project matched, for callers written before fan-out |
 
 When every matched project fails, the response status is `422` (`400` when
 the push carries no immutable SHA) and the single-match document carries the
@@ -202,6 +203,41 @@ retried - deriving routing from an older commit would restore a `ci_repo` that
 a later commit removed. A `ci_repo` added on the primary repository therefore
 reaches routing at the next load of the configured ref: opening the project, or
 `GET /api/projects/{name}/definition`.
+
+### Branch Deletions
+
+Push events that delete a Git branch (indicated by `after: "0000000000000000000000000000000000000000"`)
+are detected immediately before any pipeline files are fetched or loaded. The delivery
+is ignored for all matched projects, recorded in webhook history with status `ignored`
+and reason `branch deleted`, and returns `{"status": "ignored", "reason": "branch deleted"}`.
+
+## Run Execution
+
+When a push event resolves triggered tasks and GitLab CI dispatch is not configured,
+the webhook receiver automatically starts a pipeline run in Kestrix:
+
+- **Ref matching**:
+  - For a push to the **primary repository**, the event ref must match the project's
+    configured `repo_ref` (e.g. `refs/heads/main`). Only branch pushes trigger runs;
+    tags (even if identically named) do not match.
+  - For a push to a **secondary repository**, the event ref must match the `ci_repo`
+    declaration's `ref` attribute. If `ref` is omitted on the `ci_repo`, it falls
+    back to the project's `default_branch` (or `main`).
+- **Trigger condition**: At least one task must be resolved by the DAG (`count > 0`).
+  A push that touches only ignored files (such as documentation) or produces 0 triggered
+  tasks does not start a run.
+- **Asynchronous start**: The run starts asynchronously via the run service in the
+  background (respecting concurrency limits and queueing). The source session workspace
+  cleanup is handed off to the run lifecycle so the run has exclusive access to the
+  checkout until completion.
+- **Attribution**: The run is recorded with `started_by = "webhook:<source_name>"`
+  (for example, `webhook:my-service` for primary repo pushes, or `webhook:shared-lib`
+  for secondary repo pushes).
+- **Response**: The resulting run ID is returned in `results[].run_id` (and mirrored at
+  the top level when exactly one project matched).
+
+When GitLab dispatch is configured (`dispatch.project_id` / `gitlab_token`), dispatch
+takes precedence and no local run is started.
 
 ## Dispatch Integration
 

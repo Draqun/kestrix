@@ -60,6 +60,18 @@ func TestParseGitLabPushEvent(t *testing.T) {
 	if len(event.RepoURLs) != 2 || event.RepoURLs[0] != "https://git.example.test/org/service-a.git" || event.RepoURLs[1] != "https://git.example.test/org/service-a" {
 		t.Errorf("repo URLs = %v", event.RepoURLs)
 	}
+	if !event.IsBranch {
+		t.Errorf("expected IsBranch = true")
+	}
+	if event.IsTag {
+		t.Errorf("expected IsTag = false")
+	}
+	if event.Deleted {
+		t.Errorf("expected Deleted = false")
+	}
+	if event.DefaultBranch != "main" {
+		t.Errorf("default branch = %q, want %q", event.DefaultBranch, "main")
+	}
 }
 
 func TestParseGitLabPushEventCollectsAllRepoURLs(t *testing.T) {
@@ -111,6 +123,110 @@ func TestParseGitLabPushEventTag(t *testing.T) {
 	}
 	if event.Branch != "v1.0.0" {
 		t.Errorf("branch = %q, want %q (tag should strip refs/tags/)", event.Branch, "v1.0.0")
+	}
+	if event.IsBranch {
+		t.Errorf("expected IsBranch = false")
+	}
+	if !event.IsTag {
+		t.Errorf("expected IsTag = true")
+	}
+	if event.Deleted {
+		t.Errorf("expected Deleted = false")
+	}
+}
+
+func TestParseGitLabPushEventTagNamedLikeBranch(t *testing.T) {
+	payload := `{
+		"object_kind": "push",
+		"ref": "refs/tags/main",
+		"checkout_sha": "abc456",
+		"project": {
+			"path_with_namespace": "org/repo",
+			"default_branch": "main"
+		},
+		"commits": []
+	}`
+
+	event, err := ParseGitLabPushEvent([]byte(payload))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event.Branch != "main" {
+		t.Errorf("branch = %q, want %q", event.Branch, "main")
+	}
+	if event.IsBranch {
+		t.Errorf("expected IsBranch = false for tag named main")
+	}
+	if !event.IsTag {
+		t.Errorf("expected IsTag = true for tag named main")
+	}
+	if event.Deleted {
+		t.Errorf("expected Deleted = false")
+	}
+}
+
+func TestParseGitLabPushEventDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		checkoutSHA string
+		after       string
+		wantSHA     string
+	}{
+		{
+			name:        "all zero after with empty checkout_sha",
+			checkoutSHA: "",
+			after:       "0000000000000000000000000000000000000000",
+			wantSHA:     "0000000000000000000000000000000000000000",
+		},
+		{
+			name:        "all zero checkout_sha",
+			checkoutSHA: "0000000000000000000000000000000000000000",
+			after:       "0000000000000000000000000000000000000000",
+			wantSHA:     "0000000000000000000000000000000000000000",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := `{
+				"object_kind": "push",
+				"ref": "refs/heads/feature-branch",
+				"after": "` + tc.after + `",
+				"checkout_sha": "` + tc.checkoutSHA + `",
+				"project": {
+					"path_with_namespace": "org/repo",
+					"default_branch": "main"
+				},
+				"commits": []
+			}`
+
+			event, err := ParseGitLabPushEvent([]byte(payload))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !event.Deleted {
+				t.Errorf("expected Deleted = true")
+			}
+			if !event.IsBranch {
+				t.Errorf("expected IsBranch = true")
+			}
+			if event.Branch != "feature-branch" {
+				t.Errorf("branch = %q, want feature-branch", event.Branch)
+			}
+			if event.CheckoutSHA != tc.wantSHA {
+				t.Errorf("checkout SHA = %q, want %q", event.CheckoutSHA, tc.wantSHA)
+			}
+		})
+	}
+}
+
+func TestIsZeroSHA(t *testing.T) {
+	if isZeroSHA("") {
+		t.Error("expected empty string to not be zero SHA")
+	}
+	if isZeroSHA("0000000000000000000000000000000000000001") {
+		t.Error("expected sha with 1 to not be zero SHA")
+	}
+	if !isZeroSHA("0000000000000000000000000000000000000000") {
+		t.Error("expected 40 zeros to be zero SHA")
 	}
 }
 

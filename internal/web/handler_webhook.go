@@ -69,6 +69,7 @@ type webhookResult struct {
 	Changed     []string `json:"changed"`
 	Tasks       []string `json:"tasks"`
 	Count       int      `json:"count"`
+	RunID       int      `json:"run_id,omitempty"`
 	Dispatched  bool     `json:"dispatched"`
 	PipelineID  int      `json:"pipeline_id,omitempty"`
 	PipelineURL string   `json:"pipeline_url,omitempty"`
@@ -166,6 +167,24 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "ignored", "reason": "unknown project",
+		})
+		return
+	}
+
+	if event.Deleted {
+		if len(matches) > 0 {
+			logEntry.ProjectName = matches[0].cfg.Name
+		}
+		slog.Info("webhook: branch deleted", "repo", event.Repo, "branch", event.Branch)
+		logEntry.Status = domain.WebhookStatusIgnored
+		logEntry.Error = "branch deleted"
+		s.logWebhook(logEntry)
+		if s.metrics != nil {
+			s.metrics.WebhookDelivery("skipped")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ignored", "reason": "branch deleted",
 		})
 		return
 	}
@@ -316,7 +335,12 @@ func (s *Server) resolveOne(ctx context.Context, event *PushEvent, m webhookMatc
 	if err != nil {
 		return fail(http.StatusUnprocessableEntity, err.Error())
 	}
-	defer session.Cleanup()
+	var handedOver bool
+	defer func() {
+		if !handedOver {
+			session.Cleanup()
+		}
+	}()
 
 	if !m.source.Primary {
 		s.refreshSources(m.cfg, proj)
@@ -334,7 +358,89 @@ func (s *Server) resolveOne(ctx context.Context, event *PushEvent, m webhookMatc
 			changed = []string{entry.SourceName}
 		}
 	}
-	return s.resolveAndDispatch(event, proj, changed, s.dispatchTarget(m.cfg), entry)
+
+	dispatchTarget := s.dispatchTarget(m.cfg)
+	isDispatchConfigured := s.cfg.Dispatch.Enabled && dispatchTarget > 0
+
+	refMatches := false
+	if event.IsBranch {
+		if m.source.Primary {
+			refMatches = event.Branch == m.cfg.RepoRef
+		} else {
+			configuredRef := ""
+			for _, r := range proj.Repos {
+				if r.Name == entry.SourceName {
+					configuredRef = r.Ref
+					break
+				}
+			}
+			if configuredRef == "" {
+				configuredRef = event.DefaultBranch
+			}
+			refMatches = event.Branch == configuredRef
+		}
+	}
+
+	if changed == nil {
+		changed = []string{}
+	}
+	changedSet := make(map[string]bool, len(changed))
+	for _, c := range changed {
+		changedSet[c] = true
+	}
+	nodes, _ := dag.New(proj).Resolve(changedSet)
+	tasks := []string{}
+	for _, n := range nodes {
+		if n.Triggered {
+			tasks = append(tasks, n.Task.Name)
+		}
+	}
+
+	if s.runService != nil && s.runStore != nil && refMatches && len(tasks) > 0 && !isDispatchConfigured {
+		handedOver = true
+		actor := "webhook:" + entry.SourceName
+		entry.TriggeredTasks = tasks
+		runID, err := s.startProjectRun(ctx, m.cfg, &proj, session, changed, actor)
+		if err != nil {
+			slog.Warn("webhook: start run error", "project", m.cfg.Name, "err", redact.Err(err, s.knownSecrets()))
+			entry.Status = domain.WebhookStatusError
+			entry.Error = err.Error()
+			code := http.StatusInternalServerError
+			var secErr secretResolutionError
+			if errors.As(err, &secErr) {
+				code = http.StatusBadRequest
+			}
+			s.logWebhook(entry)
+			return webhookResult{
+				Project:     m.cfg.Name,
+				SourceName:  entry.SourceName,
+				Status:      "error",
+				Error:       err.Error(),
+				Changed:     changed,
+				Tasks:       tasks,
+				Count:       len(tasks),
+				failureCode: code,
+			}
+		}
+		entry.Status = domain.WebhookStatusTriggered
+		if s.metrics != nil {
+			s.metrics.WebhookDelivery("accepted")
+		}
+		slog.Info("webhook processed", "repo", event.Repo, "branch", event.Branch,
+			"commits", event.CommitCount, "files", len(changed), "tasks", tasks, "run_id", runID)
+		s.logWebhook(entry)
+		return webhookResult{
+			Project:    m.cfg.Name,
+			SourceName: entry.SourceName,
+			Status:     "ok",
+			Changed:    changed,
+			Tasks:      tasks,
+			Count:      len(tasks),
+			RunID:      runID,
+		}
+	}
+
+	return s.resolveAndDispatch(event, proj, changed, dispatchTarget, entry)
 }
 
 // pushedRepoName finds the ci_repo in the just-parsed pipeline whose URL is
@@ -464,6 +570,9 @@ func writeWebhookResponse(w http.ResponseWriter, results []webhookResult) {
 			response["changed"] = r.Changed
 			response["tasks"] = r.Tasks
 			response["count"] = r.Count
+			if r.RunID > 0 {
+				response["run_id"] = r.RunID
+			}
 			response["dispatched"] = r.Dispatched
 			if r.dispatchAttempted {
 				var id, url interface{}

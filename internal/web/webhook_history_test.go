@@ -688,3 +688,62 @@ func TestWebhookRecordsParsedProjectName(t *testing.T) {
 		t.Errorf("recorded project name = %q, want demo", events[0].ProjectName)
 	}
 }
+
+// A branch deletion is recorded as ignored with reason "branch deleted" before
+// any pipeline load, so no source acquisition or dispatch happens (design D4).
+func TestWebhookBranchDeletionIgnoredBeforePipelineLoad(t *testing.T) {
+	project := registeredProject(t, "checkout", multiSourcePipeline, 1234)
+	srv, _, log, sessions := sourcesServer(t, project)
+	srv.cfg.Dispatch.Enabled = true
+	srv.cfg.Dispatch.ProjectID = "1234"
+
+	payload := `{
+		"object_kind": "push",
+		"ref": "refs/heads/feature-x",
+		"after": "0000000000000000000000000000000000000000",
+		"checkout_sha": "",
+		"project": {
+			"id": 1234,
+			"path_with_namespace": "team/checkout",
+			"default_branch": "main",
+			"git_http_url": "` + project.RepoURL + `"
+		},
+		"commits": []
+	}`
+
+	rec := postWebhook(t, srv, payload)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "ignored" || resp["reason"] != "branch deleted" {
+		t.Fatalf("resp = %v, want status=ignored reason=branch deleted", resp)
+	}
+
+	events := log.List()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	if events[0].Status != domain.WebhookStatusIgnored {
+		t.Errorf("recorded status = %q, want %q", events[0].Status, domain.WebhookStatusIgnored)
+	}
+	if events[0].Error != "branch deleted" {
+		t.Errorf("recorded error = %q, want branch deleted", events[0].Error)
+	}
+	if events[0].ProjectName != "checkout" {
+		t.Errorf("recorded project = %q, want checkout", events[0].ProjectName)
+	}
+	if events[0].Revision != "0000000000000000000000000000000000000000" {
+		t.Errorf("recorded revision = %q, want zero sha", events[0].Revision)
+	}
+
+	sessions.mu.Lock()
+	reqCount := len(sessions.requests)
+	sessions.mu.Unlock()
+	if reqCount != 0 {
+		t.Errorf("source sessions opened = %d, want 0", reqCount)
+	}
+}
