@@ -8,6 +8,8 @@ Kestrix is a repo‑agnostic CI/CD control plane that turns HCL pipelines into e
 - **CI generator** produces `gitlab-ci.yml` files.
 - **Dispatch client** triggers GitLab pipelines.
 - **Webhook receiver** handles push events and initiates the pipeline.
+- **[Getting Started](getting-started.md)** walks through installation, configuration, and writing your first pipeline.
+- **[CLI Reference](cli-reference.md)** documents all available command-line subcommands and flags.
 
 ## Project Components
 

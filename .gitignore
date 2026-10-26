@@ -53,6 +53,7 @@ coverage/
 .DS_Store
 Thumbs.db
 ui/dist/
+public/
 node_modules/
 
 # Local metadata
