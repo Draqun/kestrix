@@ -20,6 +20,14 @@ place with clear trigger conditions.
 - **ci_task** — defines what to run, when to run it, and what it depends on
 - **Trigger logic** — `repo.auth_service.changed`, `!repo.docs.changed`, `||`, `&&`
 
+📖 **Full Documentation & Guides:**
+- **GitLab Pages**: [https://kestrix.gitlab.io/kestrix/](https://kestrix.gitlab.io/kestrix/)
+- **[Getting Started Guide](docs/getting-started.md)** — 5-minute setup, first-run wizard, and first pipeline
+- **[CLI Reference](docs/cli-reference.md)** — Complete command-line reference and cheat sheet
+- **[Pipeline Definition (HCL)](docs/pipeline-definition.md)** — Syntax for repos, tasks, and expressions
+- **[Remote Runners](docs/remote-runners.md)** — Distributed worker setup via outbound HTTPS polling
+- **[Production Deployment](docs/deployment.md)** — Docker Compose, PostgreSQL, TLS, and master key rotation
+
 **Example trigger:**
 ```hcl
 ci_task "deploy_staging" {

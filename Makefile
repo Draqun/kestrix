@@ -27,7 +27,7 @@ include .env
 export $(shell sed 's/=.*//' .env)
 endif
 
-.PHONY: help init build build-release test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs
+.PHONY: help init build build-release test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs pages serve-pages
 
 ## help: Show this help message
 help:
@@ -256,3 +256,11 @@ ci-validate-docs:
 ## serve-docs: Serve documentation locally (after UI build)
 serve-docs: ui-build
 	@cd ui/dist && python3 -m http.server 8000
+
+## pages: Build documentation site for GitLab Pages (public/)
+pages:
+	@bash scripts/build-docs.sh docs public
+
+## serve-pages: Serve GitLab Pages site locally (port 8000)
+serve-pages: pages
+	@cd public && python3 -m http.server $(or $(PORT),8000)
