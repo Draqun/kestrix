@@ -4,6 +4,12 @@ All notable changes to Kestrix are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- GitHub repository mirror (`Draqun/kestrix`) with automated multi-platform binary releases via GoReleaser and GitHub Actions.
+- Release automation tooling (`scripts/release.py`, `scripts/verify_version.py`, `scripts/verify_version_bump.py`, `scripts/generate_release_notes.py`) and Makefile targets (`release`, `release-push`, `release-dry-run`, `release-notes`).
+- GitLab CI release jobs with dynamic release notes extraction and tag version verification.
+
 ## [v0.3.0] - 2026-10-25
 
 ### Added
