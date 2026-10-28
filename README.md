@@ -10,6 +10,10 @@
 [![Sponsor: GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/draqun)
 [![Donate: PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/damiandraqungiebas)
 
+> [!NOTE]
+> **Primary Repository & Development:** Active development, issue tracking, and primary CI/CD pipelines are hosted on [GitLab (kestrix/kestrix)](https://gitlab.com/kestrix/kestrix).  
+> The [GitHub repository (Draqun/kestrix)](https://github.com/Draqun/kestrix) is an automated push mirror used for releases, distribution, and GitHub ecosystem integration.
+
 > Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 > Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
 
