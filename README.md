@@ -1,7 +1,6 @@
 # Kestrix — CI/CD Control Plane
 
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](LICENSE)
-[![GitLab Pipeline](https://gitlab.com/kestrix/kestrix/badges/main/pipeline.svg)](https://gitlab.com/kestrix/kestrix/-/commits/main)
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://golang.org)
 [![Terraform Provider](https://img.shields.io/badge/Terraform%20Provider-v0.1.0-844FBA?logo=terraform&logoColor=white)](https://registry.terraform.io/providers/Draqun/kestrix/latest)
 [![GitHub Mirror](https://img.shields.io/badge/GitHub-Mirror-181717?logo=github&logoColor=white)](https://github.com/Draqun/kestrix)
