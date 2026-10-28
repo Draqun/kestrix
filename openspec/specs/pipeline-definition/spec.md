@@ -86,7 +86,7 @@ AND the error SHALL redact sensitive URL components
 
 A project SHALL declare one or more **ci_task** blocks. Each task SHALL have:
 - A name (label)
-- A trigger expression (string)
+- An optional trigger expression (string, defaults to always run)
 - An execute block with repo, script, and optional image
 - Optional depends_on list
 - Optional manual flag

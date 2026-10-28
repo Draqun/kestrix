@@ -17,19 +17,32 @@ function CustomNode({ data }) {
     : null;
   const borderColor = statusColor || (data.type === 'repo' ? '#2196f3' : data.manual ? '#42a5f5' : '#4caf50');
 
+  const bgColor = data.type === 'repo' ? '#132f4c'
+    : data.runStatus === 'passed' ? '#143823'
+    : data.runStatus === 'failed' ? '#3d1418'
+    : data.runStatus === 'running' ? '#3d2810'
+    : data.runStatus === 'manual' ? '#0f2f4a'
+    : '#1e2630';
+
   return (
     <Box sx={{
-      background: data.type === 'repo' ? '#1e4976' : '#1a3a2a',
+      background: bgColor,
       border: `2px solid ${borderColor}`,
-      borderRadius: 2, px: 2, py: 1, minWidth: 130, textAlign: 'center',
+      borderRadius: 2, px: 2, py: 1, minWidth: 140, textAlign: 'center',
       position: 'relative',
       color: '#fff',
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
       opacity: data.runStatus === 'skipped' || data.runStatus === 'pending' || data.runStatus === 'canceled' ? 0.5 : 1,
+      boxShadow: data.runStatus === 'running' ? '0 0 12px rgba(255, 152, 0, 0.4)' : '0 2px 8px rgba(0,0,0,0.3)',
     }}>
       <Handle type="target" position={Position.Left} style={{ background: '#fff', width: 8, height: 8 }} />
       <Typography variant="body2" fontWeight={600}>{data.label}</Typography>
       {data.path && <Typography variant="caption" display="block" sx={{ color: 'rgba(255,255,255,0.7)' }}>{data.path}</Typography>}
+      {data.repo && !data.path && (
+        <Typography variant="caption" display="block" sx={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>
+          repo: {data.repo}
+        </Typography>
+      )}
       {data.trigger && (
         <Typography variant="caption" color="warning.main" display="block" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
           {data.trigger}
