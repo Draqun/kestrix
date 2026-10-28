@@ -360,6 +360,7 @@ The runner connects via outbound HTTPS long-polling. No open inbound ports or fi
 ## 9. Next Steps
 
 - [Pipeline Definition Guide](pipeline-definition.md) — Comprehensive HCL syntax, expressions, and variable interpolation.
+- [Terraform & OpenTofu Provider](terraform-provider.md) — Manage Kestrix projects, credentials, and settings as code via official registries.
 - [DAG Engine](dag-engine.md) — Cycle detection, topological sorting, and trigger evaluation.
 - [Remote Runners](remote-runners.md) — Tag matching, lease timeouts, and distributed job execution.
 - [CLI Reference](cli-reference.md) — Full CLI flags and options cheat sheet.

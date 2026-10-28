@@ -37,6 +37,7 @@ place with clear trigger conditions.
 📖 **Full Documentation & Guides:**
 - **GitLab Pages**: [https://kestrix.gitlab.io/kestrix/](https://kestrix.gitlab.io/kestrix/)
 - **[Getting Started Guide](docs/getting-started.md)** — 5-minute setup, first-run wizard, and first pipeline
+- **[Terraform & OpenTofu Provider](docs/terraform-provider.md)** — Manage projects and configuration as code (Terraform & OpenTofu registries)
 - **[CLI Reference](docs/cli-reference.md)** — Complete command-line reference and cheat sheet
 - **[Pipeline Definition (HCL)](docs/pipeline-definition.md)** — Syntax for repos, tasks, and expressions
 - **[Remote Runners](docs/remote-runners.md)** — Distributed worker setup via outbound HTTPS polling
