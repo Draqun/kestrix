@@ -34,12 +34,17 @@ func New(p model.Project) *Engine {
 // EvaluateTrigger computes whether a task's trigger expression is satisfied given
 // the set of changed repo names. It parses the boolean expression supporting
 // AND/OR/NOT and the "repo.<name>.changed" predicate.
+// An empty trigger expression, "true", or "always" evaluates to true (always runs).
 //
 // Example expressions accepted:
 //
 //	repo.auth_service.changed && !repo.docs.changed
 //	(repo.a.changed || repo.b.changed) && !repo.docs.changed
 func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" || expr == "true" || expr == "always" {
+		return true, nil
+	}
 	tokens, err := tokenize(expr)
 	if err != nil {
 		return false, fmt.Errorf("tokenize: %w", err)

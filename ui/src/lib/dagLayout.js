@@ -17,7 +17,7 @@ export function layoutFromProject(project) {
 
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', nodesep: 80, ranksep: 120 });
+  g.setGraph({ rankdir: 'LR', nodesep: 60, ranksep: 100 });
 
   project.Repos?.forEach(repo => {
     g.setNode(`repo:${repo.Name}`, { width: 170, height: 60 });
@@ -29,14 +29,21 @@ export function layoutFromProject(project) {
   project.Tasks?.forEach(task => {
     const trig = task.Trigger || '';
     const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
-        g.setEdge(`repo:${rn}`, `task:${task.Name}`);
+    const hasDeps = Array.isArray(task.DependsOn) && task.DependsOn.length > 0;
+
+    // Only entry tasks without upstream dependencies connect directly from repos
+    if (!hasDeps) {
+      if (reposInTrigger.length > 0) {
+        reposInTrigger.forEach(rn => {
+          if (project.Repos?.some(r => r.Name === rn)) {
+            g.setEdge(`repo:${rn}`, `task:${task.Name}`);
+          }
+        });
+      } else if (task.Execute?.Repo && project.Repos?.some(r => r.Name === task.Execute.Repo)) {
+        g.setEdge(`repo:${task.Execute.Repo}`, `task:${task.Name}`);
       }
-    });
-    if (task.Execute?.Repo) {
-      g.setEdge(`task:${task.Name}`, `repo:${task.Execute.Repo}`);
     }
+
     task.DependsOn?.forEach(depName => {
       g.setNode(`task:${depName}`, { width: 190, height: 60 });
       g.setEdge(`task:${depName}`, `task:${task.Name}`);
@@ -63,7 +70,14 @@ export function layoutFromProject(project) {
     nodes.push({
       id: `task:${task.Name}`,
       position: { x: pos.x - 95, y: pos.y - 30 },
-      data: { label: `⚙️ ${task.Name}`, type: 'task', manual: task.Manual, trigger: task.Trigger, script: task.Execute?.Script },
+      data: {
+        label: `⚙️ ${task.Name}`,
+        type: 'task',
+        manual: task.Manual,
+        trigger: task.Trigger,
+        script: task.Execute?.Script,
+        repo: task.Execute?.Repo,
+      },
       type: 'custom',
     });
   });
@@ -71,33 +85,40 @@ export function layoutFromProject(project) {
   project.Tasks?.forEach(task => {
     const trig = task.Trigger || '';
     const reposInTrigger = [...trig.matchAll(/repo\.([a-zA-Z0-9_]+)\.changed/g)].map(m => m[1]);
-    reposInTrigger.forEach(rn => {
-      if (project.Repos?.some(r => r.Name === rn)) {
+    const hasDeps = Array.isArray(task.DependsOn) && task.DependsOn.length > 0;
+
+    // Only entry tasks without upstream dependencies connect directly from repos
+    if (!hasDeps) {
+      if (reposInTrigger.length > 0) {
+        reposInTrigger.forEach(rn => {
+          if (project.Repos?.some(r => r.Name === rn)) {
+            edges.push({
+              id: `e-trig-${rn}-${task.Name}`,
+              source: `repo:${rn}`,
+              target: `task:${task.Name}`,
+              animated: false,
+              style: { stroke: '#ff9800', strokeWidth: 2 },
+            });
+          }
+        });
+      } else if (task.Execute?.Repo && project.Repos?.some(r => r.Name === task.Execute.Repo)) {
         edges.push({
-          id: `e-trig-${rn}-${task.Name}`,
-          source: `repo:${rn}`,
+          id: `e-repo-${task.Execute.Repo}-${task.Name}`,
+          source: `repo:${task.Execute.Repo}`,
           target: `task:${task.Name}`,
-          animated: true,
-          style: { stroke: '#ff9800', strokeWidth: 1.5 },
+          animated: false,
+          style: { stroke: '#ff9800', strokeWidth: 2 },
         });
       }
-    });
-    if (task.Execute?.Repo) {
-      edges.push({
-        id: `e-exec-${task.Name}-${task.Execute.Repo}`,
-        source: `task:${task.Name}`,
-        target: `repo:${task.Execute.Repo}`,
-        animated: true,
-        style: { stroke: '#2196f3', strokeWidth: 1.5 },
-      });
     }
+
     task.DependsOn?.forEach(depName => {
       edges.push({
         id: `e-dep-${depName}-${task.Name}`,
         source: `task:${depName}`,
         target: `task:${task.Name}`,
         animated: false,
-        style: { stroke: '#9c27b0', strokeWidth: 2.5 },
+        style: { stroke: '#90caf9', strokeWidth: 2 },
       });
     });
   });

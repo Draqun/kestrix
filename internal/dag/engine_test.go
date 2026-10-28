@@ -222,6 +222,31 @@ func TestValidateUnknownRepo(t *testing.T) {
 	}
 }
 
+func TestDefaultTriggerRunsAlways(t *testing.T) {
+	proj := model.Project{
+		Name:  "default-trigger-proj",
+		Repos: []model.Repo{{Name: "auth", Path: "auth"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "", Execute: model.ExecuteSpec{Repo: "auth", Script: "make build"}},
+			{Name: "deploy", Trigger: "always", DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "auth", Script: "make deploy"}},
+			{Name: "notify", Trigger: "true", DependsOn: []string{"deploy"}, Execute: model.ExecuteSpec{Repo: "auth", Script: "make notify"}},
+		},
+	}
+	engine := New(proj)
+	if err := engine.Validate(); err != nil {
+		t.Fatalf("expected project with empty/always/true trigger to validate, got: %v", err)
+	}
+
+	nodes, err := engine.Resolve(map[string]bool{"auth": false})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	names := taskNames(nodes)
+	assertContains(t, names, "build")
+	assertContains(t, names, "deploy")
+	assertContains(t, names, "notify")
+}
+
 // --- helpers ---
 
 func taskNames(nodes []Node) map[string]bool {

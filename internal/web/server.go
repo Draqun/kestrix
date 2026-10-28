@@ -678,7 +678,7 @@ func (s *Server) buildRouter() chi.Router {
 			fileServer := http.FileServer(http.Dir(s.cfg.StaticDir))
 			r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasPrefix(r.URL.Path, "/api/") ||
-					strings.HasPrefix(r.URL.Path, "/webhook") ||
+					r.URL.Path == "/webhook" || strings.HasPrefix(r.URL.Path, "/webhook/") ||
 					strings.HasPrefix(r.URL.Path, "/docs/") ||
 					strings.HasPrefix(r.URL.Path, "/ping") {
 					http.NotFound(w, r)

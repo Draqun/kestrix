@@ -84,7 +84,7 @@ ci_task "build" {
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | string | Yes | Boolean expression deciding if the task runs |
+| `trigger` | string | No | Boolean expression deciding if the task runs; defaults to always run |
 | `depends_on` | list(string) | No | Tasks that must complete before this one starts |
 | `manual` | bool | No | If `true`, requires human approval before execution |
 | `artifacts` | list(string) | No | Paths produced by the task to preserve for dependent tasks |
@@ -153,7 +153,7 @@ trigger = "!repo.docs.changed"
 trigger = "(repo.auth.changed || repo.gateway.changed) && !repo.docs.changed"
 ```
 
-If a task has no trigger expression, it runs by default (always triggered).
+If a task has no trigger expression (or sets it to `"always"` / `"true"`), it runs by default (always triggered).
 
 ## Variables
 
