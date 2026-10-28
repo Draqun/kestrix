@@ -1,5 +1,13 @@
 # Kestrix — CI/CD Control Plane
 
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://golang.org)
+[![Terraform Provider](https://img.shields.io/badge/Terraform%20Provider-v0.1.0-844FBA?logo=terraform&logoColor=white)](https://registry.terraform.io/providers/Draqun/kestrix/latest)
+[![Container: Docker](https://img.shields.io/badge/Container-Docker-049cec?logo=docker&logoColor=white)](https://www.docker.com)
+[![Documentation](https://img.shields.io/badge/Docs-GitLab%20Pages-FC6D26?logo=gitlab&logoColor=white)](https://kestrix.gitlab.io/kestrix/)
+[![Sponsor: GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/draqun)
+[![Donate: PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/damiandraqungiebas)
+
 > Repo-agnostic CI/CD orchestrator with HCL-based DAG pipeline definitions.
 > Supports OR/AND/NOT trigger logic for cross-repo conditional builds.
 
@@ -503,6 +511,13 @@ complete onboarding, cache, security, and upgrade procedure.
 Every `/api` route requires a signed-in account. See
 [Authentication](docs/authentication.md) for login, roles, project grants,
 signing-key provisioning, and account recovery.
+
+## Funding & Support
+
+If you find Kestrix useful and would like to support its continued development:
+
+- 💖 **GitHub Sponsors:** [sponsor @Draqun on GitHub](https://github.com/sponsors/draqun)
+- ☕ **PayPal Donation:** [paypal.me/damiandraqungiebas](https://paypal.me/damiandraqungiebas)
 
 ## License
 
