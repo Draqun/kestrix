@@ -1,0 +1,3 @@
+kind: Fixed
+body: Avoid building the CLI binary in short test mode and extend test timeout to 20m in CI.
+time: 2026-10-29T11:32:00.226090736+01:00

@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
-  Grid, Card, CardContent, Typography, Box, LinearProgress,
+  Button, Skeleton, Card, CardContent, Typography, Box,
   Alert, IconButton, Tooltip, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Chip,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
-  Folder as FolderIcon,
   PlayArrow as RunIcon,
   CheckCircle as PassedIcon,
   Cancel as FailedIcon,
@@ -17,25 +16,16 @@ import {
 } from '@mui/icons-material';
 import { getDashboard } from '../api/client';
 
-function StatCard({ title, value, icon, color = 'primary', loading = false }) {
+function StatCard({ title, value, color = 'text.primary', loading = false }) {
   return (
-    <Card>
-      <CardContent>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-          {icon}
-          <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-            {title}
-          </Typography>
-        </Box>
-        {loading ? (
-          <LinearProgress sx={{ mt: 1 }} />
-        ) : (
-          <Typography variant="h4" color={color}>
-            {value}
-          </Typography>
-        )}
-      </CardContent>
-    </Card>
+    <Box sx={{ p: 2, minWidth: 0 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{title}</Typography>
+      {loading ? <Skeleton variant="text" width={48} height={34} animation={false} /> : (
+        <Typography sx={{ fontSize: 28, lineHeight: 1.2, fontWeight: 400, fontVariantNumeric: 'tabular-nums', color }}>
+          {value}
+        </Typography>
+      )}
+    </Box>
   );
 }
 
@@ -103,11 +93,12 @@ export default function Dashboard() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" sx={{ flexGrow: 1 }}>
+        <Typography component="h1" variant="h4" sx={{ flexGrow: 1 }}>
           Dashboard
         </Typography>
+        <Button component={RouterLink} to="/pipelines" variant="contained" sx={{ mr: 1 }}>View pipelines</Button>
         <Tooltip title="Refresh">
-          <IconButton onClick={fetchDashboard}>
+          <IconButton aria-label="Refresh dashboard" onClick={fetchDashboard}>
             <RefreshIcon />
           </IconButton>
         </Tooltip>
@@ -119,94 +110,33 @@ export default function Dashboard() {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Projects"
-            value={data?.project_count ?? '—'}
-            icon={<FolderIcon color="primary" />}
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Total Runs"
-            value={totalRuns}
-            icon={<RunIcon color="primary" />}
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Passed"
-            value={stats.passed ?? 0}
-            icon={<PassedIcon color="success" />}
-            color="success.main"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Failed"
-            value={stats.failed ?? 0}
-            icon={<FailedIcon color="error" />}
-            color="error.main"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Running"
-            value={stats.running ?? 0}
-            icon={<RunIcon color="warning" />}
-            color="warning.main"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Queued"
-            value={stats.queued ?? 0}
-            icon={<PendingIcon color="info" />}
-            color="info.main"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Canceled"
-            value={stats.canceled ?? 0}
-            icon={<CanceledIcon color="disabled" />}
-            color="text.secondary"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Pending"
-            value={stats.pending ?? 0}
-            icon={<PendingIcon color="disabled" />}
-            color="text.secondary"
-            loading={loading}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3} md={3}>
-          <StatCard
-            title="Skipped"
-            value={stats.skipped ?? 0}
-            icon={<SkippedIcon color="disabled" />}
-            color="text.secondary"
-            loading={loading}
-          />
-        </Grid>
-      </Grid>
+      {/* Four equal columns; 2 on phones. Secondary states share a compact line below. */}
+      <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' } }}>
+          <StatCard title="Projects" value={data?.project_count ?? '—'} loading={loading && !data} />
+          <StatCard title="Total Runs" value={totalRuns} loading={loading && !data} />
+          <StatCard title="Passed" value={stats.passed ?? 0} color={stats.passed ? 'success.main' : 'text.primary'} loading={loading && !data} />
+          <StatCard title="Failed" value={stats.failed ?? 0} color={stats.failed ? 'error.main' : 'text.primary'} loading={loading && !data} />
+        </Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2.5, px: 2, py: 1.5, bgcolor: 'action.hover' }}>
+          {['running', 'queued', 'pending', 'canceled', 'skipped'].map(status => (
+            <Box key={status} sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ textTransform: 'capitalize' }}>{status[0].toUpperCase() + status.slice(1)}</Typography>
+              {loading ? <Skeleton width={16} animation={false} /> : <Typography variant="body2" sx={{ fontWeight: 600 }}>{stats[status] ?? 0}</Typography>}
+            </Box>
+          ))}
+        </Box>
+      </Box>
 
       <Card sx={{ mt: 3 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Recent Runs
-          </Typography>
-          {!data?.pg_available ? (
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Typography component="h2" variant="h6">Recent Runs</Typography>
+            <Button component={RouterLink} to="/pipelines" size="small">View all</Button>
+          </Box>
+          {loading && !data ? (
+            <Skeleton variant="rectangular" height={96} animation={false} />
+          ) : !data?.pg_available ? (
             <Alert severity="info">
               Run history requires PostgreSQL. Start with <code>make docker-up</code> and set <code>DATABASE_URL</code>.
             </Alert>
@@ -216,7 +146,17 @@ export default function Dashboard() {
             </Typography>
           ) : (
             <TableContainer>
-              <Table size="small">
+              <Table size="small" sx={{
+                '@media (max-width: 599px)': {
+                  display: 'block',
+                  '& thead': { display: 'none' },
+                  '& tbody': { display: 'block' },
+                  '& tr': { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', py: 1.5, borderBottom: '1px solid', borderColor: 'divider' },
+                  '& td': { display: 'block', border: 0, px: 0, py: 0.25 },
+                  '& td:first-of-type': { fontWeight: 500, overflowWrap: 'anywhere' },
+                  '& td:nth-of-type(n+3)': { gridColumn: '1 / -1', color: 'text.secondary', fontSize: 12 },
+                },
+              }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Project</TableCell>
@@ -226,19 +166,25 @@ export default function Dashboard() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {recentRuns.map((run) => (
+                  {recentRuns.slice(0, 5).map((run) => (
                     <TableRow
                       key={run.id}
                       hover
+                      tabIndex={0}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') navigate(`/pipelines/runs/${encodeURIComponent(run.project_name)}/${run.id}`);
+                      }}
                       onClick={() => navigate(`/pipelines/runs/${encodeURIComponent(run.project_name)}/${run.id}`)}
                       sx={{ cursor: 'pointer' }}
                     >
                       <TableCell>{run.project_name}</TableCell>
                       <TableCell>{statusChip(run.status)}</TableCell>
                       <TableCell>
+                        <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Started: </Box>
                         {run.started_at ? new Date(run.started_at).toLocaleString() : '—'}
                       </TableCell>
                       <TableCell>
+                        <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Finished: </Box>
                         {run.finished_at ? new Date(run.finished_at).toLocaleString() : '—'}
                       </TableCell>
                     </TableRow>
@@ -250,13 +196,14 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <Card sx={{ mt: 3 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 3fr) minmax(0, 2fr)' }, gap: 3, mt: 3 }}>
+      <Card>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
+          <Typography component="h2" variant="h6" gutterBottom>
             Quick Start
           </Typography>
           <Box component="pre" sx={{
-            p: 2, borderRadius: 1, fontFamily: 'monospace',
+            p: 2, borderRadius: 1, fontFamily: '"IBM Plex Mono", monospace',
             backgroundColor: 'background.default', fontSize: 14, overflow: 'auto',
           }}>
 {`# Start dev server (hot reload)
@@ -277,13 +224,13 @@ make docker-up`}
         </CardContent>
       </Card>
 
-      <Card sx={{ mt: 3 }}>
+      <Card>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
+          <Typography component="h2" variant="h6" gutterBottom>
             Architecture
           </Typography>
           <Box component="pre" sx={{
-            p: 2, borderRadius: 1, fontFamily: 'monospace',
+            p: 2, borderRadius: 1, fontFamily: '"IBM Plex Mono", monospace',
             backgroundColor: 'background.default', fontSize: 13, overflow: 'auto',
           }}>
 {`GitLab Push → Webhook (/webhook)
@@ -300,6 +247,7 @@ Dispatch (→ GitLab API)`}
           </Box>
         </CardContent>
       </Card>
+      </Box>
     </Box>
   );
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, test, vi } from 'vitest';
@@ -88,10 +88,13 @@ test('mobile navigation keeps Settings reachable at 375px', async () => {
   assert.equal(document.documentElement.scrollWidth <= 375, true);
 });
 
-test('tablet navigation recognizes a direct /settings route as active', () => {
+test('tablet navigation opens on demand and recognizes the active route', async () => {
   renderLayout(800, '/settings');
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Toggle navigation drawer' }));
 
   const settings = screen.getByText('Settings');
   assert.equal(screen.getByTestId('path').textContent, '/settings');
   assert.equal(settings.closest('li')?.getAttribute('aria-current'), 'page');
+  await userEvent.setup().click(settings);
+  await waitFor(() => assert.equal(screen.queryByText('Settings'), null));
 });

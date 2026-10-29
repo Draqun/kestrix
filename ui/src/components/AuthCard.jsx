@@ -1,3 +1,4 @@
+import Brand from './Brand';
 import { Box, Paper } from '@mui/material';
 
 /** AuthCard centers a fixed-width card on the viewport - the shared layout
@@ -8,7 +9,8 @@ export default function AuthCard({ children }) {
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       bgcolor: 'background.default', px: 2,
     }}>
-      <Paper elevation={3} sx={{ p: 4, width: '100%', maxWidth: 380 }}>
+      <Paper elevation={0} sx={{ p: { xs: 3, sm: 4 }, width: '100%', maxWidth: 420, border: '1px solid', borderColor: 'divider' }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 4 }}><Brand /></Box>
         {children}
       </Paper>
     </Box>
