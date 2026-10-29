@@ -45,6 +45,16 @@ off immediately after each one lands, not in a batch at the end. That way a sess
 (usage limit, crash) resumes by reading `tasks.md` instead of re-deriving what's done from the
 diff.
 
+## Changelog Fragments (Changie)
+
+This repository uses [Changie](https://changie.dev) (`.changie.yaml`, `.changes/`) for change fragments to prevent merge conflicts.
+- **Never edit `CHANGELOG.md` directly** in a feature branch or MR.
+- **Always provide a change fragment** in `.changes/unreleased/` before pushing or creating an MR:
+  - Run `make changelog-new KIND=Added BODY="<description>"` (allowed kinds: `Added`, `Changed`, `Fixed`, `Deprecated`, `Removed`, `Security`).
+  - Or manually write a file `.changes/unreleased/<name>.yaml` with `kind:` and `body:`.
+- **Run the changelog gate**: `make changelog-check` (or `make changelog-check TARGET_REF=origin/<target-branch>`) before pushing.
+- CI blocks MRs missing fragments unless `[skip changelog]` is present in the commit message.
+
 ## Development Scripts
 
 `scripts/preflight.sh`, `scripts/test-all.sh`, and `scripts/wait-green.sh` wrap the common

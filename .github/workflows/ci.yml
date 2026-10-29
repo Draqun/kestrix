@@ -7,6 +7,26 @@ on:
     branches: [ main ]
 
 jobs:
+  changelog-check:
+    name: Check changelog fragment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Verify changelog fragment
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          python3 scripts/verify_changelog.py --target-ref origin/${{ github.base_ref }}
+
   test:
     runs-on: ubuntu-latest
     steps:

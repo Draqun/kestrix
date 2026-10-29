@@ -10,6 +10,7 @@ VERSION   ?= $(shell git describe --tags --always --dirty)
 # release in go.mod: newer staticcheck releases raise their minimum Go version
 # and `@latest` then fails to install against the pinned toolchain.
 STATICCHECK_VERSION ?= v0.7.0
+CHANGIE_VERSION     ?= v1.26.0
 
 # Portable Go toolchain locations.
 # Override with env vars if your system needs different paths; otherwise
@@ -27,7 +28,7 @@ include .env
 export $(shell sed 's/=.*//' .env)
 endif
 
-.PHONY: help init build build-release release release-push release-dry-run release-notes test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs pages serve-pages
+.PHONY: help init build build-release release release-push release-dry-run release-notes test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs pages serve-pages changelog-new changelog-check changelog-batch version-bump-check
 
 ## help: Show this help message
 help:
@@ -50,20 +51,48 @@ $(BINARY): $(shell find . -name '*.go' -type f 2>/dev/null) go.mod
 build-release:
 	$(GOENV) $(GO) build -ldflags="$$(sh scripts/ldflags.sh $(VERSION))" -o $(BINARY) ./cmd/kestrix
 
-## release: Automate version validation, changelog cut, commit and git tag
+## release: Automate version validation, changelog compilation, commit and git tag (default: VERSION=auto)
 release:
-	@test -n "$(VERSION)" || (echo "VERSION is not set. Usage: make release VERSION=0.3.1 or make release VERSION=patch" && exit 1)
-	python3 scripts/release.py $(VERSION)
+	python3 scripts/release.py $(if $(filter command line,$(origin VERSION)),$(VERSION),auto)
 
-## release-push: Automate release and push commits and tags to remote (triggers CI release)
+## release-push: Automate release, compile changelog, and push commit/tag to remote (triggers CI release)
 release-push:
-	@test -n "$(VERSION)" || (echo "VERSION is not set. Usage: make release-push VERSION=0.3.1 or make release-push VERSION=patch" && exit 1)
-	python3 scripts/release.py $(VERSION) --push
+	python3 scripts/release.py $(if $(filter command line,$(origin VERSION)),$(VERSION),auto) --push
 
-## release-dry-run: Dry-run release process without making changes
+## release-dry-run: Dry-run release process without making changes (default: VERSION=auto)
 release-dry-run:
-	@test -n "$(VERSION)" || (echo "VERSION is not set. Usage: make release-dry-run VERSION=0.3.1" && exit 1)
-	python3 scripts/release.py $(VERSION) --dry-run
+	python3 scripts/release.py $(if $(filter command line,$(origin VERSION)),$(VERSION),auto) --dry-run
+
+## changelog-new: Create a new Changie change fragment (e.g. make changelog-new KIND=Added BODY="...")
+changelog-new:
+	@CHANGIE_BIN="$$(command -v changie 2>/dev/null || (test -x $(GOBIN)/changie && echo $(GOBIN)/changie) || (test -x $(HOME)/go/bin/changie && echo $(HOME)/go/bin/changie))"; \
+	if [ -z "$$CHANGIE_BIN" ]; then \
+		echo "Installing changie..."; \
+		$(GOENV) $(GO) install github.com/miniscruff/changie@$(CHANGIE_VERSION); \
+		CHANGIE_BIN="$(GOBIN)/changie"; \
+	fi; \
+	if [ -n "$(KIND)" ] && [ -n "$(BODY)" ]; then \
+		$$CHANGIE_BIN new --kind "$(KIND)" --body "$(BODY)"; \
+	else \
+		$$CHANGIE_BIN new; \
+	fi
+
+## changelog-check: Verify MR/PR provides a Changie fragment in .changes/unreleased/
+changelog-check:
+	python3 scripts/verify_changelog.py --target-ref $(or $(TARGET_REF),origin/main)
+
+## changelog-batch: Batch unreleased fragments into a release (e.g. make changelog-batch VERSION=v0.3.2 or auto)
+changelog-batch:
+	@CHANGIE_BIN="$$(command -v changie 2>/dev/null || (test -x $(GOBIN)/changie && echo $(GOBIN)/changie) || (test -x $(HOME)/go/bin/changie && echo $(HOME)/go/bin/changie))"; \
+	if [ -z "$$CHANGIE_BIN" ]; then \
+		echo "Installing changie..."; \
+		$(GOENV) $(GO) install github.com/miniscruff/changie@$(CHANGIE_VERSION); \
+		CHANGIE_BIN="$(GOBIN)/changie"; \
+	fi; \
+	$$CHANGIE_BIN batch $(or $(VERSION),auto) && $$CHANGIE_BIN merge
+
+## version-bump-check: Backward-compatible alias for changelog-check
+version-bump-check: changelog-check
 
 ## release-notes: Generate or extract release notes for VERSION from CHANGELOG.md
 release-notes:
@@ -216,6 +245,7 @@ dev-all:
 install-tools:
 	$(GOENV) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	$(GOENV) $(GO) install github.com/air-verse/air@v1.62.0
+	$(GOENV) $(GO) install github.com/miniscruff/changie@$(CHANGIE_VERSION)
 
 ## add-dep: Add a Go module dependency (use as `make add-dep DEP=github.com/foo/bar@latest`)
 add-dep:
