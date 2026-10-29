@@ -277,8 +277,8 @@ func TestKeysRotateMaster_SuccessAndOutput(t *testing.T) {
 }
 
 func TestCLI_KeysRotateMaster_Subprocess(t *testing.T) {
-	bin := buildKestrix(t)
 	dbURL := testUserDBURL(t)
+	bin := buildKestrix(t)
 	tmpDir := t.TempDir()
 	oldKey := writeTestKey(t, tmpDir, "old-sub.key", bytes.Repeat([]byte{0x33}, 32), 0o600)
 	newKey := writeTestKey(t, tmpDir, "new-sub.key", bytes.Repeat([]byte{0x44}, 32), 0o600)

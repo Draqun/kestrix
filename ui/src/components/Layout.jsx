@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import useKeyboardNav from '../hooks/useKeyboardNav';
 import {
   AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemIcon,
-  ListItemText, Box, IconButton, Chip, Tooltip, useMediaQuery,
+  ListItemText, ListItemButton, Box, IconButton, Chip, Tooltip, useMediaQuery,
   BottomNavigation, BottomNavigationAction, Paper,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -16,14 +16,14 @@ import {
   Webhook as WebhookIcon,
   Settings as SettingsIcon,
   Menu as MenuIcon,
-  MusicNote as MusicNoteIcon,
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
   Logout as LogoutIcon,
 } from '@mui/icons-material';
+import Brand from './Brand';
 import { getVersion } from '../api/client';
 
-const DRAWER_WIDTH = 260;
+const DRAWER_WIDTH = 228;
 const MINI_DRAWER_WIDTH = 72;
 
 const NAV_ITEMS = [
@@ -40,7 +40,6 @@ function isActive(location, path) {
 }
 
 export default function Layout({ children }) {
-  const [drawerOpen, setDrawerOpen] = useState(true);
   const navigate = useNavigate();
   const location = useLocation();
   const [version, setVersion] = useState(null);
@@ -50,6 +49,7 @@ export default function Layout({ children }) {
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md'));
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
+  const [drawerOpen, setDrawerOpen] = useState(isDesktop);
 
   useEffect(() => {
     getVersion().then(v => {
@@ -63,25 +63,26 @@ export default function Layout({ children }) {
   useKeyboardNav(navigate);
 
   const navList = (
-    <List>
+    <List sx={{ px: 1.5, pt: 3 }}>
       {NAV_ITEMS.map((item) => (
         <Tooltip key={item.path} title={`${item.label} (${item.shortcut})`} placement="right">
           <ListItem
-            onClick={() => navigate(item.path)}
+            disablePadding
             aria-current={isActive(location, item.path) ? 'page' : undefined}
-            sx={{
-              cursor: 'pointer',
-              backgroundColor: isActive(location, item.path)
-                ? 'action.selected' : 'transparent',
-              '&:hover': { backgroundColor: 'action.hover' },
-              justifyContent: (isTablet && !drawerOpen) ? 'center' : undefined,
-              px: (isTablet && !drawerOpen) ? 0 : 2,
-            }}
           >
-            <ListItemIcon sx={{ minWidth: isTablet && !drawerOpen ? 0 : 56, justifyContent: 'center' }}>
+            <ListItemButton
+              onClick={() => { navigate(item.path); if (isTablet) setDrawerOpen(false); }}
+              sx={{
+                borderRadius: 1, mb: 0.5, minHeight: 44, px: 1.5,
+                bgcolor: isActive(location, item.path) ? 'action.selected' : 'transparent',
+                '& .MuiListItemText-primary': { fontSize: 14, fontWeight: isActive(location, item.path) ? 600 : 400 },
+              }}
+            >
+            <ListItemIcon sx={{ minWidth: isTablet && !drawerOpen ? 0 : 32, justifyContent: 'center', '& svg': { fontSize: 19 } }}>
               {item.icon}
             </ListItemIcon>
             {(!isTablet || drawerOpen) && <ListItemText primary={item.label} />}
+            </ListItemButton>
           </ListItem>
         </Tooltip>
       ))}
@@ -93,9 +94,7 @@ export default function Layout({ children }) {
       {/* App Bar */}
       <AppBar position="fixed" sx={{
         zIndex: (theme) => theme.zIndex.drawer + 1,
-        background: (theme) => theme.palette.mode === 'dark'
-          ? 'linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%)'
-          : undefined,
+        bgcolor: 'background.default', color: 'text.primary', boxShadow: 'none',
       }}>
         <Toolbar>
           {!isMobile && (
@@ -109,9 +108,9 @@ export default function Layout({ children }) {
               <MenuIcon />
             </IconButton>
           )}
-          <MusicNoteIcon sx={{ mr: 1 }} />
-          <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
-            Kestrix
+          <Box sx={{ flexGrow: 1 }}><Brand /></Box>
+          <Typography variant="body2" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' }, mr: 3 }}>
+            CI/CD control plane
           </Typography>
           <IconButton
             color="inherit"
@@ -121,16 +120,16 @@ export default function Layout({ children }) {
           >
             {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
           </IconButton>
-          <Chip
-            label={version ? `v${version}` : ''}
+          {version && <Chip
+            label={`v${version}`}
             size="small"
             color="secondary"
             variant="outlined"
-            sx={{ mr: 1 }}
-          />
+            sx={{ mr: 1, display: { xs: 'none', sm: 'flex' } }}
+          />}
           {name && (
             <Tooltip title={`Signed in as ${name} (${role})`}>
-              <Chip label={name} size="small" variant="outlined" color="inherit" sx={{ mr: 1 }} />
+              <Chip label={name} size="small" variant="outlined" color="inherit" sx={{ mr: 1, maxWidth: { xs: 84, sm: 160 } }} />
             </Tooltip>
           )}
           <Tooltip title="Sign out">
@@ -155,6 +154,7 @@ export default function Layout({ children }) {
               width: isTablet && !drawerOpen ? MINI_DRAWER_WIDTH : DRAWER_WIDTH,
               boxSizing: 'border-box',
               overflowX: 'hidden',
+              bgcolor: 'background.default', border: 0,
               transition: theme.transitions.create('width', {
                 easing: theme.transitions.easing.sharp,
                 duration: theme.transitions.duration.enteringScreen,
@@ -178,33 +178,37 @@ export default function Layout({ children }) {
         component="main"
         sx={{
           flexGrow: 1,
-          p: 3,
+          minWidth: 0,
+          p: { xs: 2, sm: 3 },
           pb: isMobile ? 10 : 3,
-          width: '100%',
-          overflow: 'auto',
+          mt: { xs: '56px', sm: '64px' },
+          mr: { xs: 0, sm: 1 }, mb: { xs: 0, sm: 1 },
+          bgcolor: 'background.paper',
+          border: { xs: 0, sm: `1px solid ${theme.palette.divider}` },
+          borderRadius: { xs: 0, sm: 2 },
         }}
       >
-        <Toolbar />
         {children}
       </Box>
 
       {/* Mobile Bottom Navigation */}
       {isMobile && (
         <Paper
-          sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: theme.zIndex.appBar }}
-          elevation={3}
+          sx={{ borderTop: '1px solid', borderColor: 'divider', position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: theme.zIndex.appBar }}
+          elevation={0}
         >
           <BottomNavigation
             value={NAV_ITEMS.findIndex(item => isActive(location, item.path))}
             onChange={(_, index) => navigate(NAV_ITEMS[index].path)}
             showLabels
+            sx={{ px: 2, height: 64 }}
           >
             {NAV_ITEMS.map((item) => (
               <BottomNavigationAction
                 key={item.path}
                 label={item.mobileLabel || item.label}
                 icon={item.icon}
-                sx={{ minWidth: 0, px: 0.5 }}
+                sx={{ minWidth: 0, px: 0.5, '& .MuiBottomNavigationAction-label': { fontSize: 11, '&.Mui-selected': { fontSize: 11 } } }}
               />
             ))}
           </BottomNavigation>
