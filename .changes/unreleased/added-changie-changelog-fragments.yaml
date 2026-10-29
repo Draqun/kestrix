@@ -1,0 +1,3 @@
+kind: Added
+body: "Changie changelog fragment management (`.changie.yaml`, `.changes/`), MR verification gate (`scripts/verify_changelog.py`, `make changelog-check`), and developer workflow targets (`make changelog-new`, `make changelog-batch`)."
+time: 2026-10-29T10:10:00Z

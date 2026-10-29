@@ -77,6 +77,10 @@ go test -run TestWebhook ./internal/web/ -count=1
 ## Conventions
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
 - One logical change per commit; push when user workflow expects it
+- **Every MR/PR must provide a changelog fragment via Changie (`.changes/unreleased/`) before pushing.** Do NOT edit `CHANGELOG.md` directly in feature branches or MRs — Changie aggregates unreleased fragments upon cutting releases to eliminate merge conflicts.
+  - Create a fragment with: `make changelog-new KIND=<Added|Changed|Fixed|Deprecated|Removed|Security> BODY="<description>"` (or write a YAML file in `.changes/unreleased/`).
+  - Allowed kinds: `Added`, `Changed`, `Fixed`, `Deprecated`, `Removed`, `Security`.
+- **Run the changelog gate before creating or updating an MR:** fetch the target branch, then run `make changelog-check TARGET_REF=origin/<target-branch>`. Use `jj git fetch` in jj workspaces. CI blocks MRs missing unreleased fragments unless `[skip changelog]` is in the commit message.
 - No secrets in repo; env vars (`KESTRIX_*`, `DATABASE_URL`)
 - Do not invent Makefile targets — extend Makefile if needed
 - FE hooks: never after early returns (Rules of Hooks)

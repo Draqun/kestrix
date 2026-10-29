@@ -97,14 +97,42 @@ def calculate_bump(current_version: str, bump_type: str) -> str:
     return f"{major}.{minor}.{patch}"
 
 
+def find_changie() -> str | None:
+    """Find changie binary in PATH, GOPATH or .gopath."""
+    for candidate in [
+        shutil.which("changie"),
+        os.path.abspath(".gopath/bin/changie"),
+        os.path.expanduser("~/go/bin/changie"),
+    ]:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def update_changelog(new_version: str, changelog_path: str = "CHANGELOG.md") -> bool:
     """
     Ensure CHANGELOG.md has an entry for new_version.
-    If new_version is not yet present, promotes [Unreleased] to [vnew_version] - YYYY-MM-DD.
-    Returns True if file was updated, False if version section was already present.
+    Uses changie batch and changie merge if .changie.yaml is present.
+    Otherwise promotes [Unreleased] to [vnew_version] - YYYY-MM-DD.
+    Returns True if changelog was updated, False if version section was already present.
     """
     clean_version = new_version.lstrip("v").strip()
     tag = f"v{clean_version}"
+
+    # Use Changie if configured
+    if os.path.isfile(".changie.yaml"):
+        changie_bin = find_changie()
+        if changie_bin:
+            version_file = os.path.join(".changes", f"{tag}.md")
+            if os.path.isfile(version_file):
+                print(f"Changie version file {version_file} already exists.")
+                return False
+            print(f"Running Changie batch for {tag}...")
+            run_command([changie_bin, "batch", tag, "--allow-no-changes"])
+            print("Running Changie merge to update CHANGELOG.md...")
+            run_command([changie_bin, "merge"])
+            return True
+
     with open(changelog_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -148,7 +176,7 @@ def commit_and_tag(version: str, push: bool = False, changelog_updated: bool = T
     else:
         if changelog_updated:
             print("Committing changelog updates...")
-            run_command(["git", "add", "CHANGELOG.md"])
+            run_command(["git", "add", "CHANGELOG.md", ".changes"])
             run_command(["git", "commit", "-m", f"chore: release {tag_name}"])
         print(f"Creating git tag {tag_name}...")
         run_command(["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"])
@@ -189,8 +217,25 @@ def main():
     print(f"Current version: {current_version}")
 
     raw_version = args.version.strip()
-    if raw_version in ["patch", "minor", "major"]:
-        target_version = calculate_bump(current_version, raw_version)
+    changie_bin = find_changie()
+    if raw_version == "auto":
+        if changie_bin:
+            res = subprocess.run([changie_bin, "next", "auto"], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                target_version = res.stdout.strip().lstrip("v")
+            else:
+                target_version = calculate_bump(current_version, "patch")
+        else:
+            target_version = calculate_bump(current_version, "patch")
+    elif raw_version in ["patch", "minor", "major"]:
+        if changie_bin:
+            res = subprocess.run([changie_bin, "next", raw_version], capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                target_version = res.stdout.strip().lstrip("v")
+            else:
+                target_version = calculate_bump(current_version, raw_version)
+        else:
+            target_version = calculate_bump(current_version, raw_version)
     else:
         target_version = raw_version.lstrip("v")
 
