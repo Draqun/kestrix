@@ -401,7 +401,7 @@ create-release-tag:
         git config --global user.email "gitlab-ci@gitlab.com"
         git config --global user.name "GitLab CI"
         git add CHANGELOG.md .changes
-        git commit -m "chore: release $TAG [skip ci]"
+        git commit -m "chore: release $TAG"
 
         echo "Pushing changelog commit to $CI_COMMIT_BRANCH..."
         git push origin "HEAD:refs/heads/$CI_COMMIT_BRANCH" -o ci.skip
