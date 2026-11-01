@@ -1,0 +1,3 @@
+kind: Added
+body: Add structured `skip_reason` field to task results API with trigger evaluation details, failed upstream dependencies, and run cancellation tracking across local runner and remote dispatch.
+time: 2026-10-30T12:43:03.83524073+01:00

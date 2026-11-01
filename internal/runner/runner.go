@@ -23,10 +23,10 @@ import (
 )
 
 var (
-	commandContext = exec.CommandContext
-	absPath        = filepath.Abs
-	resolveNodes   = func(project model.Project, changed map[string]bool) ([]dag.Node, error) {
-		return dag.New(project).Resolve(changed)
+	commandContext  = exec.CommandContext
+	absPath         = filepath.Abs
+	resolvePipeline = func(project model.Project, changed map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
+		return dag.New(project).ResolveWithSkipped(changed)
 	}
 	// killGroup signals every process in pgid's process group. It is a
 	// package variable so unit tests can record calls without sending real
@@ -309,44 +309,43 @@ func checkArtifacts(taskDir string, artifacts []string) error {
 // delegating execution to the provided Executor.
 func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts Options) ([]TaskResult, error) {
 	var results []TaskResult
+	resByName := make(map[string]TaskResult, len(ordered))
+	record := func(tr TaskResult) {
+		results = append(results, tr)
+		resByName[tr.Name] = tr
+		if opts.OnTaskComplete != nil {
+			opts.OnTaskComplete(tr)
+		}
+	}
 	failedTasks := make(map[string]bool)
 	allowlistPrinted := false
 	for _, node := range ordered {
 		task := node.Task
 		if ctx.Err() != nil {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (run canceled)\n", task.Name)
-			canceled := TaskResult{Name: task.Name, Status: "canceled", Error: "canceled"}
-			results = append(results, canceled)
+			canceled := domain.NewRunCanceledSkipResult(task.Name)
 			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(canceled)
-			}
+			record(canceled)
 			continue
 		}
 		if task.Manual && !opts.IncludeManual {
 			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
 			waiting := TaskResult{Name: task.Name, Status: "manual"}
-			results = append(results, waiting)
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(waiting)
-			}
+			record(waiting)
 			continue
 		}
-		blocked := false
-		for _, dep := range task.DependsOn {
-			if failedTasks[dep] {
-				blocked = true
-				break
+		blocked, anyCanceled, failedDeps := domain.ScanBlockedDeps(task.DependsOn, func(dep string) (string, *domain.SkipReason, bool) {
+			if !failedTasks[dep] {
+				return "", nil, false
 			}
-		}
+			r := resByName[dep]
+			return r.Status, r.SkipReason, true
+		})
 		if blocked {
 			fmt.Fprintf(opts.Stdout, "[SKIP] %s (dependency failed)\n", task.Name)
-			skipped := TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
-			results = append(results, skipped)
+			skipped := domain.NewDependencySkipResult(task.Name, failedDeps, anyCanceled)
 			failedTasks[task.Name] = true
-			if opts.OnTaskComplete != nil {
-				opts.OnTaskComplete(skipped)
-			}
+			record(skipped)
 			continue
 		}
 
@@ -378,22 +377,20 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 			// design.md D5 and the "Cancel a running local task" scenario.
 			tr.Status = "canceled"
 			tr.Error = "canceled"
+			tr.SkipReason = domain.NewRunCanceledSkipReason()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (canceled)\n", task.Name)
-			results = append(results, tr)
 			failedTasks[task.Name] = true
+			record(tr)
 		} else if runErr != nil {
 			tr.Status = "failed"
 			tr.Error = runErr.Error()
 			fmt.Fprintf(opts.Stdout, "[DONE] %s (failed)\n", task.Name)
-			results = append(results, tr)
 			failedTasks[task.Name] = true
+			record(tr)
 		} else {
 			tr.Status = "passed"
 			fmt.Fprintf(opts.Stdout, "[DONE] %s\n", task.Name)
-			results = append(results, tr)
-		}
-		if opts.OnTaskComplete != nil {
-			opts.OnTaskComplete(tr)
+			record(tr)
 		}
 	}
 	return results, nil
@@ -426,7 +423,7 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 		return nil, fmt.Errorf("workdir %q is not a directory", workDir)
 	}
 
-	nodes, err := resolveNodes(project, changed)
+	nodes, skipped, err := resolvePipeline(project, changed)
 	if err != nil {
 		return nil, fmt.Errorf("resolve pipeline: %w", err)
 	}
@@ -440,7 +437,8 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 	}
 
 	executor := newDockerExecutor(workDir, repos, project.DefaultImage)
-	return taskLoop(ctx, ordered, executor, opts)
+	results, err := taskLoop(ctx, ordered, executor, opts)
+	return append(skipped, results...), err
 }
 
 // newDockerExecutor builds a DockerExecutor from the process-wide hardening
@@ -496,9 +494,9 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		return nil, fmt.Errorf("workdir %q is not a directory", workDir)
 	}
 
-	nodes, err := resolveNodes(project, changed)
+	nodes, skipped, err := resolvePipeline(project, changed)
 	// Validate() above already exercised trigger syntax and cycle
-	// detection; Resolve only fails when a task not in the changed-set
+	// detection; ResolveWithSkipped only fails when a task not in the changed-set
 	// depends on a node that is — but Validate rejects such degenerate
 	// graphs. Branch is unreachable given current DAG invariants.
 	if err != nil {
@@ -517,7 +515,8 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 		WorkDir: workDir,
 		Repos:   repos,
 	}
-	return taskLoop(ctx, ordered, executor, opts)
+	results, err := taskLoop(ctx, ordered, executor, opts)
+	return append(skipped, results...), err
 }
 
 // executorForMode returns the Executor RunOne should use for a manual task
@@ -593,6 +592,7 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		// taskLoop reclassification for DAG tasks.
 		tr.Status = "canceled"
 		tr.Error = "canceled"
+		tr.SkipReason = domain.NewRunCanceledSkipReason()
 		fmt.Fprintf(opts.Stdout, "[DONE] %s (canceled)\n", task.Name)
 	} else if runErr != nil {
 		tr.Status = "failed"

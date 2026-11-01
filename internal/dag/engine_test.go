@@ -247,6 +247,201 @@ func TestDefaultTriggerRunsAlways(t *testing.T) {
 	assertContains(t, names, "notify")
 }
 
+func TestEvaluateTriggerWithDetails(t *testing.T) {
+	e := newTestEngine()
+	expr := "(repo.service_a.changed || repo.service_b.changed) && !repo.docs.changed"
+
+	eval, err := e.EvaluateTriggerWithDetails(expr, changedSet("service_a"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !eval.Satisfied {
+		t.Fatalf("expected satisfied to be true, got false")
+	}
+	if eval.Expression != expr {
+		t.Errorf("expected expr %q, got %q", expr, eval.Expression)
+	}
+	if !eval.Terms["repo.service_a.changed"] {
+		t.Errorf("expected repo.service_a.changed to be true")
+	}
+	if eval.Terms["repo.service_b.changed"] {
+		t.Errorf("expected repo.service_b.changed to be false")
+	}
+	if eval.Terms["repo.docs.changed"] {
+		t.Errorf("expected repo.docs.changed to be false")
+	}
+
+	// Docs changed blocks it
+	evalDocs, err := e.EvaluateTriggerWithDetails(expr, changedSet("service_a", "docs"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if evalDocs.Satisfied {
+		t.Fatalf("expected satisfied to be false when docs changed")
+	}
+	if !evalDocs.Terms["repo.docs.changed"] {
+		t.Errorf("expected repo.docs.changed to be true")
+	}
+}
+
+func TestResolveWithSkipped(t *testing.T) {
+	e := newTestEngine()
+	triggered, skipped, err := e.ResolveWithSkipped(changedSet("service_a"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	trigNames := taskNames(triggered)
+	assertContains(t, trigNames, "build_a")
+	assertContains(t, trigNames, "integration_tests")
+	assertContains(t, trigNames, "deploy")
+
+	if len(skipped) != 1 {
+		t.Fatalf("expected 1 skipped task, got %d", len(skipped))
+	}
+	st := skipped[0]
+	if st.Name != "build_b" {
+		t.Errorf("expected skipped task 'build_b', got %q", st.Name)
+	}
+	if st.Status != "skipped" {
+		t.Errorf("expected status 'skipped', got %q", st.Status)
+	}
+	if st.SkipReason == nil {
+		t.Fatalf("expected non-nil SkipReason")
+	}
+	if st.SkipReason.Category != "trigger_unsatisfied" {
+		t.Errorf("expected category 'trigger_unsatisfied', got %q", st.SkipReason.Category)
+	}
+	if st.SkipReason.TriggerEvaluation == nil {
+		t.Fatalf("expected non-nil TriggerEvaluation")
+	}
+	if st.SkipReason.TriggerEvaluation.Terms["repo.service_b.changed"] != false {
+		t.Errorf("expected repo.service_b.changed term to be false")
+	}
+}
+
+func TestEvaluateTriggerWithDetails_EmptyTrueAlways(t *testing.T) {
+	e := newTestEngine()
+	changed := changedSet("service_b", "docs", "service_a")
+
+	for _, expr := range []string{"", "true", "always"} {
+		eval, err := e.EvaluateTriggerWithDetails(expr, changed)
+		if err != nil {
+			t.Fatalf("unexpected error for expr %q: %v", expr, err)
+		}
+		if !eval.Satisfied {
+			t.Errorf("expected satisfied to be true for expr %q", expr)
+		}
+		if len(eval.Terms) != 0 {
+			t.Errorf("expected empty terms for expr %q, got %v", expr, eval.Terms)
+		}
+		expectedRepos := []string{"docs", "service_a", "service_b"}
+		if len(eval.ChangedRepos) != len(expectedRepos) {
+			t.Fatalf("expected %d changed repos, got %d", len(expectedRepos), len(eval.ChangedRepos))
+		}
+		for i, r := range expectedRepos {
+			if eval.ChangedRepos[i] != r {
+				t.Errorf("expected repo %d to be %q, got %q", i, r, eval.ChangedRepos[i])
+			}
+		}
+	}
+}
+
+func TestEvaluateTriggerWithDetails_Errors(t *testing.T) {
+	e := newTestEngine()
+	changed := changedSet("service_a")
+
+	// Tokenize error
+	eval, err := e.EvaluateTriggerWithDetails("repo.service_a.changed && @bad", changed)
+	if err == nil {
+		t.Fatalf("expected error on tokenize failure, got nil")
+	}
+	if eval != nil {
+		t.Errorf("expected nil eval on error, got %v", eval)
+	}
+
+	// Unknown repo
+	eval, err = e.EvaluateTriggerWithDetails("repo.unknown_repo.changed", changed)
+	if err == nil {
+		t.Fatalf("expected error on unknown repo, got nil")
+	}
+	if eval != nil {
+		t.Errorf("expected nil eval on error, got %v", eval)
+	}
+
+	// Syntax error
+	eval, err = e.EvaluateTriggerWithDetails("repo.service_a.changed &&", changed)
+	if err == nil {
+		t.Fatalf("expected error on trailing operator, got nil")
+	}
+	if eval != nil {
+		t.Errorf("expected nil eval on error, got %v", eval)
+	}
+}
+
+func TestEvaluateTriggerWithDetails_CompoundAndNegation(t *testing.T) {
+	e := newTestEngine()
+	expr := "!repo.docs.changed && (repo.service_a.changed || repo.service_b.changed)"
+	eval, err := e.EvaluateTriggerWithDetails(expr, changedSet("service_b"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !eval.Satisfied {
+		t.Errorf("expected satisfied to be true")
+	}
+	if eval.Terms["repo.docs.changed"] {
+		t.Errorf("expected repo.docs.changed to be false")
+	}
+	if !eval.Terms["repo.service_b.changed"] {
+		t.Errorf("expected repo.service_b.changed to be true")
+	}
+	if eval.Terms["repo.service_a.changed"] {
+		t.Errorf("expected repo.service_a.changed to be false")
+	}
+}
+
+func TestResolveWithSkipped_MultipleSkippedAndCycle(t *testing.T) {
+	e := newTestEngine()
+	triggered, skipped, err := e.ResolveWithSkipped(changedSet())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(triggered) != 0 {
+		t.Errorf("expected 0 triggered tasks, got %d", len(triggered))
+	}
+	if len(skipped) != 4 {
+		t.Fatalf("expected 4 skipped tasks, got %d", len(skipped))
+	}
+	for _, st := range skipped {
+		if st.Status != "skipped" {
+			t.Errorf("task %s status = %q, want skipped", st.Name, st.Status)
+		}
+		if st.SkipReason == nil {
+			t.Fatalf("task %s has nil SkipReason", st.Name)
+		}
+		if st.SkipReason.Category != "trigger_unsatisfied" {
+			t.Errorf("task %s category = %q, want trigger_unsatisfied", st.Name, st.SkipReason.Category)
+		}
+		if st.SkipReason.Summary != "Trigger expression not satisfied" {
+			t.Errorf("task %s summary = %q, want Trigger expression not satisfied", st.Name, st.SkipReason.Summary)
+		}
+	}
+
+	// Cycle error
+	cyclic := model.Project{
+		Name:  "cyclic",
+		Repos: []model.Repo{{Name: "r1"}},
+		Tasks: []model.Task{
+			{Name: "t1", DependsOn: []string{"t2"}, Trigger: "repo.r1.changed"},
+			{Name: "t2", DependsOn: []string{"t1"}, Trigger: "repo.r1.changed"},
+		},
+	}
+	cycleEngine := New(cyclic)
+	_, _, err = cycleEngine.ResolveWithSkipped(changedSet("r1"))
+	if err == nil {
+		t.Fatalf("expected cycle error, got nil")
+	}
+}
+
 // --- helpers ---
 
 func taskNames(nodes []Node) map[string]bool {

@@ -124,6 +124,24 @@ definitions:
       url:
         type: string
     type: object
+  domain.SkipReason:
+    properties:
+      category:
+        enum:
+        - trigger_unsatisfied
+        - dependency_failed
+        - dependency_canceled
+        - run_canceled
+        type: string
+      failed_dependencies:
+        items:
+          type: string
+        type: array
+      summary:
+        type: string
+      trigger_evaluation:
+        $ref: '#/definitions/domain.TriggerEvaluation'
+    type: object
   domain.Task:
     properties:
       artifacts:
@@ -174,6 +192,9 @@ definitions:
         type: string
       output:
         type: string
+      skip_reason:
+        $ref: '#/definitions/domain.SkipReason'
+        description: SkipReason explains why a task was skipped.
       status:
         description: passed, failed, skipped, running, pending, manual
         type: string
@@ -182,6 +203,22 @@ definitions:
           WaitingReason is set on the latest result of an unmatched pending task
           (remote-unmatched-job-alert design D2). Omitted when empty.
         type: string
+    type: object
+  domain.TriggerEvaluation:
+    properties:
+      changed_repos:
+        items:
+          type: string
+        type: array
+      expression:
+        type: string
+      satisfied:
+        type: boolean
+      terms:
+        additionalProperties:
+          type: boolean
+        description: 'e.g. "repo.backend.changed": false'
+        type: object
     type: object
   domain.Variable:
     properties:

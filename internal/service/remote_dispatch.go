@@ -157,10 +157,17 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, 
 	for _, node := range nodes {
 		nodeSet[node.Task.Name] = true
 	}
+	lookupDep := func(dep string) (string, *domain.SkipReason, bool) {
+		if !nodeSet[dep] {
+			return "", nil, false
+		}
+		d, ok := latest[dep]
+		return d.Status, d.SkipReason, ok
+	}
 	for _, node := range nodes {
 		task := node.Task
 		cur, seeded := latest[task.Name]
-		if seeded && (!task.Manual || includeManual || cur.Status != "manual") {
+		if seeded && (!task.Manual || includeManual || cur.Status != domain.TaskStatusManual) {
 			// A task_result entry only ever appears here once this walker
 			// (or startRemote's own first pass) has already decided this
 			// task's fate: dispatched (recorded "pending" - awaiting its
@@ -173,34 +180,21 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, 
 		}
 		if task.Manual && !includeManual {
 			if !seeded {
-				gates = append(gates, domain.TaskResult{Name: task.Name, Status: "manual"})
-				cur = domain.TaskResult{Name: task.Name, Status: "manual"}
+				gates = append(gates, domain.TaskResult{Name: task.Name, Status: domain.TaskStatusManual})
+				cur = domain.TaskResult{Name: task.Name, Status: domain.TaskStatusManual}
 				latest[task.Name] = cur
 			}
 			// A manual gate is never dispatched by this walker (design D1).
 			// Check if any inside dependency failed, was canceled or was skipped (design D2).
-			blocked := false
-			for _, dep := range task.DependsOn {
-				if !nodeSet[dep] {
-					continue
-				}
-				d, ok := latest[dep]
-				if !ok {
-					continue
-				}
-				if d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped" {
-					blocked = true
-					break
-				}
-			}
+			blocked, anyCanceled, failedDeps := domain.ScanBlockedDeps(task.DependsOn, lookupDep)
 			if blocked {
-				newlySkipped = append(newlySkipped, domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"})
-				latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+				skipped := domain.NewDependencySkipResult(task.Name, failedDeps, anyCanceled)
+				newlySkipped = append(newlySkipped, skipped)
+				latest[task.Name] = skipped
 			}
 			// With a pending or passed dependency, it stays manual (already in latest).
 			continue
 		}
-		blocked := false
 		unresolved := false
 		for _, dep := range task.DependsOn {
 			if !nodeSet[dep] {
@@ -210,30 +204,29 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, 
 				continue
 			}
 			d, ok := latest[dep]
-			if !ok || d.Status == "pending" || d.Status == "running" || d.Status == "claimed" || d.Status == "manual" {
+			if !ok || domain.IsActiveTaskStatus(d.Status) || d.Status == domain.TaskStatusManual {
 				// The dependency is not decided yet: the task waits,
 				// whatever its other dependencies say - the decision
 				// belongs to the pass that resolves the last one.
 				unresolved = true
-				continue
-			}
-			if d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped" {
-				blocked = true
+				break
 			}
 		}
 		if unresolved {
 			continue
 		}
+		blocked, anyCanceled, failedDeps := domain.ScanBlockedDeps(task.DependsOn, lookupDep)
 		if blocked {
-			newlySkipped = append(newlySkipped, domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"})
+			skipped := domain.NewDependencySkipResult(task.Name, failedDeps, anyCanceled)
+			newlySkipped = append(newlySkipped, skipped)
 			// Mark it resolved for any sibling that depends on it in this
 			// same pass, so a diamond graph's blocked branch propagates in
 			// one call rather than needing an extra round trip.
-			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "skipped", Error: "dependency failed"}
+			latest[task.Name] = skipped
 			continue
 		}
 		eligible = append(eligible, task)
-		latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "pending"}
+		latest[task.Name] = domain.TaskResult{Name: task.Name, Status: domain.TaskStatusPending}
 	}
 	return eligible, newlySkipped, gates
 }
@@ -295,11 +288,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		// in-process path releases it once execution no longer needs it.
 		defer opts.WorkspaceCleanup()
 	}
-	changedSet := make(map[string]bool, len(changed))
-	for _, c := range changed {
-		changedSet[c] = true
-	}
-	nodes, err := dag.New(*proj).Resolve(changedSet)
+	nodes, skippedTasks, err := resolvePipelineWithSkipped(*proj, changed)
 	if err != nil {
 		return 0, fmt.Errorf("resolve pipeline: %w", err)
 	}
@@ -309,6 +298,26 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		return 0, fmt.Errorf("create run: %w", err)
 	}
 	slog.Info("run started", "run_id", runID, "project", projectName, "account", opts.Actor, "mode", "remote")
+
+	for _, st := range skippedTasks {
+		var appendErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if appendErr = s.runStore.AppendTaskResult(runID, st); appendErr == nil {
+				break
+			}
+			if attempt < 2 {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		if appendErr != nil {
+			recordErr := fmt.Errorf("record skipped task %s: %w", st.Name, appendErr)
+			redactedErr := redactValues(recordErr.Error(), opts.ResolvedSecretValues)
+			if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, skippedTasks); finishErr != nil {
+				slog.Warn("could not finish run after skipped task append failure", "run_id", runID, "error", finishErr)
+			}
+			return runID, recordErr
+		}
+	}
 
 	if len(opts.InitialSources) > 0 {
 		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
@@ -324,7 +333,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if len(nodes) == 0 {
 		// Nothing triggered: finish the run passed at once -
 		// remote-run-start-never-hangs design.md D2.
-		if err := s.runStore.FinishRun(runID, "passed", "", "", nil); err != nil {
+		if err := s.runStore.FinishRun(runID, domain.RunStatusPassed, "", "", skippedTasks); err != nil {
 			return runID, fmt.Errorf("finish run %d: %w", runID, err)
 		}
 		return runID, nil
@@ -334,7 +343,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if err != nil {
 		archiveErr := fmt.Errorf("build source archive: %w", err)
 		redactedErr := redactValues(archiveErr.Error(), opts.ResolvedSecretValues)
-		_ = s.runStore.FinishRun(runID, "failed", "", redactedErr, nil)
+		_ = s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil)
 		return runID, archiveErr
 	}
 	// Persist the archive and every triggered task's resolved
@@ -352,7 +361,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars, opts.ResolvedSecretValues); err != nil {
 		snapshotErr := fmt.Errorf("persist remote run snapshot: %w", err)
 		redactedErr := redactValues(snapshotErr.Error(), opts.ResolvedSecretValues)
-		_ = s.runStore.FinishRun(runID, "failed", "", redactedErr, nil)
+		_ = s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil)
 		return runID, snapshotErr
 	}
 
@@ -362,11 +371,11 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 
 	var dispatchErrs []error
 	for _, task := range eligible {
-		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"})
+		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: domain.TaskStatusPending})
 		payload := buildRemoteJobPayload(task, proj.Repos, proj.DefaultImage, opts.Variables, archive, opts.ResolvedSecretValues)
 		if _, err := s.remoteJobStore.CreateRemoteJob(runID, task.Name, payload); err != nil {
 			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err), opts.ResolvedSecretValues))
-			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: domain.TaskStatusFailed}
 		}
 	}
 	if len(dispatchErrs) > 0 {
@@ -494,10 +503,7 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 		// remote-run-waits-for-dependents design.md D4.
 		return true, nil
 	}
-	changedSet := make(map[string]bool, len(run.Changed))
-	for _, c := range run.Changed {
-		changedSet[c] = true
-	}
+	changedSet := toChangedSet(run.Changed)
 	nodes, err := dag.New(*run.PipelineDef).Resolve(changedSet)
 	if err != nil {
 		return false, fmt.Errorf("resolve pipeline: %w", err)
@@ -541,20 +547,20 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 	// remote-run-waits-for-dependents design.md D5.
 	passedTasks := make(map[string]bool)
 	for name, tr := range latest {
-		if tr.Status == "passed" {
+		if tr.Status == domain.TaskStatusPassed {
 			passedTasks[name] = true
 		}
 	}
 	var dispatchErrs []error
 	for _, task := range eligible {
-		if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: "pending"}); err != nil {
+		if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: task.Name, Status: domain.TaskStatusPending}); err != nil {
 			// The "pending" record is what tells the next walker pass that
 			// the task is decided; without it the task would be dispatched
 			// a second time - so the task is recorded failed instead of
 			// being dispatched -
 			// remote-run-waits-for-dependents design.md D5.
 			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("record pending task %q: %w", task.Name, err), secretValues))
-			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: domain.TaskStatusFailed}
 			continue
 		}
 		ancestors := orderedPassedAncestors(*run.PipelineDef, task, passedTasks)
@@ -583,7 +589,7 @@ func (s *RunService) resumeRemoteRun(runID int) (decided bool, err error) {
 			// instead of staying running with a task that has no job -
 			// remote-run-waits-for-dependents design.md D5.
 			dispatchErrs = append(dispatchErrs, s.recordDispatchFailure(runID, task.Name, fmt.Errorf("dispatch task %q: %w", task.Name, err), secretValues))
-			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: "failed"}
+			latest[task.Name] = domain.TaskResult{Name: task.Name, Status: domain.TaskStatusFailed}
 			continue
 		}
 	}
@@ -614,7 +620,7 @@ func (s *RunService) recordDispatchFailure(runID int, taskName string, cause err
 	if len(secretValues) > 0 {
 		errMsg = redactValues(errMsg, secretValues)
 	}
-	if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: taskName, Status: "failed", Error: errMsg}); err != nil {
+	if err := s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: taskName, Status: domain.TaskStatusFailed, Error: errMsg}); err != nil {
 		return errors.Join(cause, fmt.Errorf("record failed task %q: %w", taskName, err))
 	}
 	return cause
@@ -673,7 +679,7 @@ func (s *RunService) dispatchSingleTask(runID int, proj *model.Project, taskName
 	if _, err := s.remoteJobStore.CreateRemoteJob(runID, taskName, payload); err != nil {
 		return domain.TaskResult{}, false, fmt.Errorf("dispatch task %q: %w", taskName, err)
 	}
-	tr := domain.TaskResult{Name: taskName, Status: "pending"}
+	tr := domain.TaskResult{Name: taskName, Status: domain.TaskStatusPending}
 	if s.runStore != nil {
 		_, _ = s.runStore.ApplyTaskResult(runID, tr, "")
 	}

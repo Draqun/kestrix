@@ -132,6 +132,70 @@ func TestRunService_Start_Happy(t *testing.T) {
 	}
 }
 
+func TestRunService_Start_SeedsAndFinishesWithSkippedTasks(t *testing.T) {
+	finishCh := make(chan struct{})
+	mockRun := &mocks.MockRunStore{CreateRunID: 43, FinishRunCh: finishCh}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{
+			{Name: "build_app", Status: "passed"},
+		},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	proj := &model.Project{
+		Name: "multi-repo-project",
+		Repos: []model.Repo{
+			{Name: "app", Path: "app"},
+			{Name: "docs", Path: "docs"},
+		},
+		Tasks: []model.Task{
+			{Name: "build_app", Trigger: "repo.app.changed"},
+			{Name: "build_docs", Trigger: "repo.docs.changed"},
+		},
+	}
+
+	runID, err := svc.Start(context.Background(), "multi-repo-project", proj, []string{"app"}, domain.RunnerOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if runID != 43 {
+		t.Fatalf("expected run ID 43, got %d", runID)
+	}
+
+	select {
+	case <-finishCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for FinishRun")
+	}
+
+	// Verify AppendTaskCalls has skipped task for build_docs
+	var docsSkipped *domain.TaskResult
+	for _, call := range mockRun.AppendTaskCalls {
+		if call.Name == "build_docs" && call.Status == "skipped" {
+			docsSkipped = &call
+			break
+		}
+	}
+	if docsSkipped == nil {
+		t.Fatalf("expected build_docs to be appended as skipped, got %+v", mockRun.AppendTaskCalls)
+	}
+	if docsSkipped.SkipReason == nil || docsSkipped.SkipReason.Category != domain.SkipCategoryTriggerUnsatisfied {
+		t.Errorf("expected SkipReason category 'trigger_unsatisfied', got %+v", docsSkipped.SkipReason)
+	}
+	if docsSkipped.SkipReason.TriggerEvaluation == nil || docsSkipped.SkipReason.TriggerEvaluation.Terms["repo.docs.changed"] {
+		t.Errorf("expected TriggerEvaluation to have repo.docs.changed = false")
+	}
+
+	// Verify FinishRun includes both tasks
+	if len(mockRun.FinishRunCalls) != 1 {
+		t.Fatalf("expected 1 FinishRun call, got %d", len(mockRun.FinishRunCalls))
+	}
+	results := mockRun.FinishRunCalls[0].TaskResults
+	if len(results) != 2 {
+		t.Fatalf("expected 2 task results in FinishRun, got %d: %+v", len(results), results)
+	}
+}
+
 func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
 	buf := captureLog(t)
 	finishCh := make(chan struct{})
@@ -645,6 +709,41 @@ func TestRunService_ApproveManualTask_RefusalLogsNothingAndSkipsApply(t *testing
 	}
 }
 
+func TestRunService_ApproveManualTask_TriggerSkippedRefused(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          7,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "manual", Manual: true, Trigger: "repo.docs.changed"},
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				domain.NewTriggerUnsatisfiedSkipResult("manual", &domain.TriggerEvaluation{
+					Expression:   "repo.docs.changed",
+					Satisfied:    false,
+					ChangedRepos: []string{"app"},
+				}),
+			},
+		},
+	}
+	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
+
+	_, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
+		Name:  "proj",
+		Tasks: []model.Task{{Name: "manual", Manual: true, Trigger: "repo.docs.changed"}},
+	}, "manual", domain.RunnerOptions{Actor: "user:alice"})
+	if err == nil {
+		t.Fatal("expected error approving trigger-skipped manual task, got nil")
+	}
+	if !strings.Contains(err.Error(), "not waiting for manual approval") {
+		t.Fatalf("err = %v, want 'not waiting for manual approval'", err)
+	}
+}
+
 func TestRunService_ApproveManualTask_Happy(t *testing.T) {
 	mockRun := &mocks.MockRunStore{
 		GetRunResult: &domain.Run{
@@ -718,12 +817,63 @@ func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
 
 func TestRunService_createRun_NoStore(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	runID, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "")
+	runID, _, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "")
 	if err == nil || err.Error() != "run store is not configured" {
 		t.Fatalf("error = %v, want missing run store error", err)
 	}
 	if runID != 0 {
 		t.Fatalf("runID = %d, want 0", runID)
+	}
+}
+
+func TestRunService_createRun_ResolveError(t *testing.T) {
+	mockRun := &mocks.MockRunStore{CreateRunID: 10}
+	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	proj := &model.Project{
+		Name:  "bad-proj",
+		Repos: []model.Repo{{Name: "r1"}},
+		Tasks: []model.Task{
+			{Name: "t1", Trigger: "repo.r1.changed && @invalid"},
+		},
+	}
+	runID, skipped, err := svc.createRun("bad-proj", nil, false, proj, "user")
+	if err == nil {
+		t.Fatal("expected error from createRun on invalid trigger, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolve pipeline") {
+		t.Errorf("expected 'resolve pipeline' in error, got %v", err)
+	}
+	if runID != 0 {
+		t.Errorf("runID = %d, want 0", runID)
+	}
+	if skipped != nil {
+		t.Errorf("skipped = %v, want nil", skipped)
+	}
+	if len(mockRun.CreateRunCalls) != 0 {
+		t.Errorf("expected 0 CreateRun calls, got %d", len(mockRun.CreateRunCalls))
+	}
+}
+
+func TestRunService_Start_ResolveError(t *testing.T) {
+	mockRun := &mocks.MockRunStore{CreateRunID: 10}
+	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	proj := &model.Project{
+		Name:  "cyclic-proj",
+		Repos: []model.Repo{{Name: "r1"}},
+		Tasks: []model.Task{
+			{Name: "t1", DependsOn: []string{"t2"}, Trigger: "repo.r1.changed"},
+			{Name: "t2", DependsOn: []string{"t1"}, Trigger: "repo.r1.changed"},
+		},
+	}
+	runID, err := svc.Start(context.Background(), "cyclic-proj", proj, []string{"r1"}, domain.RunnerOptions{})
+	if err == nil {
+		t.Fatal("expected error on cyclic project in Start, got nil")
+	}
+	if runID != 0 {
+		t.Errorf("runID = %d, want 0", runID)
+	}
+	if len(mockRun.CreateRunCalls) != 0 {
+		t.Errorf("expected 0 CreateRun calls, got %d", len(mockRun.CreateRunCalls))
 	}
 }
 

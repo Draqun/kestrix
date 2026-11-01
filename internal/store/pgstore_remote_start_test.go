@@ -122,8 +122,13 @@ func TestPG_RemoteRunStart_NothingTriggeredFinishesPassed(t *testing.T) {
 	if run.FinishedAt == nil {
 		t.Fatal("expected finished_at to be set")
 	}
-	if len(run.TaskResults) != 0 {
-		t.Fatalf("expected 0 task results, got %d", len(run.TaskResults))
+	if len(run.TaskResults) != 2 {
+		t.Fatalf("expected 2 task results (trigger_unsatisfied), got %d", len(run.TaskResults))
+	}
+	for _, tr := range run.TaskResults {
+		if tr.Status != "skipped" || tr.SkipReason == nil || tr.SkipReason.Category != domain.SkipCategoryTriggerUnsatisfied {
+			t.Errorf("task result = %+v, want skipped trigger_unsatisfied", tr)
+		}
 	}
 	runnerID := mustCreateRunner(t, pg, "runner-c")
 	job, err := pg.ClaimNextJob(runnerID)

@@ -876,11 +876,11 @@ func TestFilesystemErrorSeams(t *testing.T) {
 }
 
 func TestResolveErrorSeam(t *testing.T) {
-	old := resolveNodes
-	resolveNodes = func(model.Project, map[string]bool) ([]dag.Node, error) {
-		return nil, errors.New("resolve")
+	old := resolvePipeline
+	resolvePipeline = func(model.Project, map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
+		return nil, nil, errors.New("resolve")
 	}
-	t.Cleanup(func() { resolveNodes = old })
+	t.Cleanup(func() { resolvePipeline = old })
 	project := runnerProject("run")
 	changed := map[string]bool{"repo": true}
 	if _, err := Run(context.Background(), project, changed, Options{WorkDir: t.TempDir()}); err == nil {

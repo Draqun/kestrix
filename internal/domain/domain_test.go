@@ -260,3 +260,16 @@ func TestIsTerminalJobStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestIsActiveTaskStatus(t *testing.T) {
+	for _, status := range []string{TaskStatusPending, TaskStatusRunning, TaskStatusClaimed} {
+		if !IsActiveTaskStatus(status) {
+			t.Errorf("IsActiveTaskStatus(%q) = false, want true", status)
+		}
+	}
+	for _, status := range []string{"", TaskStatusPassed, TaskStatusFailed, TaskStatusSkipped, TaskStatusCanceled, TaskStatusManual} {
+		if IsActiveTaskStatus(status) {
+			t.Errorf("IsActiveTaskStatus(%q) = true, want false", status)
+		}
+	}
+}

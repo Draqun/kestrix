@@ -125,3 +125,24 @@ export function layoutFromProject(project) {
 
   return { nodes, edges };
 }
+
+export function applyTaskResultsToDagNodes(nodes, taskResults = []) {
+  const resultMap = new Map(taskResults.map(r => [r.name, r]));
+  return nodes.map(node => {
+    if (node.data?.type === 'task') {
+      const taskName = node.id.replace('task:', '');
+      const res = resultMap.get(taskName);
+      if (res) {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            runStatus: res.status,
+            skipCategory: res.skip_reason?.category,
+          },
+        };
+      }
+    }
+    return node;
+  });
+}

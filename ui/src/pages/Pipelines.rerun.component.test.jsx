@@ -39,7 +39,7 @@ function finishedRun(overrides = {}) {
     pipeline_def: { tasks: [{ name: 'build' }, { name: 'deploy', manual: true }] },
     task_results: [
       { name: 'build', status: 'failed', error: 'exit 1' },
-      { name: 'deploy', status: 'skipped' },
+      { name: 'deploy', status: 'manual' },
     ],
     ...overrides,
   };

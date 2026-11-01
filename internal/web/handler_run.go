@@ -394,9 +394,7 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "task not in run")
 		return
 	}
-	isWaiting := cur.Status == "manual" ||
-		(cur.Status == "skipped" && cur.Error != "dependency failed" && cur.Error != "dependency canceled")
-	if !isWaiting {
+	if !domain.IsWaitingForManualApproval(cur) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("task %q is not waiting for manual approval (status=%s)", taskName, cur.Status))
 		return
 	}
@@ -514,14 +512,14 @@ func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, 
 	}
 	taskResults := make([]domain.TaskResult, 0, len(proj.Tasks))
 	for _, t := range proj.Tasks {
-		taskResults = append(taskResults, domain.TaskResult{Name: t.Name, Status: "skipped", Error: secretErr.Error()})
+		taskResults = append(taskResults, domain.TaskResult{Name: t.Name, Status: domain.TaskStatusSkipped, Error: secretErr.Error()})
 	}
-	if err := s.runStore.FinishRun(runID, "failed", "", secretErr.Error(), taskResults); err != nil {
+	if err := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", secretErr.Error(), taskResults); err != nil {
 		slog.Warn("could not finish run record for secret resolution failure", "run_id", runID, "project", projectName, "err", redact.Err(err, s.knownSecrets()))
 		return
 	}
 	if s.metrics != nil {
-		s.metrics.RunFinished("failed", projectName, time.Since(startedAt))
+		s.metrics.RunFinished(domain.RunStatusFailed, projectName, time.Since(startedAt))
 	}
 }
 

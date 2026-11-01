@@ -14,6 +14,7 @@ import (
 
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
+	"kestrix/internal/domain"
 	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
@@ -285,6 +286,60 @@ func TestRepoDir_Success(t *testing.T) {
 // bash expressions to exercise success, failure, manual-block, and
 // dep-block branches.
 
+func TestRunLocal_ReturnsTriggerSkippedTasks(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	proj := model.Project{
+		Name: "test-trigger-skip",
+		Repos: []model.Repo{
+			{Name: "app", Kind: "subpath", Path: "."},
+			{Name: "other", Kind: "subpath", Path: "."},
+		},
+		Tasks: []model.Task{
+			{
+				Name:    "t_ran",
+				Trigger: "repo.app.changed",
+				Execute: model.ExecuteSpec{Repo: "app", Script: "echo ran"},
+			},
+			{
+				Name:    "t_skipped",
+				Trigger: "repo.other.changed",
+				Execute: model.ExecuteSpec{Repo: "other", Script: "echo skipped"},
+			},
+		},
+	}
+	results, err := RunLocal(
+		context.Background(),
+		proj,
+		map[string]bool{"app": true, "other": false},
+		Options{WorkDir: dir},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d: %+v", len(results), results)
+	}
+	var foundRan, foundSkipped bool
+	for _, r := range results {
+		if r.Name == "t_ran" && r.Status == "passed" {
+			foundRan = true
+		}
+		if r.Name == "t_skipped" && r.Status == "skipped" {
+			foundSkipped = true
+			if r.SkipReason == nil || r.SkipReason.Category != domain.SkipCategoryTriggerUnsatisfied {
+				t.Errorf("t_skipped SkipReason = %+v, want trigger_unsatisfied", r.SkipReason)
+			}
+		}
+	}
+	if !foundRan || !foundSkipped {
+		t.Errorf("expected foundRan and foundSkipped both true, got ran=%v skipped=%v", foundRan, foundSkipped)
+	}
+}
+
 func TestRunLocal_PassAndScript(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {
@@ -349,6 +404,15 @@ func TestRunLocal_CancelKillsProcessGroup(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Status != "canceled" {
 		t.Fatalf("results = %+v, want one canceled (killed) task", results)
+	}
+	if results[0].SkipReason == nil {
+		t.Fatalf("results[0].SkipReason = nil, want non-nil")
+	}
+	if results[0].SkipReason.Category != domain.SkipCategoryRunCanceled {
+		t.Errorf("results[0].SkipReason.Category = %q, want %q", results[0].SkipReason.Category, domain.SkipCategoryRunCanceled)
+	}
+	if results[0].SkipReason.Summary != "Run was canceled" {
+		t.Errorf("results[0].SkipReason.Summary = %q, want 'Run was canceled'", results[0].SkipReason.Summary)
 	}
 
 	deadline := time.Now().Add(grace + 2*time.Second)
@@ -415,6 +479,51 @@ func TestRunOne_CancelKillsProcessGroup(t *testing.T) {
 			t.Fatalf("sleep processes still running after grace(%v)+2s: %s", grace, output)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func TestRunLocal_CanceledContextRemainingTasksSetsSkipReason(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel context
+
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "t1", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo hello`}},
+			{Name: "t2", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo world`}},
+		},
+	}
+	results, err := RunLocal(ctx, project, map[string]bool{"repo": true}, Options{
+		WorkDir: dir, Stdout: &out, Stderr: &out,
+	})
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
+	for _, res := range results {
+		if res.Status != "canceled" {
+			t.Errorf("task %s status = %q, want canceled", res.Name, res.Status)
+		}
+		if res.SkipReason == nil {
+			t.Fatalf("task %s SkipReason is nil", res.Name)
+		}
+		if res.SkipReason.Category != domain.SkipCategoryRunCanceled {
+			t.Errorf("task %s SkipReason.Category = %q, want %q", res.Name, res.SkipReason.Category, domain.SkipCategoryRunCanceled)
+		}
+		if res.SkipReason.Summary != "Run was canceled" {
+			t.Errorf("task %s SkipReason.Summary = %q, want 'Run was canceled'", res.Name, res.SkipReason.Summary)
+		}
 	}
 }
 
@@ -936,11 +1045,73 @@ func TestRunLocal_DependencySkipFiresCallback(t *testing.T) {
 	for _, r := range fired {
 		byName[r.Name] = r
 	}
-	if byName["dependent"].Status != "skipped" {
-		t.Errorf("dependent callback = %+v, want skipped", byName["dependent"])
+	dep := byName["dependent"]
+	if dep.Status != "skipped" {
+		t.Errorf("dependent callback = %+v, want skipped", dep)
 	}
-	if !strings.Contains(byName["dependent"].Error, "dependency failed") {
-		t.Errorf("dependent error = %q, want 'dependency failed'", byName["dependent"].Error)
+	if !strings.Contains(dep.Error, "dependency failed") {
+		t.Errorf("dependent error = %q, want 'dependency failed'", dep.Error)
+	}
+	if dep.SkipReason == nil {
+		t.Fatalf("dependent SkipReason = nil, want non-nil")
+	}
+	if dep.SkipReason.Category != domain.SkipCategoryDependencyFailed {
+		t.Errorf("dependent SkipReason.Category = %q, want %q", dep.SkipReason.Category, domain.SkipCategoryDependencyFailed)
+	}
+	if len(dep.SkipReason.FailedDependencies) != 1 || dep.SkipReason.FailedDependencies[0] != "build" {
+		t.Errorf("dependent FailedDependencies = %v, want [build]", dep.SkipReason.FailedDependencies)
+	}
+	if dep.SkipReason.Summary != "Dependency build failed" {
+		t.Errorf("dependent SkipReason.Summary = %q, want 'Dependency build failed'", dep.SkipReason.Summary)
+	}
+}
+
+func TestRunLocal_SkippedDependentMultiDepAggregation(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	var fired []TaskResult
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "build1", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+			{Name: "build2", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"build1", "build2"},
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
+		},
+	}
+	_, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir,
+			OnTaskComplete: func(r TaskResult) { fired = append(fired, r) }},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	byName := map[string]TaskResult{}
+	for _, r := range fired {
+		byName[r.Name] = r
+	}
+	dep := byName["dependent"]
+	if dep.Status != "skipped" {
+		t.Fatalf("dependent status = %q, want skipped", dep.Status)
+	}
+	if dep.SkipReason == nil {
+		t.Fatalf("dependent SkipReason is nil")
+	}
+	if dep.SkipReason.Category != domain.SkipCategoryDependencyFailed {
+		t.Errorf("dependent category = %q, want %q", dep.SkipReason.Category, domain.SkipCategoryDependencyFailed)
+	}
+	if len(dep.SkipReason.FailedDependencies) != 2 || dep.SkipReason.FailedDependencies[0] != "build1" || dep.SkipReason.FailedDependencies[1] != "build2" {
+		t.Errorf("dependent FailedDependencies = %v, want [build1, build2]", dep.SkipReason.FailedDependencies)
+	}
+	if dep.SkipReason.Summary != "Dependency build1, build2 failed" {
+		t.Errorf("dependent Summary = %q, want 'Dependency build1, build2 failed'", dep.SkipReason.Summary)
 	}
 }
 

@@ -1265,6 +1265,32 @@ const docTemplate = `{
                 }
             }
         },
+        "domain.SkipReason": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "trigger_unsatisfied",
+                        "dependency_failed",
+                        "dependency_canceled",
+                        "run_canceled"
+                    ]
+                },
+                "failed_dependencies": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "trigger_evaluation": {
+                    "$ref": "#/definitions/domain.TriggerEvaluation"
+                }
+            }
+        },
         "domain.Task": {
             "type": "object",
             "properties": {
@@ -1325,6 +1351,10 @@ const docTemplate = `{
                 "output": {
                     "type": "string"
                 },
+                "skip_reason": {
+                    "description": "SkipReason explains why a task was skipped.",
+                    "$ref": "#/definitions/domain.SkipReason"
+                },
                 "status": {
                     "description": "passed, failed, skipped, running, pending, manual",
                     "type": "string"
@@ -1332,6 +1362,30 @@ const docTemplate = `{
                 "waiting_reason": {
                     "description": "WaitingReason is set on the latest result of an unmatched pending task\n(remote-unmatched-job-alert design D2). Omitted when empty.",
                     "type": "string"
+                }
+            }
+        },
+        "domain.TriggerEvaluation": {
+            "type": "object",
+            "properties": {
+                "changed_repos": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "expression": {
+                    "type": "string"
+                },
+                "satisfied": {
+                    "type": "boolean"
+                },
+                "terms": {
+                    "description": "e.g. \"repo.backend.changed\": false",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
                 }
             }
         },
