@@ -19,12 +19,9 @@ FULL_IMAGE="${IMAGE}:${TAG}"
 LATEST="${IMAGE}:latest"
 
 if [ -n "${DOCKER_USERNAME:-}" ] && [ -n "${DOCKER_PASSWORD:-}" ]; then
-  if [ -z "$REGISTRY" ]; then
-    echo "DOCKER_REGISTRY is required when Docker credentials are provided"
-    exit 1
-  fi
-  echo "Logging in to ${REGISTRY}..."
-  echo "${DOCKER_PASSWORD}" | docker login "${REGISTRY}" -u "${DOCKER_USERNAME}" --password-stdin
+  LOGIN_REGISTRY="${REGISTRY:-docker.io}"
+  echo "Logging in to ${LOGIN_REGISTRY}..."
+  echo "${DOCKER_PASSWORD}" | docker login "${LOGIN_REGISTRY}" -u "${DOCKER_USERNAME}" --password-stdin
 fi
 
 echo "Pushing ${FULL_IMAGE}..."

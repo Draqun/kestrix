@@ -28,7 +28,7 @@ include .env
 export $(shell sed 's/=.*//' .env)
 endif
 
-.PHONY: help init build build-release release release-push release-dry-run release-notes test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs pages serve-pages changelog-new changelog-check changelog-batch version-bump-check
+.PHONY: help init build build-release release release-push release-dry-run release-notes test test-coverage coverage-report coverage-uncovered test-integration test-e2e docker-e2e docker-build docker-push runner-unit-coverage runner-integration web-e2e fmt format fmt-check vet staticcheck lint swagger clean clean-all quality check validate resolve pipeline serve dev dev-all install-tools ui-install ui-dev ui-build ui-lint ui-test ui-coverage ui-serve docker-up docker-up-all docker-down docker-logs pages serve-pages changelog-new changelog-check changelog-batch version-bump-check
 
 ## help: Show this help message
 help:
@@ -297,6 +297,14 @@ docker-down:
 ## docker-logs: Follow Docker logs
 docker-logs:
 	cd docker && make logs
+
+## docker-build: Build production Docker image
+docker-build:
+	bash scripts/docker-build.sh
+
+## docker-push: Push Docker image to registry (default: Docker Hub or DOCKER_REGISTRY)
+docker-push:
+	bash scripts/docker-push.sh
 
 ## ci-validate-docs: Validate the presence of documentation after UI build
 ci-validate-docs:
