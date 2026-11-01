@@ -1042,8 +1042,71 @@ func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 		t.Errorf("Status = %q, want canceled", run.Status)
 	}
 	for _, tr := range run.TaskResults {
-		if tr.Name == "deploy" && tr.Status != "skipped" {
-			t.Errorf("deploy should be skipped (dep running→canceled), got %q", tr.Status)
+		if tr.Name == "deploy" {
+			if tr.Status != "skipped" {
+				t.Errorf("deploy should be skipped (dep running→canceled), got %q", tr.Status)
+			}
+			if tr.SkipReason == nil || tr.SkipReason.Category != domain.SkipCategoryDependencyCanceled {
+				t.Errorf("deploy SkipReason = %+v, want category %q", tr.SkipReason, domain.SkipCategoryDependencyCanceled)
+			}
+		}
+		if tr.Name == "build" {
+			if tr.Status != "canceled" {
+				t.Errorf("build should be canceled, got %q", tr.Status)
+			}
+			if tr.SkipReason == nil || tr.SkipReason.Category != domain.SkipCategoryRunCanceled {
+				t.Errorf("build SkipReason = %+v, want category %q", tr.SkipReason, domain.SkipCategoryRunCanceled)
+			}
+		}
+	}
+}
+
+func TestPG_CancelRun_TriggerSkippedDepDoesNotBlockPending(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "cps-trigger", "/")
+	snap := &model.Project{
+		Name: "cps-trigger",
+		Tasks: []model.Task{
+			{Name: "deploy", DependsOn: []string{"build"}},
+			{Name: "build"},
+		},
+	}
+	id := mustCreateRun(t, pg, "cps-trigger", snap)
+	triggerSkipped := domain.NewTriggerUnsatisfiedSkipResult("build", &domain.TriggerEvaluation{Satisfied: false})
+	if err := pg.AppendTaskResult(id, triggerSkipped); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "deploy", Status: "pending"}); err != nil {
+		t.Fatalf("AppendTaskResult: %v", err)
+	}
+
+	if _, err := pg.CancelRun(id, "user:bob"); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.Status != "canceled" {
+		t.Errorf("Status = %q, want canceled", run.Status)
+	}
+	for _, tr := range run.TaskResults {
+		if tr.Name == "deploy" {
+			if tr.Status != "canceled" {
+				t.Errorf("deploy should be canceled (trigger-unsatisfied dep does not block), got %q", tr.Status)
+			}
+			if tr.SkipReason == nil || tr.SkipReason.Category != domain.SkipCategoryRunCanceled {
+				t.Errorf("deploy SkipReason = %+v, want category %q", tr.SkipReason, domain.SkipCategoryRunCanceled)
+			}
+		}
+		if tr.Name == "build" {
+			if tr.Status != "skipped" {
+				t.Errorf("build should remain skipped, got %q", tr.Status)
+			}
+			if tr.SkipReason == nil || tr.SkipReason.Category != domain.SkipCategoryTriggerUnsatisfied {
+				t.Errorf("build SkipReason = %+v, want category %q", tr.SkipReason, domain.SkipCategoryTriggerUnsatisfied)
+			}
 		}
 	}
 }

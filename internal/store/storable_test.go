@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 	"unsafe"
+
+	"kestrix/internal/domain"
 )
 
 func TestStorable(t *testing.T) {
@@ -121,13 +123,22 @@ func TestCleanTaskResultAndResults(t *testing.T) {
 	}
 
 	// Single task result test
-	single := TaskResult{Name: "single", Status: "passed", Output: "a\x00b", Error: "c\xe9d"}
+	single := TaskResult{
+		Name:   "single",
+		Status: "passed",
+		Output: "a\x00b",
+		Error:  "c\xe9d",
+		SkipReason: &domain.SkipReason{
+			Category: domain.SkipCategoryTriggerUnsatisfied,
+			Summary:  "bad\x00summary",
+		},
+	}
 	singleCleaned := cleanTaskResult(single)
-	if single.Output != "a\x00b" || single.Error != "c\xe9d" {
+	if single.Output != "a\x00b" || single.Error != "c\xe9d" || single.SkipReason.Summary != "bad\x00summary" {
 		t.Fatalf("single was modified: %+v", single)
 	}
-	if singleCleaned.Output != "a\ufffdb" || singleCleaned.Error != "c\ufffdd" {
-		t.Fatalf("singleCleaned = %+v", singleCleaned)
+	if singleCleaned.Output != "a\ufffdb" || singleCleaned.Error != "c\ufffdd" || singleCleaned.SkipReason.Summary != "bad\ufffdsummary" {
+		t.Fatalf("singleCleaned = %+v, skip_reason: %+v", singleCleaned, singleCleaned.SkipReason)
 	}
 
 	// Empty slice test

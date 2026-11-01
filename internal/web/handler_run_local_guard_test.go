@@ -64,3 +64,26 @@ func TestHandleApproveManualTask_RejectsLocalWithoutOptIn(t *testing.T) {
 		t.Fatalf("body = %s, want it to name the opt-in", w.Body.String())
 	}
 }
+
+func TestHandleApproveManualTask_RejectsTriggerSkippedTask(t *testing.T) {
+	run := &domain.Run{
+		ID: 3, ProjectName: "demo",
+		PipelineDef: &domain.Project{Name: "demo", Tasks: []domain.Task{{Name: "deploy", Manual: true}}},
+		TaskResults: []domain.TaskResult{
+			domain.NewTriggerUnsatisfiedSkipResult("deploy", &domain.TriggerEvaluation{Satisfied: false}),
+		},
+	}
+	store := &mocks.MockProjectStore{GetResult: &domain.ProjectConfig{Name: "demo", Mode: "local"}}
+	runStore := &mocks.MockRunStore{GetRunResult: run}
+	srv := setupRunServer(t, store, runStore)
+	srv.runService.SetLocalExecutionPolicy(true, "local")
+
+	w := httptest.NewRecorder()
+	srv.handleApproveManualTask(w, runCtx(httptest.NewRequest("POST", "/", nil), "name", "demo", "runID", "3", "task", "deploy"))
+	if w.Code != 400 {
+		t.Fatalf("status = %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "not waiting for manual approval") {
+		t.Fatalf("body = %s, want it to explain not waiting for manual approval", w.Body.String())
+	}
+}

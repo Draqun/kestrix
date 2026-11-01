@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"kestrix/internal/credentials"
+	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/metrics"
 	"kestrix/internal/model"
@@ -627,7 +628,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	if s.pipeline == nil {
 		return 0, fmt.Errorf("pipeline runner not configured")
 	}
-	runID, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
+	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
 	if err != nil {
 		return 0, err
 	}
@@ -665,7 +666,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 			return
 		}
 		defer s.releaseSlot()
-		s.executeRun(runCtx, runID, proj, changed, opts, output, redactor, startedAt)
+		s.executeRun(runCtx, runID, proj, changed, skippedTasks, opts, output, redactor, startedAt)
 	}()
 	return runID, nil
 }
@@ -797,21 +798,48 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 	}
 }
 
-func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string) (int, error) {
+// toChangedSet converts a slice of changed repo names to a set lookup map.
+func toChangedSet(changed []string) map[string]bool {
+	changedSet := make(map[string]bool, len(changed))
+	for _, c := range changed {
+		changedSet[c] = true
+	}
+	return changedSet
+}
+
+// resolvePipelineWithSkipped evaluates every task's trigger condition and partitions tasks
+// into triggered DAG nodes and trigger-unsatisfied skipped TaskResult items.
+func resolvePipelineWithSkipped(proj model.Project, changed []string) ([]dag.Node, []domain.TaskResult, error) {
+	return dag.New(proj).ResolveWithSkipped(toChangedSet(changed))
+}
+
+func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string) (int, []domain.TaskResult, error) {
 	if proj == nil {
-		return 0, fmt.Errorf("project not loaded")
+		return 0, nil, fmt.Errorf("project not loaded")
 	}
 	if s.runStore == nil {
-		return 0, fmt.Errorf("run store is not configured")
+		return 0, nil, fmt.Errorf("run store is not configured")
+	}
+	_, skippedTasks, err := resolvePipelineWithSkipped(*proj, changed)
+	if err != nil {
+		return 0, nil, fmt.Errorf("resolve pipeline: %w", err)
 	}
 	runID, err := s.runStore.CreateRun(projectName, changed, "", includeManual, proj, startedBy)
 	if err != nil {
-		return 0, fmt.Errorf("create run: %w", err)
+		return 0, nil, fmt.Errorf("create run: %w", err)
+	}
+	skippedByName := make(map[string]domain.TaskResult, len(skippedTasks))
+	for _, st := range skippedTasks {
+		skippedByName[st.Name] = st
 	}
 	for _, t := range proj.Tasks {
-		_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: t.Name, Status: "pending"})
+		if st, isSkipped := skippedByName[t.Name]; isSkipped {
+			_ = s.runStore.AppendTaskResult(runID, st)
+		} else {
+			_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: t.Name, Status: domain.TaskStatusPending})
+		}
 	}
-	return runID, nil
+	return runID, skippedTasks, nil
 }
 
 // prepareRunExecution wires runID's lifecycle callbacks onto opts and wraps
@@ -863,7 +891,7 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 	return redactor
 }
 
-func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter, startedAt time.Time) {
+func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, skippedTasks []domain.TaskResult, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter, startedAt time.Time) {
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
 			_ = redactor.Flush()
@@ -875,10 +903,7 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 		}
 	}()
 
-	changedSet := make(map[string]bool, len(changed))
-	for _, c := range changed {
-		changedSet[c] = true
-	}
+	changedSet := toChangedSet(changed)
 	taskResults, err := s.pipeline.Run(ctx, *proj, changedSet, opts)
 	// Flush before reading output.String() so a secret value sitting in the
 	// redactor's cross-write buffer at run end is redacted before it is
@@ -888,8 +913,27 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 	// AppendTaskResult wrote incrementally via OnTaskComplete during the
 	// run, so this slice must be redacted independently rather than relying
 	// on that earlier pass.
-	taskResults = redactTaskResults(taskResults, opts.ResolvedSecretValues, s.MaxOutputBytes)
-	s.finishRun(runID, proj.Name, output.String(), taskResults, err, opts.SourceSessions, startedAt, opts.ResolvedSecretValues)
+	allResults := mergeSkippedResults(taskResults, skippedTasks)
+	allResults = redactTaskResults(allResults, opts.ResolvedSecretValues, s.MaxOutputBytes)
+	s.finishRun(runID, proj.Name, output.String(), allResults, err, opts.SourceSessions, startedAt, opts.ResolvedSecretValues)
+}
+
+// mergeSkippedResults combines runner results with trigger-skipped tasks, preserving
+// runner results on collision (since pipeline runners also return trigger-skipped tasks
+// from ResolveWithSkipped when executing).
+func mergeSkippedResults(results []domain.TaskResult, skipped []domain.TaskResult) []domain.TaskResult {
+	have := make(map[string]bool, len(results))
+	for _, tr := range results {
+		have[tr.Name] = true
+	}
+	merged := make([]domain.TaskResult, len(results), len(results)+len(skipped))
+	copy(merged, results)
+	for _, st := range skipped {
+		if !have[st.Name] {
+			merged = append(merged, st)
+		}
+	}
+	return merged
 }
 
 // redactTaskResults returns a copy of results with each Output field
@@ -913,7 +957,7 @@ func (s *RunService) finishRun(runID int, projectName string, output string, tas
 		if err := s.runStore.FinishRun(runID, status, output, errMsg, taskResults); err != nil {
 			slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(err, secrets))
 		}
-		if status == "canceled" {
+		if status == domain.RunStatusCanceled {
 			s.persistCanceledByIfLost(runID)
 		}
 	}
@@ -929,19 +973,19 @@ func (s *RunService) finishRun(runID int, projectName string, output string, tas
 }
 
 func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
-	status := "passed"
+	status := domain.RunStatusPassed
 	errMsg := ""
 	if runErr != nil {
-		status = "failed"
+		status = domain.RunStatusFailed
 		errMsg = runErr.Error()
 	}
 	canceled := false
 	for _, tr := range taskResults {
 		switch tr.Status {
-		case "canceled":
+		case domain.TaskStatusCanceled:
 			canceled = true
-		case "failed":
-			status = "failed"
+		case domain.TaskStatusFailed:
+			status = domain.RunStatusFailed
 			if errMsg == "" {
 				errMsg = tr.Error
 			}
@@ -952,7 +996,7 @@ func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
 		// failure; see design.md D5 and the "Cancel a running local task"
 		// scenario - the run SHALL be canceled even when the task that was
 		// killed reports its own result as canceled rather than failed.
-		status = "canceled"
+		status = domain.RunStatusCanceled
 		errMsg = "canceled"
 	}
 	if hasExecutableRunState(taskResults) {
@@ -963,7 +1007,7 @@ func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
 
 func hasExecutableRunState(taskResults []domain.TaskResult) bool {
 	for _, tr := range taskResults {
-		if tr.Status == "manual" || tr.Status == "pending" || tr.Status == "running" {
+		if tr.Status == domain.TaskStatusManual || domain.IsActiveTaskStatus(tr.Status) {
 			return true
 		}
 	}
@@ -1224,10 +1268,6 @@ func manualTaskContext(run *domain.Run, proj *model.Project, taskName string) (b
 	return manualOK, dependsOn
 }
 
-func isWaitingForApproval(tr domain.TaskResult) bool {
-	return tr.Status == "manual" || (tr.Status == "skipped" && tr.Error != "dependency failed" && tr.Error != "dependency canceled")
-}
-
 // ApproveManualTask validates a waiting manual task and executes it.
 func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	if s.runStore == nil {
@@ -1246,7 +1286,7 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	if !ok {
 		return domain.TaskResult{}, fmt.Errorf("task not in run")
 	}
-	if !isWaitingForApproval(cur) {
+	if !domain.IsWaitingForManualApproval(cur) {
 		return domain.TaskResult{}, fmt.Errorf("task %q is not waiting for manual approval (status=%s)", taskName, cur.Status)
 	}
 

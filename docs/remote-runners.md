@@ -192,6 +192,14 @@ When a task is unmatched:
 - **Metrics**: `kestrix_remote_jobs_unmatched` reports the current number of
   unmatched pending jobs.
 
+When a task is skipped in either local or remote runs (due to unsatisfied trigger conditions, failed upstream dependencies, or run cancellation):
+- **API**: run responses attach `skip_reason` to skipped task results:
+  - `category`: one of `trigger_unsatisfied`, `dependency_failed`, `dependency_canceled`, or `run_canceled`.
+  - `summary`: human-readable explanation of why the task did not execute.
+  - `failed_dependencies`: list of blocking upstream dependencies (when category is `dependency_failed` or `dependency_canceled`).
+  - `trigger_evaluation`: breakdown of evaluated trigger conditions with `expression`, `changed_repos`, `satisfied`, and map of evaluated boolean `terms` (when category is `trigger_unsatisfied`).
+- **UI**: the run detail view provides interactive inspection of the skip reason alert, evaluated trigger expression terms, and upstream dependency statuses.
+
 Unmatched jobs remain `pending` and are not canceled or failed automatically;
 operators can register matching runners or cancel runs manually. Silent-runner
 recovery never fails a job that was never claimed.

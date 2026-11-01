@@ -15,6 +15,7 @@ import {
   Block as CanceledIcon,
 } from '@mui/icons-material';
 import { getDashboard } from '../api/client';
+import { getStatusColor } from '../lib/status.js';
 
 function StatCard({ title, value, color = 'text.primary', loading = false }) {
   return (
@@ -47,16 +48,12 @@ function statusIcon(status) {
 }
 
 function statusChip(status) {
-  const colors = {
-    passed: 'success', failed: 'error', running: 'warning', queued: 'info',
-    pending: 'default', skipped: 'default', canceled: 'default',
-  };
   return (
     <Chip
       icon={statusIcon(status)}
       label={status}
       size="small"
-      color={colors[status] || 'default'}
+      color={getStatusColor(status)}
       variant="outlined"
     />
   );

@@ -175,6 +175,27 @@ const (
 	RunStatusCanceled = "canceled"
 )
 
+// Task status constants: the values the task_results.status column/field takes.
+const (
+	TaskStatusPending  = "pending"
+	TaskStatusRunning  = "running"
+	TaskStatusClaimed  = "claimed"
+	TaskStatusPassed   = "passed"
+	TaskStatusFailed   = "failed"
+	TaskStatusSkipped  = "skipped"
+	TaskStatusCanceled = "canceled"
+	TaskStatusManual   = "manual"
+)
+
+// IsActiveTaskStatus reports whether a task is active (pending, running, claimed).
+func IsActiveTaskStatus(status string) bool {
+	switch status {
+	case TaskStatusPending, TaskStatusRunning, TaskStatusClaimed:
+		return true
+	}
+	return false
+}
+
 // IsTerminalRunStatus reports whether a run's status is one it never leaves:
 // passed, failed or canceled. One rule, shared by the service and the store,
 // so the two never disagree about when a run is finished - see
@@ -185,6 +206,32 @@ func IsTerminalRunStatus(status string) bool {
 		return true
 	}
 	return false
+}
+
+// SkipCategory classifies why a task was skipped.
+type SkipCategory string
+
+const (
+	SkipCategoryTriggerUnsatisfied SkipCategory = "trigger_unsatisfied"
+	SkipCategoryDependencyFailed   SkipCategory = "dependency_failed"
+	SkipCategoryDependencyCanceled SkipCategory = "dependency_canceled"
+	SkipCategoryRunCanceled        SkipCategory = "run_canceled"
+)
+
+// TriggerEvaluation captures details of how a trigger condition was evaluated.
+type TriggerEvaluation struct {
+	Expression   string          `json:"expression"`
+	ChangedRepos []string        `json:"changed_repos"`
+	Terms        map[string]bool `json:"terms"` // e.g. "repo.backend.changed": false
+	Satisfied    bool            `json:"satisfied"`
+}
+
+// SkipReason contains structured information on why a task did not run.
+type SkipReason struct {
+	Category           SkipCategory       `json:"category" enums:"trigger_unsatisfied,dependency_failed,dependency_canceled,run_canceled"`
+	Summary            string             `json:"summary"`
+	FailedDependencies []string           `json:"failed_dependencies,omitempty"`
+	TriggerEvaluation  *TriggerEvaluation `json:"trigger_evaluation,omitempty"`
 }
 
 // TaskResult captures the outcome of a single task execution.
@@ -205,4 +252,6 @@ type TaskResult struct {
 	// WaitingReason is set on the latest result of an unmatched pending task
 	// (remote-unmatched-job-alert design D2). Omitted when empty.
 	WaitingReason string `json:"waiting_reason,omitempty"`
+	// SkipReason explains why a task was skipped.
+	SkipReason *SkipReason `json:"skip_reason,omitempty"`
 }

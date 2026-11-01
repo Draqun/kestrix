@@ -5,7 +5,11 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Box, Typography } from '@mui/material';
+import { formatSkipCategory } from '../lib/skipReason.js';
 
+// ReactFlow custom DAG node styling. Hex colors are used directly on the SVG canvas:
+// green for passed, red for failed, orange for running/canceled, grey for pending/skipped,
+// blue for manual/repo (see AGENTS.md DAG node colors convention).
 function CustomNode({ data }) {
   const statusColor = data.runStatus === 'passed' ? '#4caf50'
     : data.runStatus === 'failed' ? '#f44336'
@@ -56,6 +60,11 @@ function CustomNode({ data }) {
       {data.runStatus && data.runStatus !== 'passed' && (
         <Typography variant="caption" display="block" sx={{ fontSize: 9, fontWeight: 700, color: borderColor }}>
           {data.runStatus.toUpperCase()}
+          {data.runStatus === 'skipped' && data.skipCategory && (
+            <span style={{ fontWeight: 400, opacity: 0.85, marginLeft: 3 }}>
+              ({formatSkipCategory(data.skipCategory)})
+            </span>
+          )}
         </Typography>
       )}
       {data.runStatus === 'passed' && (

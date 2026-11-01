@@ -7,8 +7,10 @@ package dag
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"kestrix/internal/domain"
 	"kestrix/internal/model"
 )
 
@@ -41,13 +43,37 @@ func New(p model.Project) *Engine {
 //	repo.auth_service.changed && !repo.docs.changed
 //	(repo.a.changed || repo.b.changed) && !repo.docs.changed
 func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, error) {
+	eval, err := e.EvaluateTriggerWithDetails(expr, changed)
+	if err != nil {
+		return false, err
+	}
+	return eval.Satisfied, nil
+}
+
+// EvaluateTriggerWithDetails evaluates a trigger expression and returns a structured
+// TriggerEvaluation breakdown containing expression, changed repos, resolved terms,
+// and final satisfied boolean.
+func (e *Engine) EvaluateTriggerWithDetails(expr string, changed map[string]bool) (*domain.TriggerEvaluation, error) {
 	expr = strings.TrimSpace(expr)
+	var changedRepos []string
+	for r, ok := range changed {
+		if ok {
+			changedRepos = append(changedRepos, r)
+		}
+	}
+	sort.Strings(changedRepos)
+
 	if expr == "" || expr == "true" || expr == "always" {
-		return true, nil
+		return &domain.TriggerEvaluation{
+			Expression:   expr,
+			ChangedRepos: changedRepos,
+			Terms:        map[string]bool{},
+			Satisfied:    true,
+		}, nil
 	}
 	tokens, err := tokenize(expr)
 	if err != nil {
-		return false, fmt.Errorf("tokenize: %w", err)
+		return nil, fmt.Errorf("tokenize: %w", err)
 	}
 	// Build the set of declared repos so triggers can reference any ci_repo,
 	// not only those present in the changed set.
@@ -58,36 +84,64 @@ func (e *Engine) EvaluateTrigger(expr string, changed map[string]bool) (bool, er
 	parser := &exprParser{tokens: tokens}
 	result, err := parser.parseExpr(changed, knownRepos)
 	if err != nil {
-		return false, fmt.Errorf("evaluate trigger %q: %w", expr, err)
+		return nil, fmt.Errorf("evaluate trigger %q: %w", expr, err)
 	}
-	return result, nil
+	terms := extractTerms(tokens, changed)
+	return &domain.TriggerEvaluation{
+		Expression:   expr,
+		ChangedRepos: changedRepos,
+		Terms:        terms,
+		Satisfied:    result,
+	}, nil
+}
+
+func extractTerms(tokens []token, changed map[string]bool) map[string]bool {
+	terms := make(map[string]bool)
+	for i := 0; i+4 < len(tokens); i++ {
+		if tokens[i].text == "repo" && tokens[i+1].kind == tkDot &&
+			tokens[i+2].kind == tkIdent && tokens[i+3].kind == tkDot &&
+			tokens[i+4].text == "changed" {
+			repo := tokens[i+2].text
+			term := fmt.Sprintf("repo.%s.changed", repo)
+			terms[term] = changed[repo]
+		}
+	}
+	return terms
+}
+
+// ResolveWithSkipped evaluates every task's trigger condition and partitions tasks
+// into triggered execution nodes and skipped tasks with detailed skip reasons.
+func (e *Engine) ResolveWithSkipped(changed map[string]bool) ([]Node, []domain.TaskResult, error) {
+	var triggered []Node
+	var skipped []domain.TaskResult
+	for _, task := range e.Project.Tasks {
+		eval, err := e.EvaluateTriggerWithDetails(task.Trigger, changed)
+		if err != nil {
+			return nil, nil, err
+		}
+		if eval.Satisfied {
+			triggered = append(triggered, Node{
+				Task:            task,
+				Triggered:       true,
+				TriggeredReason: "trigger expression satisfied",
+			})
+		} else {
+			skipped = append(skipped, domain.NewTriggerUnsatisfiedSkipResult(task.Name, eval))
+		}
+	}
+	// Validate dependency ordering (cycle detection).
+	if err := e.detectCycles(); err != nil {
+		return nil, nil, err
+	}
+	return triggered, skipped, nil
 }
 
 // Resolve computes the full execution plan. It evaluates every task's trigger
 // condition and returns only the nodes that should run (triggered == true).
 // Ordering via depends_on is validated for cycles.
 func (e *Engine) Resolve(changed map[string]bool) ([]Node, error) {
-	var nodes []Node
-	for _, task := range e.Project.Tasks {
-		ok, err := e.EvaluateTrigger(task.Trigger, changed)
-		if err != nil {
-			return nil, err
-		}
-		n := Node{Task: task, Triggered: ok}
-		if ok {
-			n.TriggeredReason = "trigger expression satisfied"
-		} else {
-			n.TriggeredReason = "trigger expression not satisfied"
-		}
-		if ok {
-			nodes = append(nodes, n)
-		}
-	}
-	// Validate dependency ordering (cycle detection).
-	if err := e.detectCycles(); err != nil {
-		return nil, err
-	}
-	return nodes, nil
+	triggered, _, err := e.ResolveWithSkipped(changed)
+	return triggered, err
 }
 
 // Validate checks the project structure: trigger syntax and DAG cycles.

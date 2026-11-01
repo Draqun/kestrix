@@ -615,6 +615,145 @@ func TestRunService_Start_RemoteMode_NothingTriggeredFinishRunFails(t *testing.T
 	}
 }
 
+func TestRunService_Start_RemoteMode_AppendSkippedTaskFailsMarksRunFailed(t *testing.T) {
+	secret := "secret-db-fail-token"
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+	}}
+	runStore := &mocks.MockRunStore{CreateRunID: 11, AppendTaskErr: fmt.Errorf("db disk full %s", secret)}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+		ResolvedSecretValues: []string{secret},
+	})
+	if err == nil {
+		t.Fatal("Start err = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "record skipped task") {
+		t.Fatalf("Start err = %v, want 'record skipped task'", err)
+	}
+	if runID != 11 {
+		t.Fatalf("runID = %d, want 11", runID)
+	}
+	if len(runStore.AppendTaskCalls) != 3 {
+		t.Fatalf("AppendTaskCalls = %d, want 3 attempts", len(runStore.AppendTaskCalls))
+	}
+	if len(runStore.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(runStore.FinishRunCalls))
+	}
+	finCall := runStore.FinishRunCalls[0]
+	if finCall.Status != "failed" {
+		t.Fatalf("FinishRun status = %q, want 'failed'", finCall.Status)
+	}
+	if !strings.Contains(finCall.ErrMsg, "record skipped task") {
+		t.Fatalf("FinishRun ErrMsg = %q, want 'record skipped task'", finCall.ErrMsg)
+	}
+	if strings.Contains(finCall.ErrMsg, secret) {
+		t.Fatalf("FinishRun ErrMsg contained unredacted secret: %q", finCall.ErrMsg)
+	}
+	if len(finCall.TaskResults) != 1 || finCall.TaskResults[0].Name != "a" {
+		t.Fatalf("FinishRun TaskResults = %+v, want preserved skipped task [a]", finCall.TaskResults)
+	}
+}
+
+func TestRunService_Start_RemoteMode_AppendSkippedTaskFails_FinishRunErrorLogged(t *testing.T) {
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
+	}}
+	runStore := &mocks.MockRunStore{
+		CreateRunID:   12,
+		AppendTaskErr: errors.New("append failed"),
+		FinishRunErr:  errors.New("db down"),
+	}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Start err = nil, want error")
+	}
+	if runID != 12 {
+		t.Fatalf("runID = %d, want 12", runID)
+	}
+	if len(runStore.FinishRunCalls) != 1 {
+		t.Fatalf("FinishRunCalls = %d, want 1", len(runStore.FinishRunCalls))
+	}
+}
+
+func TestRunService_Start_RemoteMode_ResolveError(t *testing.T) {
+	proj := &model.Project{
+		Name:  "bad-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "t1", Trigger: "repo.app.changed && @invalid"},
+		},
+	}
+	runStore := &mocks.MockRunStore{CreateRunID: 20}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
+	runID, err := svc.Start(context.Background(), "bad-proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected error on invalid trigger in remote mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "resolve pipeline") {
+		t.Errorf("expected 'resolve pipeline' in error, got %v", err)
+	}
+	if runID != 0 {
+		t.Errorf("runID = %d, want 0", runID)
+	}
+	if len(runStore.CreateRunCalls) != 0 {
+		t.Errorf("expected 0 CreateRun calls, got %d", len(runStore.CreateRunCalls))
+	}
+}
+
+func TestRunService_Start_RemoteMode_AllTasksTriggerSkippedSuccess(t *testing.T) {
+	proj := &model.Project{
+		Name:  "proj",
+		Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}},
+		Tasks: []model.Task{
+			{Name: "build_docs", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "docs", Script: "x"}},
+		},
+	}
+	runStore := &mocks.MockRunStore{CreateRunID: 25}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected Start error: %v", err)
+	}
+	if runID != 25 {
+		t.Fatalf("runID = %d, want 25", runID)
+	}
+	// Verify task appended as skipped with skip reason
+	if len(runStore.AppendTaskCalls) != 1 {
+		t.Fatalf("expected 1 AppendTask call, got %d", len(runStore.AppendTaskCalls))
+	}
+	appCall := runStore.AppendTaskCalls[0]
+	if appCall.Name != "build_docs" || appCall.Status != "skipped" {
+		t.Errorf("appCall = %+v, want build_docs skipped", appCall)
+	}
+	if appCall.SkipReason == nil || appCall.SkipReason.Category != domain.SkipCategoryTriggerUnsatisfied {
+		t.Errorf("expected SkipCategoryTriggerUnsatisfied, got %+v", appCall.SkipReason)
+	}
+	// Verify FinishRun called with passed and skippedTasks
+	if len(runStore.FinishRunCalls) != 1 {
+		t.Fatalf("expected 1 FinishRun call, got %d", len(runStore.FinishRunCalls))
+	}
+	finCall := runStore.FinishRunCalls[0]
+	if finCall.Status != "passed" {
+		t.Errorf("FinishRun status = %q, want 'passed'", finCall.Status)
+	}
+	if len(finCall.TaskResults) != 1 || finCall.TaskResults[0].Name != "build_docs" {
+		t.Errorf("FinishRun taskResults = %+v, want [build_docs]", finCall.TaskResults)
+	}
+}
+
 // 2.3: startRemote finishes the run failed when the snapshot fails (D3), the error redacted.
 func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotFailsRun(t *testing.T) {
 	secret := "secret-snapshot-fail"
@@ -790,6 +929,9 @@ func TestEligibleForDispatch_DiamondBlockedBranchSkipsInOnePass(t *testing.T) {
 		names[s.Name] = true
 		if s.Status != "skipped" || s.Error != "dependency failed" {
 			t.Fatalf("unexpected skip result: %+v", s)
+		}
+		if s.SkipReason == nil || s.SkipReason.Category != domain.SkipCategoryDependencyFailed || len(s.SkipReason.FailedDependencies) == 0 {
+			t.Fatalf("expected valid SkipReason on skipped task: %+v", s)
 		}
 	}
 	if !names["left"] || !names["right"] || !names["join"] {
@@ -1246,8 +1388,14 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 			var skippedNames []string
 			for _, tr := range gotSkipped {
 				skippedNames = append(skippedNames, tr.Name)
-				if tr.Status != "skipped" || tr.Error != "dependency failed" {
-					t.Fatalf("skipped task result = %+v, want skipped with 'dependency failed'", tr)
+				if tr.Status != "skipped" || (tr.Error != "dependency failed" && tr.Error != "dependency canceled") {
+					t.Fatalf("skipped task result = %+v, want skipped with dependency error", tr)
+				}
+				if tr.SkipReason == nil {
+					t.Fatalf("skipped task result = %+v, want non-nil SkipReason", tr)
+				}
+				if len(tr.SkipReason.FailedDependencies) == 0 {
+					t.Fatalf("skipped task result = %+v, want non-empty FailedDependencies", tr)
 				}
 			}
 			if len(skippedNames) != len(tt.wantSkipped) {
@@ -1285,6 +1433,88 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEligibleForDispatch_MultiDepAggregationAndSkipReason(t *testing.T) {
+	// 1. Manual gate with multiple failed dependencies
+	nodes := []dag.Node{
+		{Task: model.Task{Name: "b1"}},
+		{Task: model.Task{Name: "b2"}},
+		{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"b1", "b2"}}},
+	}
+	latest := map[string]domain.TaskResult{
+		"b1":   {Name: "b1", Status: "failed"},
+		"b2":   {Name: "b2", Status: "failed"},
+		"gate": {Name: "gate", Status: "manual"},
+	}
+	_, skipped, _ := eligibleForDispatch(nodes, latest, false)
+	if len(skipped) != 1 {
+		t.Fatalf("expected 1 skipped task, got %d", len(skipped))
+	}
+	g := skipped[0]
+	if g.SkipReason == nil {
+		t.Fatalf("expected non-nil SkipReason")
+	}
+	if g.SkipReason.Category != domain.SkipCategoryDependencyFailed {
+		t.Errorf("category = %q, want %q", g.SkipReason.Category, domain.SkipCategoryDependencyFailed)
+	}
+	if len(g.SkipReason.FailedDependencies) != 2 || g.SkipReason.FailedDependencies[0] != "b1" || g.SkipReason.FailedDependencies[1] != "b2" {
+		t.Errorf("failedDeps = %v, want [b1, b2]", g.SkipReason.FailedDependencies)
+	}
+	if g.SkipReason.Summary != "Dependency b1, b2 failed" {
+		t.Errorf("summary = %q, want 'Dependency b1, b2 failed'", g.SkipReason.Summary)
+	}
+
+	// 2. Regular task with one failed and one canceled dependency
+	regularNodes := []dag.Node{
+		{Task: model.Task{Name: "b1"}},
+		{Task: model.Task{Name: "b2"}},
+		{Task: model.Task{Name: "worker", DependsOn: []string{"b1", "b2"}}},
+	}
+	regularLatest := map[string]domain.TaskResult{
+		"b1": {Name: "b1", Status: "failed"},
+		"b2": {Name: "b2", Status: "canceled"},
+	}
+	_, regSkipped, _ := eligibleForDispatch(regularNodes, regularLatest, false)
+	if len(regSkipped) != 1 {
+		t.Fatalf("expected 1 skipped task, got %d", len(regSkipped))
+	}
+	w := regSkipped[0]
+	if w.SkipReason == nil {
+		t.Fatalf("expected non-nil SkipReason")
+	}
+	if w.SkipReason.Category != domain.SkipCategoryDependencyCanceled {
+		t.Errorf("category = %q, want %q", w.SkipReason.Category, domain.SkipCategoryDependencyCanceled)
+	}
+	if len(w.SkipReason.FailedDependencies) != 2 || w.SkipReason.FailedDependencies[0] != "b1" || w.SkipReason.FailedDependencies[1] != "b2" {
+		t.Errorf("failedDeps = %v, want [b1, b2]", w.SkipReason.FailedDependencies)
+	}
+	if w.SkipReason.Summary != "Dependency b1, b2 was canceled" {
+		t.Errorf("summary = %q, want 'Dependency b1, b2 was canceled'", w.SkipReason.Summary)
+	}
+
+	// 3. Chained dependency: dep was skipped with category dependency_canceled
+	chainNodes := []dag.Node{
+		{Task: model.Task{Name: "b2"}},
+		{Task: model.Task{Name: "worker", DependsOn: []string{"b2"}}},
+	}
+	chainLatest := map[string]domain.TaskResult{
+		"b2": {
+			Name:   "b2",
+			Status: "skipped",
+			SkipReason: &domain.SkipReason{
+				Category: domain.SkipCategoryDependencyCanceled,
+			},
+		},
+	}
+	_, chainSkipped, _ := eligibleForDispatch(chainNodes, chainLatest, false)
+	if len(chainSkipped) != 1 {
+		t.Fatalf("expected 1 skipped task, got %d", len(chainSkipped))
+	}
+	cw := chainSkipped[0]
+	if cw.SkipReason == nil || cw.SkipReason.Category != domain.SkipCategoryDependencyCanceled {
+		t.Errorf("category = %+v, want %q", cw.SkipReason, domain.SkipCategoryDependencyCanceled)
 	}
 }
 

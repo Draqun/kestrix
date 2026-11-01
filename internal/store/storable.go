@@ -23,6 +23,11 @@ func storable(s string) string {
 func cleanTaskResult(tr TaskResult) TaskResult {
 	tr.Output = storable(tr.Output)
 	tr.Error = storable(tr.Error)
+	if tr.SkipReason != nil {
+		sr := *tr.SkipReason
+		sr.Summary = storable(sr.Summary)
+		tr.SkipReason = &sr
+	}
 	return tr
 }
 

@@ -313,24 +313,31 @@ func (s *PGStore) CancelRun(id int, canceledBy string) (bool, error) {
 		case "running":
 			tr.Status = "canceled"
 			tr.Error = "canceled"
-		case "pending":
-			blocked := false
-			for _, dep := range depMap[name] {
+			tr.SkipReason = domain.NewRunCanceledSkipReason()
+		case domain.TaskStatusPending:
+			blocked, anyCanceled, failedDeps := domain.ScanBlockedDeps(depMap[name], func(dep string) (string, *domain.SkipReason, bool) {
 				if incomplete[dep] {
-					blocked = true
-					break
+					return domain.TaskStatusCanceled, domain.NewRunCanceledSkipReason(), true
 				}
-				if d, ok := latest[dep]; ok && (d.Status == "failed" || d.Status == "canceled" || d.Status == "skipped") {
-					blocked = true
-					break
+				d, ok := latest[dep]
+				if !ok {
+					return "", nil, false
 				}
-			}
+				sr := d.SkipReason
+				if sr == nil && d.Error == "dependency canceled" {
+					sr = &domain.SkipReason{Category: domain.SkipCategoryDependencyCanceled}
+				}
+				return d.Status, sr, true
+			})
 			if blocked {
-				tr.Status = "skipped"
-				tr.Error = "dependency canceled"
+				skipRes := domain.NewDependencySkipResult(name, failedDeps, anyCanceled)
+				tr.Status = skipRes.Status
+				tr.Error = skipRes.Error
+				tr.SkipReason = skipRes.SkipReason
 			} else {
-				tr.Status = "canceled"
+				tr.Status = domain.TaskStatusCanceled
 				tr.Error = "canceled"
+				tr.SkipReason = domain.NewRunCanceledSkipReason()
 			}
 		}
 		final = append(final, tr)
@@ -447,11 +454,11 @@ func (s *PGStore) FailInterruptedRuns(reason string) (int, error) {
 		for _, name := range order {
 			tr := latest[name]
 			switch tr.Status {
-			case "running":
-				tr.Status = "failed"
+			case domain.TaskStatusRunning:
+				tr.Status = domain.TaskStatusFailed
 				tr.Error = reason
-			case "pending":
-				tr.Status = "skipped"
+			case domain.TaskStatusPending:
+				tr.Status = domain.TaskStatusSkipped
 				tr.Error = reason
 			}
 			final = append(final, tr)

@@ -27,25 +27,14 @@ import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import DAGViewer from '../components/DAGViewer';
 import CopyButton from '../components/CopyButton';
-import { layoutFromProject } from '../lib/dagLayout';
+import SkipReasonPanel from '../components/SkipReasonPanel';
+import { getSkipSummary } from '../lib/skipReason';
+import { layoutFromProject, applyTaskResultsToDagNodes } from '../lib/dagLayout';
+import { formatStatus, isWaitingForManualApproval } from '../lib/status.js';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 import { useAuth } from '../context/AuthContext';
-
-
-
-
-function formatStatus(status) {
-  if (status === 'passed') return { color: 'success', label: 'PASSED' };
-  if (status === 'failed') return { color: 'error', label: 'FAILED' };
-  if (status === 'canceled') return { color: 'warning', label: 'CANCELED' };
-  if (status === 'queued') return { color: 'info', label: 'QUEUED' };
-  if (status === 'manual') return { color: 'info', label: 'MANUAL' };
-  if (status === 'skipped') return { color: 'default', label: 'SKIPPED' };
-  if (status === 'pending') return { color: 'default', label: 'PENDING' };
-  return { color: 'warning', label: 'RUNNING' };
-}
 
 // actorLabel renders an attribution actor string for display: an empty or
 // missing actor (a run recorded before run-attribution existed) shows as
@@ -57,13 +46,8 @@ function actorLabel(actor) {
 }
 
 function isManualWaiting(job, pipelineDef, allJobs) {
-  if (!job) return false;
-  const waiting = job.status === 'manual' ||
-    (job.status === 'skipped' && job.error !== 'dependency failed' && job.error !== 'dependency canceled');
-  if (!waiting) return false;
-  // Must be manual in pipeline definition.
-  const t = pipelineDef?.tasks?.find(x => (x.name || x.Name) === job.name);
-  if (!(t?.manual ?? t?.Manual)) return false;
+  const t = pipelineDef?.tasks?.find(x => (x.name || x.Name) === job?.name);
+  if (!t || !isWaitingForManualApproval(job, t)) return false;
   // All dependencies must have passed.
   const deps = t.depends_on || t.DependsOn || [];
   if (deps.length === 0) return true;
@@ -73,6 +57,15 @@ function isManualWaiting(job, pipelineDef, allJobs) {
 }
 
 const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];
+
+const SKIPPED_SECONDARY_SX = {
+  fontSize: '0.7rem',
+  color: 'text.secondary',
+  display: 'block',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
 
 // canRerun reports whether a task of a run may be re-run on its own: the run
 // and the task must both have finished (passed, failed, or canceled). A task
@@ -186,17 +179,7 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
       }),
     };
     const { nodes: n, edges: e } = layoutFromProject(proj);
-    const statusMap = {};
-    (detail.task_results || []).forEach(t => { statusMap[t.name] = t.status; });
-    setDagNodes(n.map(node => {
-      if (node.data.type === 'task') {
-        const taskName = node.id.replace('task:', '');
-        if (statusMap[taskName]) {
-          return { ...node, data: { ...node.data, runStatus: statusMap[taskName] } };
-        }
-      }
-      return node;
-    }));
+    setDagNodes(applyTaskResultsToDagNodes(n, detail.task_results));
     setDagEdges(e);
   }, [detail?.pipeline_def, detail?.task_results]);
 
@@ -255,6 +238,9 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
     return Object.values(map);
   })();
   const activeJob = selectedJob != null ? jobs.find(j => j.name === selectedJob) : null;
+  const activeTaskDef = (r?.pipeline_def?.tasks || []).find(
+    t => (t.name ?? t.Name) === activeJob?.name
+  );
 
   return (
     <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
@@ -320,10 +306,13 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
                         <Chip label={js.label} color={js.color} size="small" sx={{ mr: 1, minWidth: 54 }} />
                         <ListItemText
                           primary={job.name}
-                          secondary={formatDuration(job.duration)}
+                          secondary={job.status === 'skipped' ? getSkipSummary(job) : formatDuration(job.duration)}
                           slotProps={{
                             primary: { variant: 'body2', fontWeight: 600 },
-                            secondary: { variant: 'caption' },
+                            secondary: {
+                              variant: 'caption',
+                              sx: job.status === 'skipped' ? SKIPPED_SECONDARY_SX : {}
+                            },
                           }}
                         />
                       </ListItemButton>
@@ -380,7 +369,7 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
                     {activeJob.approved_at && ` at ${new Date(activeJob.approved_at).toLocaleString()}`}
                   </Typography>
                 )}
-                {activeJob.error && activeJob.status !== 'manual' && (
+                {activeJob.error && activeJob.status !== 'manual' && activeJob.status !== 'skipped' && (
                   <Alert severity="error" sx={{ mb: 1, mx: 1 }}>{activeJob.error}</Alert>
                 )}
                 {activeJob.waiting_reason && (
@@ -389,12 +378,23 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
                 {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
                   <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>
                 )}
-                <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                  <CopyButton text={activeJob.output || ''} />
-                  <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                    {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
+
+                <SkipReasonPanel
+                  job={activeJob}
+                  taskDef={activeTaskDef}
+                  jobs={jobs}
+                  changed={r?.changed}
+                  onSelectJob={setSelectedJob}
+                />
+
+                {(activeJob.output || activeJob.status !== 'skipped') && (
+                  <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <CopyButton text={activeJob.output || ''} />
+                    <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                      {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
+                    </Box>
                   </Box>
-                </Box>
+                )}
             </>
             ) : (
               <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }}>

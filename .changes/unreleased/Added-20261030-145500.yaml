@@ -1,0 +1,3 @@
+kind: Added
+body: Add interactive trigger condition inspection panel in the UI to display declared expressions, evaluated terms, and upstream dependency statuses for skipped tasks, and unify Dashboard canceled status chip color with the shared warning palette.
+time: 2026-10-30T14:55:00.00000000+01:00
