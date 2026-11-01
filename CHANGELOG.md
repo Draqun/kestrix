@@ -3,6 +3,40 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.4.0] - 2026-11-01
+### Added
+- Release automation tooling (`scripts/release.py`, `scripts/verify_version.py`, `scripts/verify_version_bump.py`, `scripts/generate_release_notes.py`) and Makefile targets (`release`, `release-push`, `release-dry-run`, `release-notes`).
+- GitLab CI release jobs with dynamic release notes extraction and tag version verification.
+- GitHub repository mirror (`Draqun/kestrix`) with automated multi-platform binary releases via GoReleaser and GitHub Actions.
+- Changie changelog fragment management (`.changie.yaml`, `.changes/`), MR verification gate (`scripts/verify_changelog.py`, `make changelog-check`), and developer workflow targets (`make changelog-new`, `make changelog-batch`).
+- Conductor-baton and dependency-graph logo, shared across the application header, sign-in and setup screens, and favicon; direct dashboard links to pipelines and keyboard access to recent run details.
+- Add structured `skip_reason` field to task results API with trigger evaluation details, failed upstream dependencies, and run cancellation tracking across local runner and remote dispatch.
+- Add interactive trigger condition inspection panel in the UI to display declared expressions, evaluated terms, and upstream dependency statuses for skipped tasks, and unify Dashboard canceled status chip color with the shared warning palette.
+- Propose cancel-in-progress OpenSpec change for automatically canceling superseded runs on matching ref
+- Add OpenSpec proposals for runner-offline-trace-spooling, ui-realtime-sse, and task-timeout
+- Publish production container images to Docker Hub on release tags
+### Changed
+- Refreshed light and dark themes with IBM Plex typography, neutral surfaces, teal accents, consolidated dashboard metrics, and responsive mobile/tablet navigation.
+### Fixed
+- Avoid building the CLI binary in short test mode and extend test timeout to 20m in CI.
+- Harden create-release-tag job to validate CI_RELEASE_TOKEN and fail loudly on push errors
+- Map Changed kind to minor version bump in Changie configuration
+
+## [v0.3.1] - 2026-10-29
+
+### Added
+
+- Conductor-baton and dependency-graph logo, shared across the application header, sign-in and setup screens, and favicon.
+- Direct dashboard links to pipelines and keyboard access to recent run details.
+- `make version-bump-check` to run the CI changelog version gate locally against `origin/main` or an explicit `TARGET_REF`.
+
+### Changed
+
+- Refreshed light and dark themes with IBM Plex typography, neutral surfaces, teal accents, and consistent styling for shared controls and tables.
+- Consolidated dashboard metrics into a shared strip, limited recent runs to five entries with access to the full list, and arranged quick-start and architecture references side by side on wide screens.
+- Replaced the recent-runs table with stacked rows on phones and improved bottom navigation spacing. Tablet navigation now opens on demand and closes after selecting a destination.
+- Documented the required version bump, release notes, and local version-bump check before pushing merge requests.
+
 ## [v0.3.0] - 2026-10-25
 
 ### Added
