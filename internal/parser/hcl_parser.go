@@ -80,20 +80,23 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 	// Iterate ALL top-level items of the body so we get both attributes and
 	// blocks, delegating each to the proper extractor.
 	for _, item := range blk.Body.Attributes {
-		var val string
-		var err error
 		switch item.Name {
 		case "default_image":
-			val, err = evalInterpolatedString(item.Expr, vc, "default_image")
-		default:
-			val, err = literal(item.Expr, item.Name)
-		}
-		if err != nil {
-			return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
-		}
-		switch item.Name {
-		case "default_image":
+			val, err := evalInterpolatedString(item.Expr, vc, "default_image")
+			if err != nil {
+				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
+			}
 			proj.DefaultImage = val
+		case "cancel_in_progress":
+			b, err := literalBool(item.Expr, "cancel_in_progress")
+			if err != nil {
+				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
+			}
+			proj.CancelInProgress = b
+		default:
+			if _, err := literal(item.Expr, item.Name); err != nil {
+				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
+			}
 		}
 	}
 
@@ -542,6 +545,20 @@ func literal(expr hcl.Expression, fieldName ...string) (string, error) {
 	}
 }
 
+func literalBool(expr hcl.Expression, fieldName string) (bool, error) {
+	switch e := expr.(type) {
+	case *hclsyntax.LiteralValueExpr:
+		if e.Val.Type() == cty.Bool {
+			return e.Val.True(), nil
+		}
+		return false, fmt.Errorf("%s must be a boolean, got %s", fieldName, e.Val.Type().FriendlyName())
+	case *hclsyntax.TemplateExpr, *hclsyntax.TemplateWrapExpr:
+		return false, fmt.Errorf("%s must be a boolean, got string", fieldName)
+	default:
+		return false, fmt.Errorf("%s must be a boolean", fieldName)
+	}
+}
+
 func tupleStrings(e *hclsyntax.TupleConsExpr) ([]string, error) {
 	out := make([]string, 0, len(e.Exprs))
 	for _, ex := range e.Exprs {
@@ -620,6 +637,9 @@ func ParseDir(dir string) (model.Project, error) {
 		}
 		if p.DefaultImage != "" {
 			proj.DefaultImage = p.DefaultImage
+		}
+		if p.CancelInProgress {
+			proj.CancelInProgress = true
 		}
 	}
 	return proj, nil

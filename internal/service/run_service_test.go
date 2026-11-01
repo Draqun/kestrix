@@ -1822,14 +1822,15 @@ func (s *seqRunStore) SetCanceledBy(int, string) error               { return ni
 func (s *seqRunStore) ApplyTaskResult(int, domain.TaskResult, string) (string, error) {
 	return "", nil
 }
-func (s *seqRunStore) GetRun(int) (*domain.Run, error)                 { return nil, nil }
-func (s *seqRunStore) CountRuns(string) (int, error)                   { return 0, nil }
-func (s *seqRunStore) ListRuns(string, int, int) ([]domain.Run, error) { return nil, nil }
-func (s *seqRunStore) ListAllRuns(int) ([]domain.Run, error)           { return nil, nil }
-func (s *seqRunStore) CountRunsByStatus() (map[string]int, error)      { return nil, nil }
-func (s *seqRunStore) FailInterruptedRuns(string) (int, error)         { return 0, nil }
-func (s *seqRunStore) SetRunQueued(int) error                          { return nil }
-func (s *seqRunStore) StartQueuedRun(int) (bool, error)                { return true, nil }
+func (s *seqRunStore) GetRun(int) (*domain.Run, error)                   { return nil, nil }
+func (s *seqRunStore) CountRuns(string) (int, error)                     { return 0, nil }
+func (s *seqRunStore) ListRuns(string, int, int) ([]domain.Run, error)   { return nil, nil }
+func (s *seqRunStore) ListAllRuns(int) ([]domain.Run, error)             { return nil, nil }
+func (s *seqRunStore) CountRunsByStatus() (map[string]int, error)        { return nil, nil }
+func (s *seqRunStore) FailInterruptedRuns(string) (int, error)           { return 0, nil }
+func (s *seqRunStore) SetRunQueued(int) error                            { return nil }
+func (s *seqRunStore) StartQueuedRun(int) (bool, error)                  { return true, nil }
+func (s *seqRunStore) FindActiveRunsByRef(string, string) ([]int, error) { return nil, nil }
 
 // twoSlotBlockRunner blocks each Run call on its own release channel so a
 // test can complete one run while the other stays active. started is

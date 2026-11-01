@@ -616,9 +616,33 @@ func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 	return out, nil
 }
 
+func primarySourceRef(opts domain.RunnerOptions) string {
+	for _, src := range opts.InitialSources {
+		if src.Primary && src.RequestedRef != "" {
+			return src.RequestedRef
+		}
+	}
+	return ""
+}
+
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+	if proj != nil && proj.CancelInProgress && s.runStore != nil {
+		if ref := primarySourceRef(opts); ref != "" {
+			activeRuns, err := s.runStore.FindActiveRunsByRef(projectName, ref)
+			if err != nil {
+				slog.Warn("could not find active runs to cancel", "project", projectName, "ref", ref, "err", err)
+			} else {
+				for _, oldRunID := range activeRuns {
+					if cancelErr := s.Cancel(ctx, oldRunID, "system:cancel-in-progress"); cancelErr != nil {
+						slog.Warn("could not cancel superseded run", "run_id", oldRunID, "err", cancelErr)
+					}
+				}
+			}
+		}
+	}
+
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		// No in-process execution at all for a remote-mode project: no
 		// goroutine, no active/done entry, no concurrency slot - see
@@ -631,6 +655,13 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
 	if err != nil {
 		return 0, err
+	}
+	if proj != nil && proj.CancelInProgress && len(opts.InitialSources) > 0 {
+		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
+			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
+				slog.Warn("could not persist initial run sources", "run_id", runID, "err", err)
+			}
+		}
 	}
 	startedAt := time.Now()
 	slog.Info("run started", "run_id", runID, "project", projectName, "account", opts.Actor)

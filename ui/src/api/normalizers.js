@@ -12,6 +12,7 @@ export function normalizeProject(proj) {
   if (proj.tasks) normalized.Tasks = proj.tasks;
   if (proj.default_image) normalized.DefaultImage = proj.default_image;
   if (proj.variables) normalized.Variables = proj.variables;
+  if (proj.cancel_in_progress !== undefined) normalized.CancelInProgress = proj.cancel_in_progress;
 
   // Nested repo fields
   if (normalized.Repos) {

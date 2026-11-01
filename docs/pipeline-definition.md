@@ -8,7 +8,8 @@ A pipeline starts with a `project` block. The project name is the label and serv
 
 ```hcl
 project "my-service" {
-  default_image = "golang:1.22"
+  default_image      = "golang:1.22"
+  cancel_in_progress = true
 
   # ci_repo, ci_task, and variable blocks go here
 }
@@ -17,6 +18,7 @@ project "my-service" {
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `default_image` | string | No | Fallback container image for tasks without an explicit image |
+| `cancel_in_progress` | bool | No | When true, new runs on a branch or ref automatically cancel earlier running or queued runs on that same branch (default: `false`) |
 
 ## Repositories (`ci_repo`)
 

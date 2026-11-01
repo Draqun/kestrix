@@ -417,6 +417,22 @@ func TestMockRemoteJobStore_UnmatchedPendingJobs(t *testing.T) {
 	}
 }
 
+func TestMockRunStore_FindActiveRunsByRef(t *testing.T) {
+	m := &MockRunStore{
+		FindActiveRunsByRefResult: []int{101, 102},
+	}
+	ids, err := m.FindActiveRunsByRef("proj-a", "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != 101 || ids[1] != 102 {
+		t.Fatalf("unexpected ids: %v", ids)
+	}
+	if len(m.FindActiveRunsByRefCalls) != 1 || m.FindActiveRunsByRefCalls[0].ProjectName != "proj-a" || m.FindActiveRunsByRefCalls[0].Ref != "feat/x" {
+		t.Fatalf("unexpected calls: %+v", m.FindActiveRunsByRefCalls)
+	}
+}
+
 var errNotFound = &notFoundErr{}
 
 type notFoundErr struct{}

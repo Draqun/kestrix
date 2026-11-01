@@ -238,6 +238,9 @@ type RunStore interface {
 	ListRuns(projectName string, limit, offset int) ([]Run, error)
 	ListAllRuns(limit int) ([]Run, error)
 	CountRunsByStatus() (map[string]int, error)
+	// FindActiveRunsByRef returns IDs of all non-terminal runs ("running", "queued")
+	// for the given project whose primary acquired source matches ref.
+	FindActiveRunsByRef(projectName, ref string) ([]int, error)
 }
 
 // Remote job and job-task statuses; see remote-runner-execution spec.md.

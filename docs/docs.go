@@ -1137,6 +1137,9 @@ const docTemplate = `{
         "domain.Project": {
             "type": "object",
             "properties": {
+                "cancel_in_progress": {
+                    "type": "boolean"
+                },
                 "default_image": {
                     "type": "string"
                 },
@@ -1428,6 +1431,9 @@ const docTemplate = `{
         "model.Project": {
             "type": "object",
             "properties": {
+                "cancel_in_progress": {
+                    "type": "boolean"
+                },
                 "default_image": {
                     "type": "string"
                 },
