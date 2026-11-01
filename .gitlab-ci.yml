@@ -266,6 +266,9 @@ build:
 publish-image:
   extends: [.release-rules, .release-needs]
   stage: release
+  environment:
+    name: prod
+    url: https://hub.docker.com/r/draqun/kestrix
   image: docker:27
   services:
     - docker:27-dind
@@ -285,6 +288,19 @@ publish-image:
         echo "publish-image: $CI_COMMIT_TAG is not the newest release tag - skipping :latest"
       fi
       DOCKER_IMAGE="$CI_REGISTRY_IMAGE" DOCKER_TAG="$CI_COMMIT_TAG" DOCKER_REGISTRY="$CI_REGISTRY" DOCKER_USERNAME="$CI_REGISTRY_USER" DOCKER_PASSWORD="$CI_REGISTRY_PASSWORD" SKIP_LATEST="$skip_latest" bash scripts/docker-push.sh
+    - |
+      DOCKERHUB_PASS="${DOCKERHUB_TOKEN:-${DOCKERHUB_PASSWORD:-}}"
+      if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_PASS}" ]; then
+        echo "=== Publishing to Docker Hub ==="
+        DOCKERHUB_REPO="${DOCKERHUB_IMAGE:-${DOCKERHUB_USERNAME}/kestrix}"
+        docker tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_TAG}" "${DOCKERHUB_REPO}:${CI_COMMIT_TAG}"
+        if [ -z "$skip_latest" ]; then
+          docker tag "${CI_REGISTRY_IMAGE}:latest" "${DOCKERHUB_REPO}:latest"
+        fi
+        DOCKER_IMAGE="$DOCKERHUB_REPO" DOCKER_TAG="$CI_COMMIT_TAG" DOCKER_REGISTRY="docker.io" DOCKER_USERNAME="$DOCKERHUB_USERNAME" DOCKER_PASSWORD="$DOCKERHUB_PASS" SKIP_LATEST="$skip_latest" bash scripts/docker-push.sh
+      else
+        echo "Docker Hub credentials not configured (DOCKERHUB_USERNAME and DOCKERHUB_TOKEN/DOCKERHUB_PASSWORD) — skipping Docker Hub publication"
+      fi
 
 release-binary:
   extends: [.release-rules, .release-needs]
@@ -333,6 +349,13 @@ create-release-tag:
     - apk add --no-cache python3 git curl jq
   script:
     - |
+      if [ -z "${CI_RELEASE_TOKEN:-}" ]; then
+        echo "ERROR: CI_RELEASE_TOKEN is not configured in Project Settings -> CI/CD -> Variables."
+        echo "GitLab CI_JOB_TOKEN does not have permission to push commits and tags to protected branches."
+        echo "Please add CI_RELEASE_TOKEN (Project Access Token or Personal Access Token with Maintainer role and 'write_repository' scope)."
+        exit 1
+      fi
+
       # Install Changie for assembling changelog from fragments
       CHANGIE_VERSION="1.26.0"
       curl -fsSL "https://github.com/miniscruff/changie/releases/download/v${CHANGIE_VERSION}/changie_${CHANGIE_VERSION}_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin changie
@@ -366,6 +389,9 @@ create-release-tag:
         exit 0
       fi
 
+      # Set authenticated remote URL
+      git remote set-url origin "https://gitlab-ci-token:${CI_RELEASE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+
       # Build CHANGELOG.md from fragments if unreleased fragments exist
       if find .changes/unreleased -type f ! -name .gitkeep 2>/dev/null | grep -q .; then
         echo "Assembling CHANGELOG.md for $TAG using Changie..."
@@ -377,13 +403,8 @@ create-release-tag:
         git add CHANGELOG.md .changes
         git commit -m "chore: release $TAG [skip ci]"
 
-        if [ -n "$CI_RELEASE_TOKEN" ]; then
-          git remote set-url origin "https://gitlab-ci-token:${CI_RELEASE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-          git push origin "HEAD:refs/heads/$CI_COMMIT_BRANCH" -o ci.skip
-        elif [ -n "$CI_JOB_TOKEN" ]; then
-          git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-          git push origin "HEAD:refs/heads/$CI_COMMIT_BRANCH" -o ci.skip || echo "Pushing changelog commit with CI_JOB_TOKEN failed."
-        fi
+        echo "Pushing changelog commit to $CI_COMMIT_BRANCH..."
+        git push origin "HEAD:refs/heads/$CI_COMMIT_BRANCH" -o ci.skip
       fi
 
       echo "Creating tag $TAG"
@@ -396,17 +417,9 @@ create-release-tag:
 
       git tag -a "$TAG" -m "Release $TAG"
 
-      if [ -n "$CI_RELEASE_TOKEN" ]; then
-        git remote set-url origin "https://gitlab-ci-token:${CI_RELEASE_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-        git push origin "$TAG"
-        echo "Tag $TAG pushed successfully"
-      elif [ -n "$CI_JOB_TOKEN" ]; then
-        git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-        git push origin "$TAG" || echo "Tag push with CI_JOB_TOKEN failed (configure CI_RELEASE_TOKEN in Project Settings -> CI/CD -> Variables)."
-      else
-        echo "WARNING: CI_RELEASE_TOKEN not configured. Please add CI_RELEASE_TOKEN in Project Settings to allow automated tag push."
-        exit 1
-      fi
+      echo "Pushing tag $TAG to origin..."
+      git push origin "$TAG"
+      echo "Tag $TAG pushed successfully"
 
 # ─── GitLab Pages ───────────────────────────────────────────
 

@@ -1,0 +1,3 @@
+kind: Fixed
+body: Harden create-release-tag job to validate CI_RELEASE_TOKEN and fail loudly on push errors
+time: 2026-11-01T10:38:35.052387323+01:00
