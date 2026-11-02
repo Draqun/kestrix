@@ -438,10 +438,10 @@ func TestRunService_Start_CancelInProgress_RemoteMode(t *testing.T) {
 	}
 
 	// Verify FindActiveRunsByRef was called
-	if len(mockRun.FindActiveRunsByRefCalls) != 1 {
-		t.Fatalf("expected 1 FindActiveRunsByRef call, got %d", len(mockRun.FindActiveRunsByRefCalls))
+	if len(mockRun.FindActiveCalls) != 1 {
+		t.Fatalf("expected 1 FindActiveRunsByRef call, got %d", len(mockRun.FindActiveCalls))
 	}
-	call := mockRun.FindActiveRunsByRefCalls[0]
+	call := mockRun.FindActiveCalls[0]
 	if call.ProjectName != "remote-proj" || call.Ref != "feat/remote" {
 		t.Errorf("unexpected FindActiveRunsByRef call: %+v", call)
 	}
@@ -572,7 +572,7 @@ func TestRunService_Start_CancelInProgress_NoPrimarySourceRefIsNoop(t *testing.T
 	if runID != 58 {
 		t.Errorf("runID = %d, want 58", runID)
 	}
-	if len(mockRun.FindActiveRunsByRefCalls) != 0 {
-		t.Errorf("expected 0 FindActiveRunsByRef calls, got %d", len(mockRun.FindActiveRunsByRefCalls))
+	if len(mockRun.FindActiveCalls) != 0 {
+		t.Errorf("expected 0 FindActiveRunsByRef calls, got %d", len(mockRun.FindActiveCalls))
 	}
 }

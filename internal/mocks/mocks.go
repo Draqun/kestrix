@@ -231,12 +231,12 @@ type MockRunStore struct {
 	StartQueuedRunErr         error
 	SetCanceledByCalls        []cancelRunCall
 	SetCanceledByErr          error
-	FindActiveRunsByRefCalls  []findActiveRunsByRefCall
+	FindActiveCalls           []findActiveCall
 	FindActiveRunsByRefResult []int
 	FindActiveRunsByRefErr    error
 }
 
-type findActiveRunsByRefCall struct {
+type findActiveCall struct {
 	ProjectName string
 	Ref         string
 }
@@ -447,7 +447,7 @@ func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 func (m *MockRunStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.FindActiveRunsByRefCalls = append(m.FindActiveRunsByRefCalls, findActiveRunsByRefCall{projectName, ref})
+	m.FindActiveCalls = append(m.FindActiveCalls, findActiveCall{projectName, ref})
 	return m.FindActiveRunsByRefResult, m.FindActiveRunsByRefErr
 }
 
