@@ -81,6 +81,7 @@ go test -run TestWebhook ./internal/web/ -count=1
   - Create a fragment with: `make changelog-new KIND=<Added|Changed|Fixed|Deprecated|Removed|Security> BODY="<description>"` (or write a YAML file in `.changes/unreleased/`).
   - Allowed kinds: `Added`, `Changed`, `Fixed`, `Deprecated`, `Removed`, `Security`.
 - **Run the changelog gate before creating or updating an MR:** fetch the target branch, then run `make changelog-check TARGET_REF=origin/<target-branch>`. Use `jj git fetch` in jj workspaces. CI blocks MRs missing unreleased fragments unless `[skip changelog]` is in the commit message.
+- **Deferred items require an OpenSpec specification in the same MR:** Whenever an issue, review finding (`REVIEW.md`), architectural debt, or feature slice is marked `DEFERRED` (odroczone na przyszłość), it MUST NOT be left as an informal note, forgotten comment, or vague TODO. It MUST receive its own formal OpenSpec proposal/specification (in `openspec/changes/<change-name>/`) within the very same MR in which the decision to defer is made.
 - No secrets in repo; env vars (`KESTRIX_*`, `DATABASE_URL`)
 - Do not invent Makefile targets — extend Makefile if needed
 - FE hooks: never after early returns (Rules of Hooks)
