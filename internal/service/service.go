@@ -634,6 +634,10 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	if err != nil {
 		return 0, err
 	}
+	// Persist initial sources immediately when cancel_in_progress is enabled so
+	// subsequent pushes to the same ref can discover and cancel this run even
+	// while it is still queued or waiting for background execution. See follow-up
+	// OpenSpec change atomic-run-sources for atomic CreateRun-with-sources unification.
 	if proj != nil && proj.CancelInProgress && len(opts.InitialSources) > 0 {
 		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
 			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
