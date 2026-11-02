@@ -638,6 +638,8 @@ func ParseDir(dir string) (model.Project, error) {
 		if p.DefaultImage != "" {
 			proj.DefaultImage = p.DefaultImage
 		}
+		// In a multi-file pipeline directory, cancel_in_progress is merged with
+		// OR semantics: if any file enables cancel_in_progress, the project enables it.
 		if p.CancelInProgress {
 			proj.CancelInProgress = true
 		}
