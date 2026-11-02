@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"kestrix/internal/domain"
 	"kestrix/internal/model"
@@ -36,9 +37,15 @@ func (s *RunService) cancelSupersededRuns(ctx context.Context, projectName strin
 		slog.Warn("could not find active runs to cancel", "project", projectName, "ref", ref, "err", err)
 		return
 	}
+	var wg sync.WaitGroup
 	for _, oldRunID := range activeRuns {
-		if cancelErr := s.Cancel(ctx, oldRunID, CancelActorSystemCancelInProgress); cancelErr != nil {
-			slog.Warn("could not cancel superseded run", "run_id", oldRunID, "err", cancelErr)
-		}
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			if cancelErr := s.Cancel(ctx, id, CancelActorSystemCancelInProgress); cancelErr != nil {
+				slog.Warn("could not cancel superseded run", "run_id", id, "err", cancelErr)
+			}
+		}(oldRunID)
 	}
+	wg.Wait()
 }
