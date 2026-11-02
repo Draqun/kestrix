@@ -132,6 +132,7 @@ func TestProject_JSONRoundTrip(t *testing.T) {
 		Variables: []Variable{
 			{Key: "FOO", Value: "bar", Protected: true},
 		},
+		CancelInProgress: true,
 	}
 	data, err := json.Marshal(proj)
 	if err != nil {
@@ -163,6 +164,9 @@ func TestProject_JSONRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Variables) != 1 || decoded.Variables[0].Key != "FOO" || !decoded.Variables[0].Protected {
 		t.Errorf("Variables round-trip mismatch: %+v", decoded.Variables)
+	}
+	if !decoded.CancelInProgress {
+		t.Errorf("CancelInProgress round-trip mismatch: %+v", decoded)
 	}
 }
 

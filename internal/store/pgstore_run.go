@@ -759,3 +759,37 @@ func (s *PGStore) CountRunsByStatus() (map[string]int, error) {
 	}
 	return result, rows.Err()
 }
+
+// FindActiveRunsByRef returns IDs of all non-terminal runs ("running", "queued")
+// for the given project whose primary acquired source matches ref.
+func (s *PGStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
+	rows, err := s.db.Query(
+		`SELECT id FROM runs
+		WHERE project_name = $1
+		  AND status IN ('running', 'queued')
+		  AND jsonb_typeof(sources) = 'array'
+		  AND EXISTS (
+		    SELECT 1 FROM jsonb_array_elements(sources) AS src
+		    WHERE src->>'primary' = 'true' AND src->>'requested_ref' = $2
+		  )
+		ORDER BY id ASC`,
+		projectName, ref,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find active runs by ref: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan active run id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active runs: %w", err)
+	}
+	return ids, nil
+}

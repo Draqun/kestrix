@@ -1631,3 +1631,137 @@ func TestPG_NewPG_ConnectionFailed(t *testing.T) {
 		t.Fatal("expected error for unreachable database")
 	}
 }
+
+func TestPG_FindActiveRunsByRef(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-cip", "")
+	mustUpsert(t, pg, "proj-other", "")
+
+	// 1. Running on feat/cip
+	id1 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id1, []domain.AcquiredSource{{
+		RepoName:     "proj-cip",
+		RequestedRef: "feat/cip",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id1: %v", err)
+	}
+
+	// 2. Queued on feat/cip
+	id2 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id2, []domain.AcquiredSource{{
+		RepoName:     "proj-cip",
+		RequestedRef: "feat/cip",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id2: %v", err)
+	}
+	if err := pg.SetRunQueued(id2); err != nil {
+		t.Fatalf("SetRunQueued id2: %v", err)
+	}
+
+	// 3. Running on feat/other-branch
+	id3 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id3, []domain.AcquiredSource{{
+		RepoName:     "proj-cip",
+		RequestedRef: "feat/other-branch",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id3: %v", err)
+	}
+
+	// 4. Running on feat/cip but for different project
+	id4 := mustCreateRun(t, pg, "proj-other", nil)
+	if err := pg.UpdateRunSources(id4, []domain.AcquiredSource{{
+		RepoName:     "proj-other",
+		RequestedRef: "feat/cip",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id4: %v", err)
+	}
+
+	// 5. Passed on feat/cip (terminal)
+	id5 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id5, []domain.AcquiredSource{{
+		RepoName:     "proj-cip",
+		RequestedRef: "feat/cip",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id5: %v", err)
+	}
+	if err := pg.FinishRun(id5, "passed", "", "", nil); err != nil {
+		t.Fatalf("FinishRun id5: %v", err)
+	}
+
+	// 6. Canceled on feat/cip (terminal)
+	id6 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id6, []domain.AcquiredSource{{
+		RepoName:     "proj-cip",
+		RequestedRef: "feat/cip",
+		Primary:      true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id6: %v", err)
+	}
+	if _, err := pg.CancelRun(id6, "user:test"); err != nil {
+		t.Fatalf("CancelRun id6: %v", err)
+	}
+
+	// 7. Running with multiple sources (primary feat/cip, secondary main)
+	id7 := mustCreateRun(t, pg, "proj-cip", nil)
+	if err := pg.UpdateRunSources(id7, []domain.AcquiredSource{
+		{
+			RepoName:     "proj-cip",
+			RequestedRef: "feat/cip",
+			Primary:      true,
+		},
+		{
+			RepoName:     "sub-lib",
+			RequestedRef: "main",
+			Primary:      false,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateRunSources id7: %v", err)
+	}
+
+	// Query for proj-cip on feat/cip: must return id1, id2, id7
+	active1, err := pg.FindActiveRunsByRef("proj-cip", "feat/cip")
+	if err != nil {
+		t.Fatalf("FindActiveRunsByRef: %v", err)
+	}
+	want1 := []int{id1, id2, id7}
+	if len(active1) != len(want1) {
+		t.Fatalf("active runs for feat/cip: got %v, want %v", active1, want1)
+	}
+	for i, id := range want1 {
+		if active1[i] != id {
+			t.Errorf("active runs [%d]: got %d, want %d", i, active1[i], id)
+		}
+	}
+
+	// Query for proj-cip on feat/other-branch: must return id3
+	active2, err := pg.FindActiveRunsByRef("proj-cip", "feat/other-branch")
+	if err != nil {
+		t.Fatalf("FindActiveRunsByRef: %v", err)
+	}
+	if len(active2) != 1 || active2[0] != id3 {
+		t.Fatalf("active runs for feat/other-branch: got %v, want [%d]", active2, id3)
+	}
+
+	// Query for proj-other on feat/cip: must return id4
+	active3, err := pg.FindActiveRunsByRef("proj-other", "feat/cip")
+	if err != nil {
+		t.Fatalf("FindActiveRunsByRef: %v", err)
+	}
+	if len(active3) != 1 || active3[0] != id4 {
+		t.Fatalf("active runs for proj-other feat/cip: got %v, want [%d]", active3, id4)
+	}
+
+	// Query for secondary branch main on proj-cip: must return empty
+	active4, err := pg.FindActiveRunsByRef("proj-cip", "main")
+	if err != nil {
+		t.Fatalf("FindActiveRunsByRef: %v", err)
+	}
+	if len(active4) != 0 {
+		t.Fatalf("active runs for proj-cip main (secondary): got %v, want empty", active4)
+	}
+}

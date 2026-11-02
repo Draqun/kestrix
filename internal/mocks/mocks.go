@@ -204,33 +204,41 @@ type MockRunStore struct {
 	// CancelRunNoChange makes CancelRun report changed=false (as if a
 	// concurrent caller, or an already-terminal run, beat this call to the
 	// transition) instead of the default changed=true.
-	CancelRunNoChange     bool
-	ApplyTaskCalls        []applyTaskCall
-	ApplyTaskCh           chan struct{} // closed once after the first ApplyTaskResult call
-	applyOnce             sync.Once     // protects ApplyTaskCh from double-close
-	ApplyTaskErr          error
-	GetRunResult          *domain.Run
-	GetRunErr             error
-	CountRunsResult       int
-	CountRunsErr          error
-	ListRunsResult        []domain.Run
-	ListRunsErr           error
-	ListAllRunsResult     []domain.Run
-	ListAllRunsErr        error
-	CountByStatusResult   map[string]int
-	CountByStatusErr      error
-	UpdateSourcesCalls    [][]domain.AcquiredSource
-	UpdateSourcesErr      error
-	FailInterruptedCalls  []string
-	FailInterruptedResult int
-	FailInterruptedErr    error
-	SetRunQueuedCalls     []int
-	SetRunQueuedErr       error
-	StartQueuedRunCalls   []int
-	StartQueuedRunResult  bool
-	StartQueuedRunErr     error
-	SetCanceledByCalls    []cancelRunCall
-	SetCanceledByErr      error
+	CancelRunNoChange         bool
+	ApplyTaskCalls            []applyTaskCall
+	ApplyTaskCh               chan struct{} // closed once after the first ApplyTaskResult call
+	applyOnce                 sync.Once     // protects ApplyTaskCh from double-close
+	ApplyTaskErr              error
+	GetRunResult              *domain.Run
+	GetRunErr                 error
+	CountRunsResult           int
+	CountRunsErr              error
+	ListRunsResult            []domain.Run
+	ListRunsErr               error
+	ListAllRunsResult         []domain.Run
+	ListAllRunsErr            error
+	CountByStatusResult       map[string]int
+	CountByStatusErr          error
+	UpdateSourcesCalls        [][]domain.AcquiredSource
+	UpdateSourcesErr          error
+	FailInterruptedCalls      []string
+	FailInterruptedResult     int
+	FailInterruptedErr        error
+	SetRunQueuedCalls         []int
+	SetRunQueuedErr           error
+	StartQueuedRunCalls       []int
+	StartQueuedRunResult      bool
+	StartQueuedRunErr         error
+	SetCanceledByCalls        []cancelRunCall
+	SetCanceledByErr          error
+	FindActiveCalls           []findActiveCall
+	FindActiveRunsByRefResult []int
+	FindActiveRunsByRefErr    error
+}
+
+type findActiveCall struct {
+	ProjectName string
+	Ref         string
 }
 
 type createRunCall struct {
@@ -435,6 +443,12 @@ func (m *MockRunStore) ListAllRuns(int) ([]domain.Run, error) {
 }
 func (m *MockRunStore) CountRunsByStatus() (map[string]int, error) {
 	return m.CountByStatusResult, m.CountByStatusErr
+}
+func (m *MockRunStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FindActiveCalls = append(m.FindActiveCalls, findActiveCall{projectName, ref})
+	return m.FindActiveRunsByRefResult, m.FindActiveRunsByRefErr
 }
 
 // MockPipelineRunner returns configurable task results.

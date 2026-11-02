@@ -4,7 +4,7 @@ import {
   completeSetup, createAccount, createCredential, createProject, deleteAccount, getWebhookLogs,
   listAccounts, listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
   login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus, runTask,
-  listRunners, createRunner, revokeRunner,
+  listRunners, createRunner, revokeRunner, normalizeProject,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
 
@@ -541,4 +541,20 @@ test('revokeRunner surfaces the server error message, falling back to the status
   globalThis.fetch = async () => new Response('not json', { status: 502, statusText: 'Bad Gateway' });
   await assert.rejects(revokeRunner(3), /Revoke runner failed: Bad Gateway/);
 });
+
+test('normalizeProject maps cancel_in_progress to CancelInProgress', () => {
+  const input = {
+    name: 'test-proj',
+    default_image: 'golang:1.25',
+    cancel_in_progress: true,
+  };
+  const normalized = normalizeProject(input);
+  assert.equal(normalized.Name, 'test-proj');
+  assert.equal(normalized.DefaultImage, 'golang:1.25');
+  assert.equal(normalized.CancelInProgress, true);
+
+  const disabled = normalizeProject({ cancel_in_progress: false });
+  assert.equal(disabled.CancelInProgress, false);
+});
+
 

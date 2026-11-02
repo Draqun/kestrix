@@ -1,0 +1,3 @@
+kind: Added
+body: Add cancel_in_progress pipeline option to automatically cancel superseded in-flight and queued runs on consecutive pushes to the same branch
+time: 2026-11-01T11:53:05.130409552+01:00

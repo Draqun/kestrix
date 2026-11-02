@@ -315,3 +315,110 @@ func TestUnsupportedLiteralCtyType(t *testing.T) {
 		t.Errorf("err = %v, want it to mention unsupported cty type", err)
 	}
 }
+
+func TestProjectCancelInProgress_True(t *testing.T) {
+	src := `project "cip_true" {
+  cancel_in_progress = true
+}`
+	proj, err := ParseSource([]byte(src), "cip.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if !proj.CancelInProgress {
+		t.Errorf("expected CancelInProgress = true, got false")
+	}
+}
+
+func TestProjectCancelInProgress_False(t *testing.T) {
+	src := `project "cip_false" {
+  cancel_in_progress = false
+}`
+	proj, err := ParseSource([]byte(src), "cip.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if proj.CancelInProgress {
+		t.Errorf("expected CancelInProgress = false, got true")
+	}
+}
+
+func TestProjectCancelInProgress_Omitted(t *testing.T) {
+	src := `project "cip_omitted" {}`
+	proj, err := ParseSource([]byte(src), "cip.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if proj.CancelInProgress {
+		t.Errorf("expected CancelInProgress = false by default, got true")
+	}
+}
+
+func TestProjectCancelInProgress_RejectsNonBoolean(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"string", `project "p" { cancel_in_progress = "true" }`},
+		{"number", `project "p" { cancel_in_progress = 1 }`},
+		{"tuple", `project "p" { cancel_in_progress = [true] }`},
+		{"object", `project "p" { cancel_in_progress = { a = true } }`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseSource([]byte(tc.src), "cip_invalid.tf")
+			if err == nil {
+				t.Fatalf("expected error for non-boolean cancel_in_progress in case %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), "cancel_in_progress must be a boolean") {
+				t.Errorf("unexpected error message: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseDir_CancelInProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	f1 := `project "p" {
+  cancel_in_progress = true
+}`
+	f2 := `project "p" {
+  default_image = "alpine"
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "a.tf"), []byte(f1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "b.tf"), []byte(f2), 0644); err != nil {
+		t.Fatal(err)
+	}
+	proj, err := ParseDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if !proj.CancelInProgress {
+		t.Errorf("expected merged CancelInProgress = true")
+	}
+}
+
+func TestProjectCustomAttribute_Ignored(t *testing.T) {
+	src := `project "p" {
+  custom_attr = "val"
+}`
+	proj, err := ParseSource([]byte(src), "custom.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if proj.Name != "p" {
+		t.Errorf("proj.Name = %q, want 'p'", proj.Name)
+	}
+}
+
+func TestProjectCustomAttribute_Error(t *testing.T) {
+	src := `project "p" {
+  custom_attr = { a = 1 }
+}`
+	_, err := ParseSource([]byte(src), "custom_err.tf")
+	if err == nil {
+		t.Fatal("expected error for object literal in custom_attr")
+	}
+}

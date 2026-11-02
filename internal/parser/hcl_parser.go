@@ -80,20 +80,17 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 	// Iterate ALL top-level items of the body so we get both attributes and
 	// blocks, delegating each to the proper extractor.
 	for _, item := range blk.Body.Attributes {
-		var val string
 		var err error
 		switch item.Name {
 		case "default_image":
-			val, err = evalInterpolatedString(item.Expr, vc, "default_image")
+			proj.DefaultImage, err = evalInterpolatedString(item.Expr, vc, "default_image")
+		case "cancel_in_progress":
+			proj.CancelInProgress, err = literalBool(item.Expr, "cancel_in_progress")
 		default:
-			val, err = literal(item.Expr, item.Name)
+			_, err = literal(item.Expr, item.Name)
 		}
 		if err != nil {
 			return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
-		}
-		switch item.Name {
-		case "default_image":
-			proj.DefaultImage = val
 		}
 	}
 
@@ -542,6 +539,20 @@ func literal(expr hcl.Expression, fieldName ...string) (string, error) {
 	}
 }
 
+func literalBool(expr hcl.Expression, fieldName string) (bool, error) {
+	switch e := expr.(type) {
+	case *hclsyntax.LiteralValueExpr:
+		if e.Val.Type() == cty.Bool {
+			return e.Val.True(), nil
+		}
+		return false, fmt.Errorf("%s must be a boolean, got %s", fieldName, e.Val.Type().FriendlyName())
+	case *hclsyntax.TemplateExpr, *hclsyntax.TemplateWrapExpr:
+		return false, fmt.Errorf("%s must be a boolean, got string", fieldName)
+	default:
+		return false, fmt.Errorf("%s must be a boolean", fieldName)
+	}
+}
+
 func tupleStrings(e *hclsyntax.TupleConsExpr) ([]string, error) {
 	out := make([]string, 0, len(e.Exprs))
 	for _, ex := range e.Exprs {
@@ -620,6 +631,11 @@ func ParseDir(dir string) (model.Project, error) {
 		}
 		if p.DefaultImage != "" {
 			proj.DefaultImage = p.DefaultImage
+		}
+		// In a multi-file pipeline directory, cancel_in_progress is merged with
+		// OR semantics: if any file enables cancel_in_progress, the project enables it.
+		if p.CancelInProgress {
+			proj.CancelInProgress = true
 		}
 	}
 	return proj, nil

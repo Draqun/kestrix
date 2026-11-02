@@ -60,11 +60,12 @@ type Variable struct {
 
 // Project is the aggregate parsed from a pipeline definition.
 type Project struct {
-	Name         string     `hcl:"name,label" json:"name"`
-	Repos        []Repo     `hcl:"ci_repo,block" json:"repos"`
-	Tasks        []Task     `hcl:"ci_task,block" json:"tasks"`
-	DefaultImage string     `hcl:"default_image,optional" json:"default_image"`
-	Variables    []Variable `hcl:"variable,block" json:"variables,omitempty"`
+	Name             string     `hcl:"name,label" json:"name"`
+	Repos            []Repo     `hcl:"ci_repo,block" json:"repos"`
+	Tasks            []Task     `hcl:"ci_task,block" json:"tasks"`
+	DefaultImage     string     `hcl:"default_image,optional" json:"default_image"`
+	Variables        []Variable `hcl:"variable,block" json:"variables,omitempty"`
+	CancelInProgress bool       `hcl:"cancel_in_progress,optional" json:"cancel_in_progress,omitempty"`
 }
 
 // ProjectFile is the root HCL project block.

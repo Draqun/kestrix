@@ -619,6 +619,8 @@ func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+	s.cancelSupersededRuns(ctx, projectName, proj, opts)
+
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		// No in-process execution at all for a remote-mode project: no
 		// goroutine, no active/done entry, no concurrency slot - see
@@ -631,6 +633,17 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
 	if err != nil {
 		return 0, err
+	}
+	// Persist initial sources immediately when cancel_in_progress is enabled so
+	// subsequent pushes to the same ref can discover and cancel this run even
+	// while it is still queued or waiting for background execution. See follow-up
+	// OpenSpec change atomic-run-sources for atomic CreateRun-with-sources unification.
+	if proj != nil && proj.CancelInProgress && len(opts.InitialSources) > 0 {
+		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
+			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
+				slog.Warn("could not persist initial run sources", "run_id", runID, "err", err)
+			}
+		}
 	}
 	startedAt := time.Now()
 	slog.Info("run started", "run_id", runID, "project", projectName, "account", opts.Actor)

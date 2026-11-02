@@ -311,7 +311,7 @@ run detail can always answer "who did this":
   `approved_at`. Re-running a task directly by name (rather than through the
   approval gate) sets the same two fields, since both routes share the same
   execution path.
-- Canceling a running run sets the run's `canceled_by`.
+- Canceling a running run sets the run's `canceled_by`. Manual cancellations record `user:<account name>`, while superseded runs canceled automatically by `cancel_in_progress` record `system:cancel-in-progress`.
 
 Each value is the actor string `user:<account name>`, taken from the signed
 token that authenticated the request - never from the request body, a
