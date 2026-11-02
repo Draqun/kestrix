@@ -125,7 +125,7 @@ func (s *webhookCipStore) FindActiveRunsByRef(projectName, ref string) ([]int, e
 	for id, r := range s.runs {
 		if r.ProjectName == projectName && (r.Status == "running" || r.Status == "queued") {
 			for _, src := range r.Sources {
-				if (src.Primary || len(r.Sources) == 1) && src.RequestedRef == ref {
+				if src.Primary && src.RequestedRef == ref {
 					ids = append(ids, id)
 					break
 				}

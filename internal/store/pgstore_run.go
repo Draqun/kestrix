@@ -770,11 +770,7 @@ func (s *PGStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
 		  AND jsonb_typeof(sources) = 'array'
 		  AND EXISTS (
 		    SELECT 1 FROM jsonb_array_elements(sources) AS src
-		    WHERE (
-		      (src->>'primary' = 'true' AND src->>'requested_ref' = $2)
-		      OR
-		      (jsonb_array_length(sources) = 1 AND src->>'requested_ref' = $2)
-		    )
+		    WHERE src->>'primary' = 'true' AND src->>'requested_ref' = $2
 		  )
 		ORDER BY id ASC`,
 		projectName, ref,
