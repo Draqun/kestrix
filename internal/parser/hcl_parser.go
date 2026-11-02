@@ -80,23 +80,17 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 	// Iterate ALL top-level items of the body so we get both attributes and
 	// blocks, delegating each to the proper extractor.
 	for _, item := range blk.Body.Attributes {
+		var err error
 		switch item.Name {
 		case "default_image":
-			val, err := evalInterpolatedString(item.Expr, vc, "default_image")
-			if err != nil {
-				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
-			}
-			proj.DefaultImage = val
+			proj.DefaultImage, err = evalInterpolatedString(item.Expr, vc, "default_image")
 		case "cancel_in_progress":
-			b, err := literalBool(item.Expr, "cancel_in_progress")
-			if err != nil {
-				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
-			}
-			proj.CancelInProgress = b
+			proj.CancelInProgress, err = literalBool(item.Expr, "cancel_in_progress")
 		default:
-			if _, err := literal(item.Expr, item.Name); err != nil {
-				return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
-			}
+			_, err = literal(item.Expr, item.Name)
+		}
+		if err != nil {
+			return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
 		}
 	}
 
