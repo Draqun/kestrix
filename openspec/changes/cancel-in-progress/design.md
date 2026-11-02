@@ -13,24 +13,29 @@ See `proposal.md` for motivation. Currently, `RunService.Start` creates a run re
 What is missing is automatic invocation of `Cancel` when a newer run arrives on the same ref.
 
 ```
-Webhook Push / Manual Trigger
+Webhook Push / Manual Whole-Pipeline Trigger
            │
            ▼
 ┌────────────────────────────────────────────────────────┐
 │  Resolve Pipeline & Primary Source Ref (e.g. "feat/x") │
 └──────────────────────────┬─────────────────────────────┘
                            │
-             Is proj.CancelInProgress == true?
-             ├── No  ──▶ Proceed directly to RunService.Start
-             │
-             └── Yes ──▶ FindActiveRunsByRef(project, "feat/x")
-                               │
-                               ▼
-                 For each active/queued run:
-                 RunService.Cancel(runID, "system:cancel-in-progress")
-                               │
-                               ▼
-                 Proceed to RunService.Start (New Run executes)
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│                  RunService.Start                      │
+│                                                        │
+│  Is proj.CancelInProgress == true?                     │
+│  ├── No  ──▶ Proceed to acquire slot & createRun       │
+│  │                                                     │
+│  └── Yes ──▶ FindActiveRunsByRef(project, "feat/x")    │
+│                     │                                  │
+│                     ▼                                  │
+│         Cancel superseded runs in parallel             │
+│         with bounded grace wait                        │
+│                     │                                  │
+│                     ▼                                  │
+│         Proceed to acquire slot & createRun            │
+└────────────────────────────────────────────────────────┘
 ```
 
 ## Goals / Non-Goals
@@ -59,8 +64,9 @@ Webhook Push / Manual Trigger
 - **D3: Recorded cancellation actor `system:cancel-in-progress`.**
   - *Rationale:* `run-attribution` stores `canceled_by` for audit logs and UI display. A dedicated system prefix clarifies that the cancellation was automated, not user-triggered.
 
-- **D4: Cancel prior runs before slot acquisition.**
-  - *Rationale:* Canceling queued or running superseded runs before starting the new run immediately releases concurrency slots, allowing the new run to start without waiting for the superseded run to finish.
+- **D4: RunService.Start owns policy check and cancels prior runs before slot acquisition.**
+  - *Rationale:* Placing policy evaluation inside `RunService.Start` (via `cancelSupersededRuns`) guarantees uniform enforcement across all trigger origins (webhook pushes, manual runs via API) that provide initial sources with a primary branch ref. Canceling queued or running superseded runs in parallel before acquiring runner slots immediately frees concurrency slots for the new run.
+  - *Failure Ordering:* Cancellation signals are dispatched before `createRun`. If `createRun` fails subsequently (e.g. store error), the superseded runs have already been canceled, prioritizing safety against competing concurrent work. Lookup or cancel errors are logged as warnings and do not abort starting the new run.
 
 - **D5: Store query `FindActiveRunsByRef`.**
   - *Rationale:* `PGStore` indexes runs by `project_name` and `status`. Adding a targeted query for non-terminal statuses (`running`, `queued`) filtering on the primary source ref avoids loading full run records into memory.

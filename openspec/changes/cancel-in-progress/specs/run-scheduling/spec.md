@@ -27,3 +27,12 @@ When a run starts for a project with `cancel_in_progress = true` and an identifi
 #### Scenario: Remote-mode run marks unclaimed jobs unclaimable
 - **WHEN** a `remote`-mode run on branch `feature-z` is superseded by a newer run on branch `feature-z`
 - **THEN** its unclaimed pending jobs SHALL be marked unclaimable and the run SHALL transition to `canceled`
+
+#### Scenario: Manual whole-pipeline run cancels prior runs on the same primary branch
+- **WHEN** a run is `running` on branch `feature-x` for a project with `cancel_in_progress = true` and a user manually starts a whole-pipeline run on branch `feature-x`
+- **THEN** the earlier run SHALL transition to `canceled` with `canceled_by` set to `system:cancel-in-progress`
+- **AND** the new manual run SHALL continue execution
+
+#### Scenario: Single-task reruns or triggers without primary ref do not cancel active runs
+- **WHEN** a single-task rerun or trigger without primary source ref starts for a project with `cancel_in_progress = true`
+- **THEN** existing active runs SHALL NOT be canceled and SHALL continue execution
