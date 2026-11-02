@@ -30,6 +30,7 @@ func (s *RunService) cancelSupersededRuns(ctx context.Context, projectName strin
 	}
 	ref := primarySourceRef(opts)
 	if ref == "" {
+		slog.Debug("cancel-in-progress: no primary source ref available for auto-cancellation", "project", projectName)
 		return
 	}
 	activeRuns, err := s.runStore.FindActiveRunsByRef(projectName, ref)
