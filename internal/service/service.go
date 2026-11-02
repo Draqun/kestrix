@@ -616,32 +616,10 @@ func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 	return out, nil
 }
 
-func primarySourceRef(opts domain.RunnerOptions) string {
-	for _, src := range opts.InitialSources {
-		if src.Primary && src.RequestedRef != "" {
-			return src.RequestedRef
-		}
-	}
-	return ""
-}
-
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
-	if proj != nil && proj.CancelInProgress && s.runStore != nil {
-		if ref := primarySourceRef(opts); ref != "" {
-			activeRuns, err := s.runStore.FindActiveRunsByRef(projectName, ref)
-			if err != nil {
-				slog.Warn("could not find active runs to cancel", "project", projectName, "ref", ref, "err", err)
-			} else {
-				for _, oldRunID := range activeRuns {
-					if cancelErr := s.Cancel(ctx, oldRunID, "system:cancel-in-progress"); cancelErr != nil {
-						slog.Warn("could not cancel superseded run", "run_id", oldRunID, "err", cancelErr)
-					}
-				}
-			}
-		}
-	}
+	s.cancelSupersededRuns(ctx, projectName, proj, opts)
 
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		// No in-process execution at all for a remote-mode project: no
