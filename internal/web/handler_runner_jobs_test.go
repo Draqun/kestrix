@@ -336,8 +336,12 @@ func TestHandleRunnerJobTrace_RedactsRunSecretBeforeStorage(t *testing.T) {
 }
 
 func TestHandleRunnerJobTrace_BroadcastsToEventHub(t *testing.T) {
+	runID := 42
+	taskName := "test-task"
 	remoteJobs := &mocks.MockRemoteJobStore{
-		AppendJobTraceOK: true,
+		AppendJobTraceOK:       true,
+		AppendJobTraceRunID:    &runID,
+		AppendJobTraceTaskName: &taskName,
 		Jobs: map[int]*domain.RemoteJob{
 			1: {ID: 1, RunID: 42, TaskName: "test-task"},
 		},
@@ -363,6 +367,167 @@ func TestHandleRunnerJobTrace_BroadcastsToEventHub(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("timeout waiting for trace event on EventHub")
+	}
+}
+
+func TestHandleRunnerJobTrace_DedupRetriedChunk(t *testing.T) {
+	runID := 42
+	taskName := "test-task"
+	remoteJobs := &mocks.MockRemoteJobStore{
+		AppendJobTraceOK:       true,
+		AppendJobTraceRunID:    &runID,
+		AppendJobTraceTaskName: &taskName,
+		Jobs: map[int]*domain.RemoteJob{
+			1: {ID: 1, RunID: 42, TaskName: "test-task"},
+		},
+	}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	sub := srv.EventHub().Subscribe(42)
+	defer srv.EventHub().Unsubscribe(42, sub)
+
+	// First attempt at offset 0 succeeds and broadcasts
+	w1 := httptest.NewRecorder()
+	srv.handleRunnerJobTrace(w1, traceReq(`{"epoch":1,"offset":0,"chunk":"line 1\n"}`))
+	if w1.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w1.Code)
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != service.EventTypeTrace {
+			t.Fatalf("ev.Type = %q, want trace", ev.Type)
+		}
+		p, ok := ev.Data.(service.TracePayload)
+		if !ok || p.Chunk != "line 1\n" || p.Offset != 0 {
+			t.Fatalf("payload = %+v, want chunk 'line 1\\n' offset 0", ev.Data)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for trace event on EventHub")
+	}
+
+	// Retry at offset 0: mock reports appended = 0
+	zero := 0
+	remoteJobs.AppendJobTraceAppended = &zero
+	w2 := httptest.NewRecorder()
+	srv.handleRunnerJobTrace(w2, traceReq(`{"epoch":1,"offset":0,"chunk":"line 1\n"}`))
+	if w2.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w2.Code)
+	}
+
+	// Verify no duplicate event was broadcast
+	select {
+	case ev := <-sub:
+		t.Fatalf("unexpected trace event on EventHub for retry: %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+		// Expected: nothing broadcast
+	}
+}
+
+func TestHandleRunnerJobNext_EmitsTaskRunningToEventHub(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{
+		ClaimNextJobResult: &domain.RemoteJob{ID: 5, RunID: 77, TaskName: "compile"},
+	}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	sub := srv.EventHub().Subscribe(77)
+	defer srv.EventHub().Unsubscribe(77, sub)
+
+	r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
+	r = r.WithContext(contextWithRunnerID(r.Context(), 1))
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobNext(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != service.EventTypeTask {
+			t.Fatalf("ev.Type = %q, want task", ev.Type)
+		}
+		p, ok := ev.Data.(service.TaskPayload)
+		if !ok || p.TaskName != "compile" || p.Status != domain.TaskStatusRunning {
+			t.Fatalf("payload = %+v, want compile/running", ev.Data)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for task event on EventHub")
+	}
+}
+
+func TestIntegration_RemoteDAG_TaskRunningOnClaim(t *testing.T) {
+	pg := testWebPG(t)
+	projName := "proj-remote-claim-sse"
+	if err := pg.Upsert(&domain.ProjectConfig{
+		Name:    projName,
+		RepoURL: "https://git.example/app.git",
+		RepoRef: "main",
+		Mode:    "remote",
+	}); err != nil {
+		t.Fatalf("Upsert project: %v", err)
+	}
+	runID, err := pg.CreateRun(projName, nil, "", false, nil, "")
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	jobID, err := pg.CreateRemoteJob(runID, "build", domain.RemoteJobPayload{
+		Task: domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "checkout", Script: "echo hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateRemoteJob: %v", err)
+	}
+	runnerID, _, err := pg.CreateRunner("runner-claim-sse", nil)
+	if err != nil {
+		t.Fatalf("CreateRunner: %v", err)
+	}
+
+	runService := service.NewRunService(pg, nil, nil)
+	runService.SetRemoteJobStore(pg)
+	srv := &Server{
+		cfg:               Config{ListenAddr: ":0"},
+		runStore:          pg,
+		runService:        runService,
+		remoteJobStore:    pg,
+		runnerPollLimiter: newRunnerPollLimiter(),
+	}
+
+	sub := srv.EventHub().Subscribe(runID)
+	defer srv.EventHub().Unsubscribe(runID, sub)
+
+	r := httptest.NewRequest("GET", "/api/runner-jobs/next", nil)
+	r = r.WithContext(contextWithRunnerID(r.Context(), runnerID))
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobNext(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var claimed domain.RemoteJob
+	if err := json.NewDecoder(w.Body).Decode(&claimed); err != nil {
+		t.Fatalf("decode claimed job: %v", err)
+	}
+	if claimed.ID != jobID {
+		t.Fatalf("claimed.ID = %d, want %d", claimed.ID, jobID)
+	}
+
+	// 1. Verify DAG state in PGStore is "running"
+	run, err := pg.GetRun(runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if len(run.TaskResults) == 0 || run.TaskResults[len(run.TaskResults)-1].Status != domain.TaskStatusRunning {
+		t.Fatalf("task results in DB = %+v, want latest status running", run.TaskResults)
+	}
+
+	// 2. Verify real-time EventHub subscriber received the running event
+	select {
+	case ev := <-sub:
+		if ev.Type != service.EventTypeTask {
+			t.Fatalf("ev.Type = %q, want task", ev.Type)
+		}
+		p, ok := ev.Data.(service.TaskPayload)
+		if !ok || p.TaskName != "build" || p.Status != domain.TaskStatusRunning {
+			t.Fatalf("payload = %+v, want build/running", ev.Data)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for task event on EventHub")
 	}
 }
 

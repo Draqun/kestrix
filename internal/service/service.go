@@ -937,6 +937,12 @@ func (tw *eventHubTraceWriter) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
+func (tw *eventHubTraceWriter) Flush() error {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return tw.w.Flush()
+}
+
 // prepareRunExecution wires runID's lifecycle callbacks onto opts and wraps
 // its output in a redactingWriter built from opts.ResolvedSecretValues, so
 // opts.Stdout/Stderr, FlushRunOutput, and FinishRun all see redacted text

@@ -399,6 +399,42 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	return runID, nil
 }
 
+// ClaimNextJob claims the oldest pending job matching runnerID's tags and broadcasts
+// a task running event to EventHub (remote-runner-trace-dedup design.md D3).
+func (s *RunService) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
+	if s.remoteJobStore == nil {
+		return nil, fmt.Errorf("remote job store not configured")
+	}
+	job, err := s.remoteJobStore.ClaimNextJob(runnerID)
+	if err != nil || job == nil {
+		return job, err
+	}
+	if s.eventHub != nil {
+		s.eventHub.BroadcastTask(job.RunID, job.TaskName, domain.TaskStatusRunning, "")
+	}
+	return job, nil
+}
+
+// AppendRemoteJobTrace appends chunk to the remote job's output and broadcasts newly
+// accepted bytes to EventHub (remote-runner-trace-dedup design.md D2). Retried trace
+// chunks (where appended == 0) are acknowledged without re-broadcasting duplicate events.
+func (s *RunService) AppendRemoteJobTrace(jobID, epoch, offset int, chunk string, callerRunnerID *int) (bool, error) {
+	if s.remoteJobStore == nil {
+		return false, fmt.Errorf("remote job store not configured")
+	}
+	res, ok, err := s.remoteJobStore.AppendJobTrace(jobID, epoch, offset, chunk, s.MaxOutputBytes, callerRunnerID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if res.Appended > 0 && s.eventHub != nil {
+		s.eventHub.BroadcastTrace(res.RunID, res.TaskName, chunk[:res.Appended], offset)
+	}
+	return true, nil
+}
+
 // CompleteRemoteJob is the RunService-level completion path
 // PUT /api/runner-jobs/{id}/complete is a thin adapter into (tasks.md 3.4):
 // it rejects the report as a no-op when the store's epoch/ownership/
@@ -412,12 +448,6 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 // moment are then handled one after the other, so neither can finish the
 // run on a view that does not yet hold the other's result -
 // remote-run-waits-for-dependents design.md D3.
-//
-// The store's completion does not finish the run: it only records the
-// result, the walker decides what that result unblocked, and only then does
-// this function finish the run, with the status its results imply - a run
-// whose dependent has not been dispatched yet stays "running"
-// (remote-run-waits-for-dependents design.md D1/D2).
 func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int) (bool, error) {
 	job, err := s.remoteJobStore.GetRemoteJob(jobID)
 	if err != nil {

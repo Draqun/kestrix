@@ -316,6 +316,14 @@ type RemoteJob struct {
 // the caller must not record it as failed.
 var ErrRemoteJobExists = errors.New("remote job already exists")
 
+// AppendTraceResult carries the outcome of an accepted trace append, including
+// newly appended byte counts and run attribution for real-time subscribers.
+type AppendTraceResult struct {
+	Appended int
+	RunID    int
+	TaskName string
+}
+
 // RemoteJobStore is the port for dispatching, claiming, and completing
 // remote-runner jobs; see remote-runner-execution spec.md and design.md D1/D9.
 type RemoteJobStore interface {
@@ -341,19 +349,22 @@ type RemoteJobStore interface {
 	// the byte position, in the job's own trace stream, chunk begins at: it
 	// must equal the job's current stored trace_offset to be applied. A
 	// lower offset is a runner's own safe retry (for example after a
-	// dropped HTTP response) - a no-op reported as ok=true, since the
-	// content was already accepted. A higher offset is a gap - a real
-	// protocol violation - reported as a non-nil error rather than silently
-	// misplacing content. ok is false, with no error, only when epoch no
-	// longer matches the job's stored claim_epoch (D1), the job is
-	// already terminal, or callerRunnerID is non-nil and does not match the
-	// job's stored runner_id - a caller may only trace a job it holds the
-	// current claim on, not any job by numeric ID (the epoch check alone is
-	// not enough: a never-claimed job's claim_epoch defaults to 0, which a
-	// caller could simply guess). callerRunnerID is nil only for
-	// system-initiated calls that are not attributed to an authenticated
-	// runner; every HTTP-driven call passes the authenticated runner's ID.
-	AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (ok bool, err error)
+	// dropped HTTP response) - a no-op reported as ok=true with appended=0,
+	// since the content was already accepted. A higher offset is a gap - a
+	// real protocol violation - reported as a non-nil error rather than silently
+	// misplacing content. appended reports the count of newly accepted bytes
+	// from chunk that were appended to the run's output (0 for an idempotent
+	// retry or when already bounded; see remote-runner-trace-dedup design.md
+	// D1). ok is false, with no error, only when epoch no longer matches
+	// the job's stored claim_epoch (D1), the job is already terminal, or
+	// callerRunnerID is non-nil and does not match the job's stored
+	// runner_id - a caller may only trace a job it holds the current claim on,
+	// not any job by numeric ID (the epoch check alone is not enough: a
+	// never-claimed job's claim_epoch defaults to 0, which a caller could
+	// simply guess). callerRunnerID is nil only for system-initiated calls
+	// that are not attributed to an authenticated runner; every HTTP-driven
+	// call passes the authenticated runner's ID.
+	AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (result AppendTraceResult, ok bool, err error)
 	// CompleteJob records a job's terminal report. The epoch check, the
 	// ownership check, and the parent run's terminal-status check happen in
 	// the same transaction as the task-result write (task 1.2/3.4): ok is

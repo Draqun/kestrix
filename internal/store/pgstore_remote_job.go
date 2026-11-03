@@ -323,16 +323,17 @@ func (s *PGStore) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
 // appended to the job's own output (remote_jobs.output), bounded against that
 // column, so CompleteJob can put the completing claim's output on the task's
 // result.
-func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
+// appended returns the count of newly appended bytes from chunk.
+func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (domain.AppendTraceResult, bool, error) {
 	chunk = storable(chunk)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("begin trace append: %w", err)
+		return domain.AppendTraceResult{}, false, fmt.Errorf("begin trace append: %w", err)
 	}
 	defer tx.Rollback()
 
 	var runID, claimEpoch, traceOffset, jobOutputLen int
-	var jobStatus string
+	var jobStatus, taskName string
 	var jobTruncated bool
 	var runnerID sql.NullInt64
 	// The job's own output is measured in the database, not loaded: the bound
@@ -342,38 +343,43 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 	// marker's length in characters: the check then holds for any marker.
 	marker := domain.TruncationMarker(maxOutputBytes)
 	err = tx.QueryRow(
-		`SELECT run_id, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
+		`SELECT run_id, task_name, claim_epoch, status, trace_offset, runner_id, octet_length(output), right(output, $2) = $3
 		 FROM remote_jobs WHERE id = $1 FOR UPDATE`,
 		jobID, utf8.RuneCountInString(marker), marker,
-	).Scan(&runID, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
+	).Scan(&runID, &taskName, &claimEpoch, &jobStatus, &traceOffset, &runnerID, &jobOutputLen, &jobTruncated)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return domain.AppendTraceResult{}, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("select job for trace append: %w", err)
+		return domain.AppendTraceResult{}, false, fmt.Errorf("select job for trace append: %w", err)
 	}
 	if epoch != claimEpoch || isTerminalJobStatus(jobStatus) || !callerOwnsJob(callerRunnerID, runnerID) {
-		return false, nil
+		return domain.AppendTraceResult{}, false, nil
 	}
 	if offset < traceOffset {
 		// The runner's own safe retry (for example after a dropped HTTP
 		// response): this content was already accepted, so report success
 		// without touching anything again.
-		return true, tx.Commit()
+		return domain.AppendTraceResult{Appended: 0, RunID: runID, TaskName: taskName}, true, tx.Commit()
 	}
 	if offset > traceOffset {
-		return false, fmt.Errorf("trace offset %d is ahead of expected %d for job %d (gap)", offset, traceOffset, jobID)
+		return domain.AppendTraceResult{}, false, fmt.Errorf("trace offset %d is ahead of expected %d for job %d (gap)", offset, traceOffset, jobID)
 	}
 
-	var currentOutput string
-	if err := tx.QueryRow(`SELECT output FROM runs WHERE id = $1 FOR UPDATE`, runID).Scan(&currentOutput); err != nil {
-		return false, fmt.Errorf("select run output for trace append: %w", err)
+	var runOutputLen int
+	var runTruncated bool
+	if err := tx.QueryRow(
+		`SELECT octet_length(COALESCE(output, '')), COALESCE(right(output, $2) = $3, false)
+		 FROM runs WHERE id = $1 FOR UPDATE`,
+		runID, utf8.RuneCountInString(marker), marker,
+	).Scan(&runOutputLen, &runTruncated); err != nil {
+		return domain.AppendTraceResult{}, false, fmt.Errorf("select run output for trace append: %w", err)
 	}
 
-	toAppend := boundAppendChunk(currentOutput, chunk, maxOutputBytes)
+	toAppend := boundAppend(runOutputLen, runTruncated, chunk, maxOutputBytes)
 	if toAppend != "" {
 		if _, err := tx.Exec(`UPDATE runs SET output = output || $1 WHERE id = $2`, toAppend, runID); err != nil {
-			return false, fmt.Errorf("append run output: %w", err)
+			return domain.AppendTraceResult{}, false, fmt.Errorf("append run output: %w", err)
 		}
 	}
 
@@ -393,13 +399,41 @@ func (s *PGStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutp
 		jobArgs = append(jobArgs, jobAppend)
 	}
 	if _, err := tx.Exec(jobUpdate, jobArgs...); err != nil {
-		return false, fmt.Errorf("advance trace offset: %w", err)
+		return domain.AppendTraceResult{}, false, fmt.Errorf("advance trace offset: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit trace append: %w", err)
+		return domain.AppendTraceResult{}, false, fmt.Errorf("commit trace append: %w", err)
 	}
-	return true, nil
+	appended := boundAcceptedBytes(runOutputLen, runTruncated, chunk, maxOutputBytes)
+	return domain.AppendTraceResult{
+		Appended: appended,
+		RunID:    runID,
+		TaskName: taskName,
+	}, true, nil
+}
+
+// boundAcceptedBytes calculates how many bytes of chunk were accepted into the
+// output before reaching maxOutputBytes.
+func boundAcceptedBytes(currentLen int, truncated bool, chunk string, maxOutputBytes int) int {
+	if maxOutputBytes <= 0 || chunk == "" {
+		return len(chunk)
+	}
+	if truncated {
+		return 0
+	}
+	remaining := maxOutputBytes - currentLen
+	if remaining <= 0 {
+		return 0
+	}
+	if len(chunk) <= remaining {
+		return len(chunk)
+	}
+	cut := remaining
+	for cut > 0 && !utf8.RuneStart(chunk[cut]) {
+		cut--
+	}
+	return cut
 }
 
 // boundAppendChunk returns the slice of chunk that should still be appended
