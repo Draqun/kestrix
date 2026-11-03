@@ -399,20 +399,6 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	return runID, nil
 }
 
-// CompleteRemoteJob is the RunService-level completion path
-// PUT /api/runner-jobs/{id}/complete is a thin adapter into (tasks.md 3.4):
-// it rejects the report as a no-op when the store's epoch/ownership/
-// terminal-run fencing (domain.RemoteJobStore.CompleteJob) says so - a
-// caller may only complete a job it holds the current claim on, per
-// callerRunnerID - and otherwise triggers the dependency-graph resumption
-// walker (tasks.md 3.6) for any task that just became eligible.
-//
-// The run's lock covers the whole path: the result write, the walker and
-// the finishing of the run. Two jobs of one run completing at the same
-// moment are then handled one after the other, so neither can finish the
-// run on a view that does not yet hold the other's result -
-// remote-run-waits-for-dependents design.md D3.
-//
 // ClaimNextJob claims the oldest pending job matching runnerID's tags and broadcasts
 // a task running event to EventHub (remote-runner-trace-dedup design.md D3).
 func (s *RunService) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
@@ -452,7 +438,19 @@ func (s *RunService) AppendRemoteJobTrace(jobID, epoch, offset int, chunk string
 	return true, nil
 }
 
-// CompleteRemoteJob records a remote job's completion and triggers DAG progression.
+// CompleteRemoteJob is the RunService-level completion path
+// PUT /api/runner-jobs/{id}/complete is a thin adapter into (tasks.md 3.4):
+// it rejects the report as a no-op when the store's epoch/ownership/
+// terminal-run fencing (domain.RemoteJobStore.CompleteJob) says so - a
+// caller may only complete a job it holds the current claim on, per
+// callerRunnerID - and otherwise triggers the dependency-graph resumption
+// walker (tasks.md 3.6) for any task that just became eligible.
+//
+// The run's lock covers the whole path: the result write, the walker and
+// the finishing of the run. Two jobs of one run completing at the same
+// moment are then handled one after the other, so neither can finish the
+// run on a view that does not yet hold the other's result -
+// remote-run-waits-for-dependents design.md D3.
 func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int) (bool, error) {
 	job, err := s.remoteJobStore.GetRemoteJob(jobID)
 	if err != nil {
