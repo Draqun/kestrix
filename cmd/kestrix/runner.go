@@ -404,47 +404,8 @@ func (w *traceWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	// If there are already unsent chunks in the spool, new chunks must be appended
-	// to the spool to preserve sequential offset ordering.
-	if !w.spool.IsEmpty() {
-		w.spool.Append(p)
-		w.ensureFlusherLocked()
-		return len(p), nil
-	}
-
-	// Spool is currently empty: attempt direct push
-	statusCode, err := w.pushChunk(w.offset, p)
-	if err != nil || statusCode >= 500 {
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "kestrix runner: push trace: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "kestrix runner: trace push server error: %d\n", statusCode)
-		}
-		// Network or server error: queue into spool and start retry flusher
-		w.spool.Append(p)
-		w.ensureFlusherLocked()
-		return len(p), nil
-	}
-
-	if statusCode == http.StatusNoContent {
-		w.offset += len(p)
-		w.spool.SetOffset(w.offset)
-		return len(p), nil
-	}
-
-	if statusCode == http.StatusConflict {
-		// HTTP 409 Conflict: stale epoch or job reclaimed
-		fmt.Fprintf(os.Stderr, "kestrix runner: trace push rejected: 409 Conflict\n")
-		w.spool.Clear()
-		w.spool.MarkDead()
-		w.stopped = true
-		if w.flusherCancel != nil {
-			w.flusherCancel()
-		}
-		return len(p), nil
-	}
-
-	fmt.Fprintf(os.Stderr, "kestrix runner: trace push rejected: %d\n", statusCode)
+	w.spool.Append(p)
+	w.ensureFlusherLocked()
 	return len(p), nil
 }
 

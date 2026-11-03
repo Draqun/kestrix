@@ -762,11 +762,17 @@ func TestTraceWriter_Write_SuccessAdvancesOffset(t *testing.T) {
 	if _, err := tw.Write([]byte("hello")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	if err := tw.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	if tw.offset != 5 {
 		t.Fatalf("offset = %d, want 5 after a successful push", tw.offset)
 	}
 	if _, err := tw.Write([]byte("!")); err != nil {
 		t.Fatalf("Write: %v", err)
+	}
+	if err := tw.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 	if gotOffset != 5 {
 		t.Fatalf("second push's offset field = %d, want 5 (the first write's length)", gotOffset)
