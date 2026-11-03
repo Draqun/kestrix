@@ -79,6 +79,7 @@ kestrix runner [flags]
 | `--server` | `KESTRIX_RUNNER_SERVER` | (required) | Base URL of the Kestrix server (e.g. `https://kestrix.example.com`). |
 | `--token` | `KESTRIX_RUNNER_TOKEN` | (required) | Bearer token generated when registering the runner in Kestrix. |
 | `--mode` | `KESTRIX_RUNNER_MODE` | `local` | Execution backend: `local` (host bash) or `docker`. |
+| `--trace-spool-max-bytes` | `KESTRIX_RUNNER_TRACE_SPOOL_MAX_BYTES` | `10485760` (10M) | In-memory bounded trace spool capacity for offline retries. |
 
 ### Runner Environment Controls
 

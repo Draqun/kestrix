@@ -409,6 +409,7 @@ when it cannot check the token at all; that is transient, so retry.
 | `kestrix runner`'s server URL (flag: `--server`) | `KESTRIX_RUNNER_SERVER` | none |
 | `kestrix runner`'s bearer token (flag: `--token`) | `KESTRIX_RUNNER_TOKEN` | none |
 | `kestrix runner`'s execution backend (flag: `--mode`) | `KESTRIX_RUNNER_MODE` | `local` |
+| `kestrix runner`'s trace spool bound (flag: `--trace-spool-max-bytes`) | `KESTRIX_RUNNER_TRACE_SPOOL_MAX_BYTES` | 10485760 (10 MiB) |
 
 All eight are also documented in `.env.template`.
 
