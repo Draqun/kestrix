@@ -13,8 +13,9 @@ const DefaultTraceTruncationMarker = "[... output truncated due to offline buffe
 
 // TraceChunk represents a contiguous slice of task output starting at a specific byte offset.
 type TraceChunk struct {
-	Offset int
-	Data   []byte
+	Offset   int
+	Data     []byte
+	IsMarker bool
 }
 
 // TraceSpool is a thread-safe bounded in-memory FIFO queue for task trace chunks.
@@ -124,9 +125,9 @@ func (s *TraceSpool) applyTruncationLocked() {
 
 	firstOffset := s.chunks[0].Offset
 
-	// If already truncated, s.chunks[0] is already the marker.
+	// If chunks[0] is already the marker, skip it in budget calculation to replace it.
 	startIndex := 0
-	if s.truncated && len(s.chunks) > 0 {
+	if len(s.chunks) > 0 && s.chunks[0].IsMarker {
 		startIndex = 1
 	}
 
@@ -161,8 +162,9 @@ func (s *TraceSpool) applyTruncationLocked() {
 
 	// Build new chunks list: marker first, then kept chunks with recalculated contiguous offsets
 	markerChunk := TraceChunk{
-		Offset: firstOffset,
-		Data:   markerBytes,
+		Offset:   firstOffset,
+		Data:     markerBytes,
+		IsMarker: true,
 	}
 	newChunks := make([]TraceChunk, 0, 1+len(keptChunks))
 	newChunks = append(newChunks, markerChunk)
@@ -195,7 +197,7 @@ func (s *TraceSpool) Peek() (TraceChunk, bool) {
 	c := s.chunks[0]
 	dataCopy := make([]byte, len(c.Data))
 	copy(dataCopy, c.Data)
-	return TraceChunk{Offset: c.Offset, Data: dataCopy}, true
+	return TraceChunk{Offset: c.Offset, Data: dataCopy, IsMarker: c.IsMarker}, true
 }
 
 // Pop removes and returns the oldest chunk from the spool.
@@ -210,7 +212,7 @@ func (s *TraceSpool) Pop() (TraceChunk, bool) {
 	c := s.chunks[0]
 	s.chunks = s.chunks[1:]
 	s.bufferedBytes -= len(c.Data)
-	if len(s.chunks) == 0 {
+	if c.IsMarker || len(s.chunks) == 0 {
 		s.truncated = false
 	}
 	s.notifyLocked()
@@ -227,9 +229,10 @@ func (s *TraceSpool) Acknowledge(offset, length int) bool {
 		return false
 	}
 	if s.chunks[0].Offset == offset && len(s.chunks[0].Data) == length {
+		c := s.chunks[0]
 		s.chunks = s.chunks[1:]
 		s.bufferedBytes -= length
-		if len(s.chunks) == 0 {
+		if c.IsMarker || len(s.chunks) == 0 {
 			s.truncated = false
 		}
 		s.notifyLocked()

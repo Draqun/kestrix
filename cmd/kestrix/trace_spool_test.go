@@ -212,6 +212,68 @@ func TestTraceSpool_RepeatedTruncationMaintainsOffsets(t *testing.T) {
 	}
 }
 
+func TestTraceSpool_RepeatedTruncationAfterMarkerAcknowledged(t *testing.T) {
+	marker := "[... output truncated due to offline buffer limit ...]\n"
+	markerLen := len(marker)
+	maxBytes := markerLen + 40
+	spool := NewTraceSpool(maxBytes, 0)
+	spool.SetTruncationMarker(marker)
+
+	// Append chunks until truncation occurs (21 * 5 = 105 bytes > maxBytes 95)
+	spool.Append([]byte("chunk-01: 0123456789\n")) // 21 bytes
+	spool.Append([]byte("chunk-02: 0123456789\n")) // 21 bytes
+	spool.Append([]byte("chunk-03: 0123456789\n")) // 21 bytes
+	spool.Append([]byte("chunk-04: 0123456789\n")) // 21 bytes
+	spool.Append([]byte("chunk-05: 0123456789\n")) // 21 bytes -> exceeds maxBytes (markerLen+40), truncates!
+
+	// Spool must have truncated: chunk[0] is marker
+	peek, ok := spool.Peek()
+	if !ok || !peek.IsMarker {
+		t.Fatalf("expected marker at head of spool after first truncation")
+	}
+
+	// Now acknowledge / pop the marker chunk, leaving remaining regular chunks in spool
+	acked := spool.Acknowledge(peek.Offset, len(peek.Data))
+	if !acked {
+		t.Fatalf("failed to acknowledge marker chunk")
+	}
+
+	// At this point, head of spool is a regular chunk, NOT a marker
+	head, ok := spool.Peek()
+	if !ok {
+		t.Fatalf("expected remaining chunk after marker ack")
+	}
+	if head.IsMarker {
+		t.Fatalf("expected regular chunk at head, but got marker")
+	}
+
+	// Append more chunks to trigger a second truncation sweep
+	spool.Append([]byte("chunk-06: 0123456789\n"))
+	spool.Append([]byte("chunk-07: 0123456789\n"))
+	spool.Append([]byte("chunk-08: 0123456789\n"))
+	spool.Append([]byte("chunk-09: 0123456789\n"))
+	spool.Append([]byte("chunk-10: 0123456789\n"))
+
+	// Head must again be a marker with IsMarker == true
+	head2, ok := spool.Peek()
+	if !ok || !head2.IsMarker {
+		t.Fatalf("expected new marker at head after second truncation sweep")
+	}
+
+	chunks := spool.Chunks()
+	// Verify contiguous offsets across all remaining chunks
+	expectedOffset := chunks[0].Offset
+	for i, c := range chunks {
+		if c.Offset != expectedOffset {
+			t.Fatalf("chunk %d offset %d != expected %d", i, c.Offset, expectedOffset)
+		}
+		expectedOffset += len(c.Data)
+	}
+	if spool.NextOffset() != expectedOffset {
+		t.Fatalf("NextOffset %d != expected %d", spool.NextOffset(), expectedOffset)
+	}
+}
+
 // ── Inspection, Acknowledge, Clear, MarkDead, WaitEmpty ──
 
 func TestTraceSpool_PeekPopAcknowledge(t *testing.T) {
