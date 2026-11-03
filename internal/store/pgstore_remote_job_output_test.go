@@ -49,7 +49,7 @@ func TestPG_AppendJobTrace_AccumulatesJobOutput(t *testing.T) {
 		offset int
 		chunk  string
 	}{{0, "hello "}, {0, "hello "}, {6, "world"}} { // the middle one is a runner retry
-		if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, c.offset, c.chunk, 0, nil); err != nil || !ok {
+		if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, c.offset, c.chunk, 0, nil); err != nil || !ok {
 			t.Fatalf("AppendJobTrace(offset %d) = (%v, %v)", c.offset, ok, err)
 		}
 	}
@@ -65,7 +65,7 @@ func TestPG_AppendJobTrace_StaleEpochStoresNoJobOutput(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-job-output-stale"))
 
-	if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch+1, 0, "ghost", 0, nil); err != nil || ok {
+	if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch+1, 0, "ghost", 0, nil); err != nil || ok {
 		t.Fatalf("stale AppendJobTrace = (%v, %v), want rejected", ok, err)
 	}
 	if got := storedJobOutput(t, pg, jobID); got != "" {
@@ -85,10 +85,10 @@ func TestPG_AppendJobTrace_JobOutputBoundedPerJobNotPerRun(t *testing.T) {
 	b, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-job-output-bound-b"))
 
 	const bound = 6
-	if _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 0, "aaaaa", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 0, "aaaaa", bound, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.AppendJobTrace(bID, b.ClaimEpoch, 0, "bbbbb", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(bID, b.ClaimEpoch, 0, "bbbbb", bound, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := storedJobOutput(t, pg, bID); got != "bbbbb" {
@@ -96,10 +96,10 @@ func TestPG_AppendJobTrace_JobOutputBoundedPerJobNotPerRun(t *testing.T) {
 	}
 
 	// Crossing its own bound, a job is cut and marked once, then drops the rest.
-	if _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 5, "AAAAA", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 5, "AAAAA", bound, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 10, "MORE", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(aID, a.ClaimEpoch, 10, "MORE", bound, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := storedJobOutput(t, pg, aID), "aaaaaA"+domain.TruncationMarker(bound); got != want {
@@ -131,7 +131,7 @@ func TestPG_CompleteJob_TaskOutput(t *testing.T) {
 			job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-task-output"))
 			offset := 0
 			for _, chunk := range tc.trace {
-				if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, tc.bound, nil); err != nil || !ok {
+				if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, tc.bound, nil); err != nil || !ok {
 					t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
 				}
 				offset += len(chunk)
@@ -155,7 +155,7 @@ func TestPG_CompleteJob_AggregateOutputUnchangedByTaskOutput(t *testing.T) {
 	runID := mustCreateRun(t, pg, "proj-task-output-agg", nil)
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-task-output-agg"))
-	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "abc", 0, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "abc", 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "def", "", nil, 0, true); err != nil || !ok {
@@ -182,7 +182,7 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	first := mustCreateRunner(t, pg, "r-reclaim-trace-1")
 	claim1, _ := pg.ClaimNextJob(first)
-	if ok, err := pg.AppendJobTrace(jobID, claim1.ClaimEpoch, 0, "partial output of the first claim", 0, &first); err != nil || !ok {
+	if _, ok, err := pg.AppendJobTrace(jobID, claim1.ClaimEpoch, 0, "partial output of the first claim", 0, &first); err != nil || !ok {
 		t.Fatalf("first claim AppendJobTrace = (%v, %v)", ok, err)
 	}
 	// The first runner goes silent: silent-runner recovery returns the job to pending.
@@ -196,7 +196,7 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 		offset int
 		chunk  string
 	}{{0, "second "}, {7, "claim"}} {
-		if ok, err := pg.AppendJobTrace(jobID, claim2.ClaimEpoch, c.offset, c.chunk, 0, &second); err != nil || !ok {
+		if _, ok, err := pg.AppendJobTrace(jobID, claim2.ClaimEpoch, c.offset, c.chunk, 0, &second); err != nil || !ok {
 			t.Fatalf("second claim AppendJobTrace(offset %d) = (%v, %v)", c.offset, ok, err)
 		}
 	}
@@ -234,7 +234,7 @@ func TestPG_CompleteJob_ClearsTheJobsOutput(t *testing.T) {
 			runID := mustCreateRun(t, pg, "proj-job-output-cleared", nil)
 			jobID := mustCreateRemoteJob(t, pg, runID, "build")
 			job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-job-output-cleared"))
-			if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "streamed output", 0, nil); err != nil || !ok {
+			if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "streamed output", 0, nil); err != nil || !ok {
 				t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
 			}
 			if got := storedJobOutput(t, pg, jobID); got != "streamed output" {
@@ -304,7 +304,7 @@ func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
 			want := "€" + domain.TruncationMarker(bound)
 
 			if tc.trace != "" {
-				if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.trace, bound, nil); err != nil || !ok {
+				if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.trace, bound, nil); err != nil || !ok {
 					t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
 				}
 				if got := storedJobOutput(t, pg, jobID); got != want {
@@ -337,7 +337,7 @@ func TestPG_AppendJobTrace_JobOutputBoundCountsBytes(t *testing.T) {
 	const bound = 7
 	offset := 0
 	for _, chunk := range []string{"€€", "ab", "more"} {
-		if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
+		if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
 			t.Fatalf("AppendJobTrace(%q) = (%v, %v)", chunk, ok, err)
 		}
 		offset += len(chunk)
@@ -358,7 +358,7 @@ func TestPG_CancelJobsForRun_ClearsTheOutputOfAReclaimedJob(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	runner := mustCreateRunner(t, pg, "r-cancel-reclaimed")
 	claim, _ := pg.ClaimNextJob(runner)
-	if ok, err := pg.AppendJobTrace(jobID, claim.ClaimEpoch, 0, "partial output", 0, &runner); err != nil || !ok {
+	if _, ok, err := pg.AppendJobTrace(jobID, claim.ClaimEpoch, 0, "partial output", 0, &runner); err != nil || !ok {
 		t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
 	}
 	if reclaimed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
@@ -391,7 +391,7 @@ func TestPG_AppendJobTrace_ChunksPastTheBoundStillAdvanceTheStream(t *testing.T)
 	offset := 0
 	send := func(chunk string) {
 		t.Helper()
-		if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
+		if _, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, offset, chunk, bound, nil); err != nil || !ok {
 			t.Fatalf("AppendJobTrace(%q at offset %d) = (%v, %v)", chunk, offset, ok, err)
 		}
 		offset += len(chunk)

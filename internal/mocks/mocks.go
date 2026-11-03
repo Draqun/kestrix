@@ -614,8 +614,9 @@ type MockRemoteJobStore struct {
 	Jobs            map[int]*domain.RemoteJob
 	GetRemoteJobErr error
 
-	AppendJobTraceOK  bool
-	AppendJobTraceErr error
+	AppendJobTraceOK       bool
+	AppendJobTraceErr      error
+	AppendJobTraceAppended *int
 
 	CompleteJobOK    bool
 	CompleteJobErr   error
@@ -702,11 +703,17 @@ func (m *MockRemoteJobStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) 
 	return m.Jobs[jobID], nil
 }
 
-func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (bool, error) {
+func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (int, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.AppendJobTraceChunks = append(m.AppendJobTraceChunks, chunk)
-	return m.AppendJobTraceOK, m.AppendJobTraceErr
+	appended := 0
+	if m.AppendJobTraceAppended != nil {
+		appended = *m.AppendJobTraceAppended
+	} else if m.AppendJobTraceOK {
+		appended = len(chunk)
+	}
+	return appended, m.AppendJobTraceOK, m.AppendJobTraceErr
 }
 
 func (m *MockRemoteJobStore) RemoteJobSecretValues(jobID int) ([]string, error) {

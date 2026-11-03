@@ -123,7 +123,7 @@ func (s *Server) requireRunnerAuth(next http.Handler) http.Handler {
 // before answering 204 when none arrives - never an error (tasks.md 3.2).
 func (s *Server) handleRunnerJobNext(w http.ResponseWriter, r *http.Request) {
 	runnerID, ok := runnerIDFromContext(r.Context())
-	if !ok || s.remoteJobStore == nil {
+	if !ok || s.remoteJobStore == nil || s.runService == nil {
 		writeError(w, http.StatusInternalServerError, "runner jobs not configured")
 		return
 	}
@@ -141,7 +141,7 @@ func (s *Server) handleRunnerJobNext(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(runnerLongPollTick)
 	defer ticker.Stop()
 	for {
-		job, err := s.remoteJobStore.ClaimNextJob(runnerID)
+		job, err := s.runService.ClaimNextJob(runnerID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "claim job")
 			return
@@ -180,7 +180,7 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runnerID, ok := runnerIDFromContext(r.Context())
-	if !ok || s.remoteJobStore == nil {
+	if !ok || s.remoteJobStore == nil || s.runService == nil {
 		writeError(w, http.StatusInternalServerError, "runner jobs not configured")
 		return
 	}
@@ -198,11 +198,8 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chunk := redact.Values(req.Chunk, secrets)
-	maxOutputBytes := 0
-	if s.runService != nil {
-		maxOutputBytes = s.runService.MaxOutputBytes
-	}
-	traced, err := s.remoteJobStore.AppendJobTrace(jobID, req.Epoch, *req.Offset, chunk, maxOutputBytes, &runnerID)
+
+	traced, err := s.runService.AppendRemoteJobTrace(jobID, req.Epoch, *req.Offset, chunk, &runnerID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -210,12 +207,6 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 	if !traced {
 		writeError(w, http.StatusConflict, "stale epoch, job not owned by this runner, or job already terminal")
 		return
-	}
-	hub := s.EventHub()
-	if hub != nil {
-		if job, err := s.remoteJobStore.GetRemoteJob(jobID); err == nil && job != nil {
-			hub.BroadcastTrace(job.RunID, job.TaskName, chunk, *req.Offset)
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

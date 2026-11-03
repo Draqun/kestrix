@@ -413,11 +413,46 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 // run on a view that does not yet hold the other's result -
 // remote-run-waits-for-dependents design.md D3.
 //
-// The store's completion does not finish the run: it only records the
-// result, the walker decides what that result unblocked, and only then does
-// this function finish the run, with the status its results imply - a run
-// whose dependent has not been dispatched yet stays "running"
-// (remote-run-waits-for-dependents design.md D1/D2).
+// ClaimNextJob claims the oldest pending job matching runnerID's tags and broadcasts
+// a task running event to EventHub (remote-runner-trace-dedup design.md D3).
+func (s *RunService) ClaimNextJob(runnerID int) (*domain.RemoteJob, error) {
+	if s.remoteJobStore == nil {
+		return nil, fmt.Errorf("remote job store not configured")
+	}
+	job, err := s.remoteJobStore.ClaimNextJob(runnerID)
+	if err != nil || job == nil {
+		return job, err
+	}
+	if s.eventHub != nil {
+		s.eventHub.BroadcastTask(job.RunID, job.TaskName, domain.TaskStatusRunning, "")
+	}
+	return job, nil
+}
+
+// AppendRemoteJobTrace appends chunk to the remote job's output and broadcasts newly
+// accepted bytes to EventHub (remote-runner-trace-dedup design.md D2). Retried trace
+// chunks (where appended == 0) are acknowledged without re-broadcasting duplicate events.
+func (s *RunService) AppendRemoteJobTrace(jobID, epoch, offset int, chunk string, callerRunnerID *int) (bool, error) {
+	if s.remoteJobStore == nil {
+		return false, fmt.Errorf("remote job store not configured")
+	}
+	appended, ok, err := s.remoteJobStore.AppendJobTrace(jobID, epoch, offset, chunk, s.MaxOutputBytes, callerRunnerID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if appended > 0 && s.eventHub != nil {
+		job, err := s.remoteJobStore.GetRemoteJob(jobID)
+		if err == nil && job != nil {
+			s.eventHub.BroadcastTrace(job.RunID, job.TaskName, chunk[:appended], offset)
+		}
+	}
+	return true, nil
+}
+
+// CompleteRemoteJob records a remote job's completion and triggers DAG progression.
 func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int) (bool, error) {
 	job, err := s.remoteJobStore.GetRemoteJob(jobID)
 	if err != nil {

@@ -176,11 +176,11 @@ func TestPG_AppendJobTrace_AppendsAndAdvancesToRunning(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-trace"))
 
-	ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello ", 0, nil)
+	_, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello ", 0, nil)
 	if err != nil || !ok {
 		t.Fatalf("AppendJobTrace #1 = (%v, %v)", ok, err)
 	}
-	ok, err = pg.AppendJobTrace(jobID, job.ClaimEpoch, 6, "world", 0, nil)
+	_, ok, err = pg.AppendJobTrace(jobID, job.ClaimEpoch, 6, "world", 0, nil)
 	if err != nil || !ok {
 		t.Fatalf("AppendJobTrace #2 = (%v, %v)", ok, err)
 	}
@@ -213,13 +213,13 @@ func TestPG_AppendJobTrace_TwoJobsOfOneRunBothSurvive(t *testing.T) {
 		t.Fatalf("unexpected claim assignment: %+v %+v", j1, j2)
 	}
 
-	if _, err := pg.AppendJobTrace(job1ID, j1.ClaimEpoch, 0, "A", 0, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(job1ID, j1.ClaimEpoch, 0, "A", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.AppendJobTrace(job2ID, j2.ClaimEpoch, 0, "B", 0, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(job2ID, j2.ClaimEpoch, 0, "B", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.AppendJobTrace(job1ID, j1.ClaimEpoch, 1, "A2", 0, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(job1ID, j1.ClaimEpoch, 1, "A2", 0, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestPG_AppendJobTrace_StaleEpochRejected(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-stale-trace"))
 
-	ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch+1, 0, "ghost", 0, nil)
+	_, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch+1, 0, "ghost", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,15 +263,15 @@ func TestPG_AppendJobTrace_BoundedTruncatesOnce(t *testing.T) {
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-bound"))
 
 	const bound = 10
-	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "0123456789", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "0123456789", bound, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Crossing chunk: cut at the bound (already exactly at it here, so this
 	// one contributes only the marker) then a later chunk is dropped.
-	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 10, "OVERFLOW", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 10, "OVERFLOW", bound, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 18, "MORE", bound, nil); err != nil {
+	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 18, "MORE", bound, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -298,13 +298,15 @@ func TestPG_AppendJobTrace_DuplicateOffsetIsNoOp(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-dup-offset"))
 
-	if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil); err != nil || !ok {
-		t.Fatalf("first append = (%v, %v)", ok, err)
+	appended1, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
+	if err != nil || !ok || appended1 != 5 {
+		t.Fatalf("first append = (%d, %v, %v), want (5, true, nil)", appended1, ok, err)
 	}
 	// A retry of the same chunk at the same offset (as after a dropped HTTP
-	// response) is a safe no-op, not an error.
-	if ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil); err != nil || !ok {
-		t.Fatalf("duplicate append = (%v, %v)", ok, err)
+	// response) is a safe no-op, not an error, returning appended=0.
+	appended2, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
+	if err != nil || !ok || appended2 != 0 {
+		t.Fatalf("duplicate append = (%d, %v, %v), want (0, true, nil)", appended2, ok, err)
 	}
 	run, err := pg.GetRun(runID)
 	if err != nil {
@@ -324,7 +326,7 @@ func TestPG_AppendJobTrace_GappedOffsetRejected(t *testing.T) {
 
 	// Nothing has been appended yet, so offset 0 is expected; offset 5 is a
 	// gap - reject rather than silently misplace content.
-	if _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 5, "world", 0, nil); err == nil {
+	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 5, "world", 0, nil); err == nil {
 		t.Fatal("expected an error for a gapped offset")
 	}
 	run, err := pg.GetRun(runID)
@@ -344,7 +346,7 @@ func TestPG_AppendJobTrace_WrongRunnerRejected(t *testing.T) {
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-owner-trace"))
 	intruder := mustCreateRunner(t, pg, "r-intruder-trace")
 
-	ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hijack", 0, &intruder)
+	_, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hijack", 0, &intruder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +372,7 @@ func TestPG_AppendJobTrace_NeverClaimedJobRejectsGuessedZeroEpoch(t *testing.T) 
 	// A never-claimed job's claim_epoch defaults to 0 - a value a caller can
 	// simply guess without ever claiming anything. The ownership check must
 	// reject it regardless, since the job's stored runner_id is NULL.
-	ok, err := pg.AppendJobTrace(jobID, 0, 0, "forged", 0, &attacker)
+	_, ok, err := pg.AppendJobTrace(jobID, 0, 0, "forged", 0, &attacker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +389,7 @@ func TestPG_AppendJobTrace_OwningRunnerSucceeds(t *testing.T) {
 	runnerID := mustCreateRunner(t, pg, "r-owner-trace-ok")
 	job, _ := pg.ClaimNextJob(runnerID)
 
-	ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, &runnerID)
+	_, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, &runnerID)
 	if err != nil || !ok {
 		t.Fatalf("AppendJobTrace from the owning runner = (%v, %v)", ok, err)
 	}
@@ -395,7 +397,7 @@ func TestPG_AppendJobTrace_OwningRunnerSucceeds(t *testing.T) {
 
 func TestPG_AppendJobTrace_UnknownJob(t *testing.T) {
 	pg := testPG(t)
-	ok, err := pg.AppendJobTrace(999999, 1, 0, "x", 0, nil)
+	_, ok, err := pg.AppendJobTrace(999999, 1, 0, "x", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,7 +828,7 @@ func TestPG_ReclaimStaleJobs_ReturnsToPendingAndBumpsEpoch(t *testing.T) {
 
 	// The old, merely-slow runner's trace/complete calls under the old
 	// epoch are now rejected.
-	if ok, _ := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "late", 0, nil); ok {
+	if _, ok, _ := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "late", 0, nil); ok {
 		t.Fatal("expected old-epoch trace append to be rejected after reclaim")
 	}
 	if ok, _ := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late", "", nil, 0, true); ok {

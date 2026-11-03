@@ -161,7 +161,7 @@ func TestPG_BinarySafe_AppendJobTrace(t *testing.T) {
 				t.Fatalf("ClaimNextJob = %+v, %v", job, err)
 			}
 
-			ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.input, 10000, &runnerID)
+			_, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, tc.input, 10000, &runnerID)
 			if err != nil || !ok {
 				t.Fatalf("AppendJobTrace failed: ok=%v, err=%v", ok, err)
 			}
