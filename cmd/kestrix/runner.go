@@ -453,6 +453,7 @@ func (w *traceWriter) runFlusher(ctx context.Context) {
 				continue
 			}
 		}
+		w.spool.SetInFlight(true)
 		w.mu.Unlock()
 
 		statusCode, err := w.pushChunk(chunk.Offset, chunk.Data)
@@ -468,15 +469,18 @@ func (w *traceWriter) runFlusher(ctx context.Context) {
 
 		if err == nil && statusCode == http.StatusNoContent {
 			w.mu.Lock()
-			w.spool.Acknowledge(chunk.Offset, len(chunk.Data))
-			w.offset = chunk.Offset + len(chunk.Data)
+			acked := w.spool.Acknowledge(chunk.Offset, len(chunk.Data))
+			if acked {
+				w.offset = chunk.Offset + len(chunk.Data)
+			}
 			w.mu.Unlock()
 
 			delay = traceRetryBaseDelay
 			continue
 		}
 
-		// Transient failure: apply backoff and jitter
+		// Transient failure: clear in-flight state and apply backoff and jitter
+		w.spool.SetInFlight(false)
 		jitter := time.Duration(0)
 		if delay > 1 {
 			jitter = time.Duration(rand.Int64N(int64(delay / 2)))

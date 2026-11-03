@@ -30,6 +30,7 @@ type TraceSpool struct {
 	nextOffset       int
 	truncationMarker string
 	truncated        bool
+	inFlight         bool
 	dead             bool
 }
 
@@ -112,6 +113,7 @@ func (s *TraceSpool) Write(p []byte) (int, error) {
 
 // applyTruncationLocked drops oldest buffered chunks and inserts the truncation marker,
 // adjusting subsequent chunk offsets so that offsets remain strictly sequential and contiguous.
+// If the head chunk is currently in-flight, it is preserved and truncation applies to subsequent chunks.
 // Must be called while holding s.mu.
 func (s *TraceSpool) applyTruncationLocked() {
 	if len(s.chunks) == 0 {
@@ -121,6 +123,72 @@ func (s *TraceSpool) applyTruncationLocked() {
 	markerBytes := []byte(s.truncationMarker)
 	if len(markerBytes) > s.maxBytes {
 		markerBytes = markerBytes[:s.maxBytes]
+	}
+
+	// If the head chunk is currently in-flight, protect it from being dropped.
+	if s.inFlight {
+		head := s.chunks[0]
+		if len(s.chunks) == 1 {
+			return
+		}
+
+		availableBudget := s.maxBytes - len(head.Data) - len(markerBytes)
+		if availableBudget < 0 {
+			availableBudget = 0
+		}
+
+		startIndex := 1
+		if len(s.chunks) > 1 && s.chunks[1].IsMarker {
+			startIndex = 2
+		}
+
+		fitStart := len(s.chunks)
+		usedBytes := 0
+		for i := len(s.chunks) - 1; i >= startIndex; i-- {
+			chunkLen := len(s.chunks[i].Data)
+			if usedBytes+chunkLen <= availableBudget {
+				usedBytes += chunkLen
+				fitStart = i
+			} else {
+				break
+			}
+		}
+
+		var keptChunks []TraceChunk
+		if fitStart < len(s.chunks) {
+			keptChunks = s.chunks[fitStart:]
+		} else if availableBudget > 0 && len(s.chunks) > startIndex {
+			lastChunk := s.chunks[len(s.chunks)-1]
+			trimmedData := lastChunk.Data[len(lastChunk.Data)-availableBudget:]
+			keptChunks = []TraceChunk{{
+				Data: trimmedData,
+			}}
+		}
+
+		markerOffset := head.Offset + len(head.Data)
+		markerChunk := TraceChunk{
+			Offset:   markerOffset,
+			Data:     markerBytes,
+			IsMarker: true,
+		}
+
+		newChunks := make([]TraceChunk, 0, 2+len(keptChunks))
+		newChunks = append(newChunks, head, markerChunk)
+		currOffset := markerOffset + len(markerBytes)
+		totalBytes := len(head.Data) + len(markerBytes)
+
+		for i := range keptChunks {
+			keptChunks[i].Offset = currOffset
+			currOffset += len(keptChunks[i].Data)
+			totalBytes += len(keptChunks[i].Data)
+			newChunks = append(newChunks, keptChunks[i])
+		}
+
+		s.chunks = newChunks
+		s.bufferedBytes = totalBytes
+		s.nextOffset = currOffset
+		s.truncated = true
+		return
 	}
 
 	firstOffset := s.chunks[0].Offset
@@ -185,6 +253,21 @@ func (s *TraceSpool) applyTruncationLocked() {
 	s.truncated = true
 }
 
+// SetInFlight marks whether the head chunk is currently in-flight being sent.
+// While in-flight, applyTruncationLocked will not drop the head chunk.
+func (s *TraceSpool) SetInFlight(inFlight bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight = inFlight
+}
+
+// InFlight returns whether the head chunk is currently marked in-flight.
+func (s *TraceSpool) InFlight() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inFlight
+}
+
 // Peek returns the oldest chunk in the spool without removing it.
 // Returns false if the spool is empty.
 func (s *TraceSpool) Peek() (TraceChunk, bool) {
@@ -212,6 +295,7 @@ func (s *TraceSpool) Pop() (TraceChunk, bool) {
 	c := s.chunks[0]
 	s.chunks = s.chunks[1:]
 	s.bufferedBytes -= len(c.Data)
+	s.inFlight = false
 	if c.IsMarker || len(s.chunks) == 0 {
 		s.truncated = false
 	}
@@ -232,6 +316,7 @@ func (s *TraceSpool) Acknowledge(offset, length int) bool {
 		c := s.chunks[0]
 		s.chunks = s.chunks[1:]
 		s.bufferedBytes -= length
+		s.inFlight = false
 		if c.IsMarker || len(s.chunks) == 0 {
 			s.truncated = false
 		}
@@ -249,6 +334,7 @@ func (s *TraceSpool) Clear() {
 	s.chunks = nil
 	s.bufferedBytes = 0
 	s.truncated = false
+	s.inFlight = false
 	s.notifyLocked()
 }
 
@@ -262,6 +348,7 @@ func (s *TraceSpool) MarkDead() {
 	s.chunks = nil
 	s.bufferedBytes = 0
 	s.truncated = false
+	s.inFlight = false
 	s.notifyLocked()
 }
 
@@ -316,7 +403,7 @@ func (s *TraceSpool) Chunks() []TraceChunk {
 	for i, c := range s.chunks {
 		d := make([]byte, len(c.Data))
 		copy(d, c.Data)
-		res[i] = TraceChunk{Offset: c.Offset, Data: d}
+		res[i] = TraceChunk{Offset: c.Offset, Data: d, IsMarker: c.IsMarker}
 	}
 	return res
 }

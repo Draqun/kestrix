@@ -274,6 +274,68 @@ func TestTraceSpool_RepeatedTruncationAfterMarkerAcknowledged(t *testing.T) {
 	}
 }
 
+func TestTraceSpool_TruncationWithInFlightChunkPreservesInFlightAndContiguousOffsets(t *testing.T) {
+	marker := "[... output truncated due to offline buffer limit ...]\n"
+	markerLen := len(marker)
+	maxBytes := markerLen + 40
+	spool := NewTraceSpool(maxBytes, 0)
+	spool.SetTruncationMarker(marker)
+
+	// Append initial chunk (20 bytes)
+	c1 := spool.Append([]byte("initial-chunk-01234\n")) // 20 bytes, offset 0..20
+	if c1.Offset != 0 {
+		t.Fatalf("expected offset 0, got %d", c1.Offset)
+	}
+
+	// Mark in-flight (as when flusher is sending it over HTTP)
+	spool.SetInFlight(true)
+	if !spool.InFlight() {
+		t.Fatal("expected InFlight() to be true")
+	}
+
+	// Now append a burst of chunks causing buffer overflow
+	spool.Append([]byte("burst-chunk-01-0123\n")) // 20 bytes
+	spool.Append([]byte("burst-chunk-02-0123\n")) // 20 bytes
+	spool.Append([]byte("burst-chunk-03-0123\n")) // 20 bytes
+	spool.Append([]byte("burst-chunk-04-0123\n")) // 20 bytes -> overflow!
+
+	chunks := spool.Chunks()
+	if len(chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks (in-flight + marker), got %d", len(chunks))
+	}
+
+	// Head chunk MUST be the in-flight chunk, NOT the marker
+	if string(chunks[0].Data) != "initial-chunk-01234\n" {
+		t.Fatalf("expected head chunk to be in-flight chunk, got %q", string(chunks[0].Data))
+	}
+	if chunks[0].Offset != 0 {
+		t.Fatalf("expected head chunk offset 0, got %d", chunks[0].Offset)
+	}
+
+	// Second chunk MUST be the truncation marker immediately following head chunk
+	if !chunks[1].IsMarker {
+		t.Fatalf("expected second chunk to be marker")
+	}
+	if chunks[1].Offset != 20 {
+		t.Fatalf("expected marker chunk offset 20, got %d", chunks[1].Offset)
+	}
+
+	// Acknowledge the in-flight chunk
+	acked := spool.Acknowledge(0, 20)
+	if !acked {
+		t.Fatalf("failed to acknowledge in-flight chunk")
+	}
+	if spool.InFlight() {
+		t.Fatalf("expected InFlight() to be false after acknowledge")
+	}
+
+	// Now head chunk is the marker at offset 20
+	head, ok := spool.Peek()
+	if !ok || !head.IsMarker || head.Offset != 20 {
+		t.Fatalf("expected marker at offset 20 at head of spool, got %+v", head)
+	}
+}
+
 // ── Inspection, Acknowledge, Clear, MarkDead, WaitEmpty ──
 
 func TestTraceSpool_PeekPopAcknowledge(t *testing.T) {
