@@ -150,6 +150,119 @@ func TestTraceWriter_RetryFlusherContiguousSequentialOffsets(t *testing.T) {
 	}
 }
 
+func TestTraceWriter_MidStreamNetworkOutagePreservesContiguousOffsets(t *testing.T) {
+	origBase := traceRetryBaseDelay
+	origMax := traceRetryMaxDelay
+	traceRetryBaseDelay = 5 * time.Millisecond
+	traceRetryMaxDelay = 20 * time.Millisecond
+	t.Cleanup(func() {
+		traceRetryBaseDelay = origBase
+		traceRetryMaxDelay = origMax
+	})
+
+	var mu sync.Mutex
+	type receivedTrace struct {
+		offset int
+		chunk  string
+	}
+	var received []receivedTrace
+	var serverFailing atomic.Bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serverFailing.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		var body struct {
+			Epoch  int    `json:"epoch"`
+			Offset int    `json:"offset"`
+			Chunk  string `json:"chunk"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		received = append(received, receivedTrace{offset: body.Offset, chunk: body.Chunk})
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	tw := newTraceWriter(ctx, ts.Client(), ts.URL, "tok", 1, 1, 1024*1024)
+	defer tw.Stop()
+
+	// 1. Initial write while network is healthy
+	chunk0 := []byte("line-0: healthy transmission\n")
+	tw.Write(chunk0)
+	if err := tw.Flush(ctx); err != nil {
+		t.Fatalf("Flush chunk0 failed: %v", err)
+	}
+
+	mu.Lock()
+	if len(received) != 1 || received[0].chunk != string(chunk0) {
+		mu.Unlock()
+		t.Fatalf("expected initial chunk received, got %+v", received)
+	}
+	mu.Unlock()
+
+	// 2. Trigger mid-stream network outage
+	serverFailing.Store(true)
+
+	// Write subsequent chunks during the outage
+	chunk1 := []byte("line-1: sent during network outage\n")
+	chunk2 := []byte("line-2: also spooled during outage\n")
+	tw.Write(chunk1)
+	tw.Write(chunk2)
+
+	// Ensure chunks are held in spool and not discarded
+	time.Sleep(30 * time.Millisecond)
+	if tw.spool.Len() < 2 {
+		t.Fatalf("expected at least 2 chunks spooled during outage, got %d", tw.spool.Len())
+	}
+
+	// 3. Restore network connectivity and write a final chunk
+	serverFailing.Store(false)
+	chunk3 := []byte("line-3: sent after network recovery\n")
+	tw.Write(chunk3)
+
+	// Wait for all spooled and new chunks to flush
+	if err := tw.Flush(ctx); err != nil {
+		t.Fatalf("Flush after network recovery failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	expectedChunks := []string{
+		string(chunk0),
+		string(chunk1),
+		string(chunk2),
+		string(chunk3),
+	}
+
+	if len(received) != len(expectedChunks) {
+		t.Fatalf("expected %d received chunks, got %d: %+v", len(expectedChunks), len(received), received)
+	}
+
+	expectedOffset := 0
+	for i, rc := range received {
+		if rc.offset != expectedOffset {
+			t.Fatalf("chunk %d: offset = %d, want %d", i, rc.offset, expectedOffset)
+		}
+		if rc.chunk != expectedChunks[i] {
+			t.Fatalf("chunk %d: chunk = %q, want %q", i, rc.chunk, expectedChunks[i])
+		}
+		expectedOffset += len(rc.chunk)
+	}
+}
+
 // ── Task 2.3: HTTP 409 Conflict clears spool and stops retries on stale epoch ──
 
 func TestTraceWriter_HTTP409Conflict_StopsRetriesAndClearsSpool(t *testing.T) {
