@@ -187,7 +187,7 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: create workdir: %v\n", err)
 		msg := "runner: create workdir: " + err.Error()
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 		return
 	}
 	defer os.RemoveAll(workDir)
@@ -195,14 +195,14 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 	if err := unpackArchive(job.Payload.Archive, workDir); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: unpack archive: %v\n", err)
 		msg := "runner: unpack archive: " + err.Error()
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 		return
 	}
 	for _, artArchive := range job.Payload.Artifacts {
 		if err := unpackArchive(artArchive, workDir); err != nil {
 			fmt.Fprintf(os.Stderr, "kestrix runner: unpack artifact: %v\n", err)
 			msg := "runner: unpack artifact: " + err.Error()
-			reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+			reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 			return
 		}
 	}
@@ -277,11 +277,11 @@ func buildRunnerOptions(workDir string, payload domain.RemoteJobPayload, mode st
 
 // reportComplete makes one PUT /api/runner-jobs/{id}/complete call.
 // taskError may be empty.
-// If an optional spool is passed, it flushes all pending spooled trace chunks
+// If spool is non-nil, it flushes all pending spooled trace chunks
 // before sending the completion request (tasks.md 2.4).
-func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output, taskError string, spool ...*TraceSpool) error {
-	if len(spool) > 0 && spool[0] != nil {
-		if err := spool[0].WaitEmpty(ctx); err != nil {
+func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output, taskError string, spool *TraceSpool) error {
+	if spool != nil {
+		if err := spool.WaitEmpty(ctx); err != nil {
 			return fmt.Errorf("flush trace spool: %w", err)
 		}
 	}

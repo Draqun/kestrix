@@ -664,7 +664,7 @@ func TestReportComplete_NonNoContentReturnsError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 1, 1, "passed", "", "")
+	err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 1, 1, "passed", "", "", nil)
 	if err == nil {
 		t.Fatal("expected an error for a non-204 response")
 	}
@@ -678,7 +678,7 @@ func TestReportComplete_NetworkErrorPropagates(t *testing.T) {
 	badURL := ts.URL
 	ts.Close() // closed before use: every request against it now fails to connect.
 
-	err := reportComplete(context.Background(), http.DefaultClient, badURL, "tok", 1, 1, "passed", "", "")
+	err := reportComplete(context.Background(), http.DefaultClient, badURL, "tok", 1, 1, "passed", "", "", nil)
 	if err == nil {
 		t.Fatal("expected client.Do's connection error to propagate")
 	}
@@ -687,7 +687,7 @@ func TestReportComplete_NetworkErrorPropagates(t *testing.T) {
 func TestReportComplete_RequestBuildErrorPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := reportComplete(ctx, http.DefaultClient, "http://127.0.0.1:1", "tok", 1, 1, "passed", "", "")
+	err := reportComplete(ctx, http.DefaultClient, "http://127.0.0.1:1", "tok", 1, 1, "passed", "", "", nil)
 	if err == nil {
 		t.Fatal("expected an error from an already-canceled context")
 	}
@@ -701,7 +701,7 @@ func TestReportComplete_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	if err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 5, 2, "failed", "boom", ""); err != nil {
+	if err := reportComplete(context.Background(), ts.Client(), ts.URL, "tok", 5, 2, "failed", "boom", "", nil); err != nil {
 		t.Fatalf("reportComplete: %v", err)
 	}
 	if gotBody["status"] != "failed" || gotBody["output"] != "boom" {
