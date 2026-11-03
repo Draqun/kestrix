@@ -779,34 +779,59 @@ func TestTraceWriter_Write_SuccessAdvancesOffset(t *testing.T) {
 // ── resolveRunnerFlags (REVIEW.md R9) ───────────────────────────────
 
 func TestResolveRunnerFlags_FlagsWinOverEnv(t *testing.T) {
-	env := &config.Environment{RunnerServer: "https://env.example.com", RunnerToken: "env-tok", RunnerMode: "docker"}
-	server, token, mode := resolveRunnerFlags("https://flag.example.com", "flag-tok", "local", env)
-	if server != "https://flag.example.com" || token != "flag-tok" || mode != "local" {
-		t.Fatalf("got (%q, %q, %q), want the flag values to win", server, token, mode)
+	env := &config.Environment{RunnerServer: "https://env.example.com", RunnerToken: "env-tok", RunnerMode: "docker", RunnerTraceSpoolMaxBytes: 5000}
+	server, token, mode, spool := resolveRunnerFlags("https://flag.example.com", "flag-tok", "local", 2000, env)
+	if server != "https://flag.example.com" || token != "flag-tok" || mode != "local" || spool != 2000 {
+		t.Fatalf("got (%q, %q, %q, %d), want flag values to win", server, token, mode, spool)
 	}
 }
 
 func TestResolveRunnerFlags_FallsBackToEnvWhenFlagsEmpty(t *testing.T) {
-	env := &config.Environment{RunnerServer: "https://env.example.com", RunnerToken: "env-tok", RunnerMode: "docker"}
-	server, token, mode := resolveRunnerFlags("", "", "", env)
-	if server != "https://env.example.com" || token != "env-tok" || mode != "docker" {
-		t.Fatalf("got (%q, %q, %q), want the env values", server, token, mode)
+	env := &config.Environment{RunnerServer: "https://env.example.com", RunnerToken: "env-tok", RunnerMode: "docker", RunnerTraceSpoolMaxBytes: 5000}
+	server, token, mode, spool := resolveRunnerFlags("", "", "", 0, env)
+	if server != "https://env.example.com" || token != "env-tok" || mode != "docker" || spool != 5000 {
+		t.Fatalf("got (%q, %q, %q, %d), want env values", server, token, mode, spool)
 	}
 }
 
 func TestResolveRunnerFlags_ModeDefaultsToLocal(t *testing.T) {
 	env := &config.Environment{}
-	_, _, mode := resolveRunnerFlags("https://x.example.com", "tok", "", env)
+	_, _, mode, spool := resolveRunnerFlags("https://x.example.com", "tok", "", 0, env)
 	if mode != "local" {
 		t.Fatalf("mode = %q, want local when neither flag nor env sets it", mode)
+	}
+	if spool != DefaultTraceSpoolMaxBytes {
+		t.Fatalf("spool = %d, want default %d", spool, DefaultTraceSpoolMaxBytes)
 	}
 }
 
 func TestResolveRunnerFlags_TrimsTrailingSlash(t *testing.T) {
 	env := &config.Environment{}
-	server, _, _ := resolveRunnerFlags("https://x.example.com/", "tok", "local", env)
+	server, _, _, _ := resolveRunnerFlags("https://x.example.com/", "tok", "local", 0, env)
 	if server != "https://x.example.com" {
 		t.Fatalf("server = %q, want the trailing slash trimmed", server)
+	}
+}
+
+func TestResolveRunnerFlags_TraceSpoolMaxBytes(t *testing.T) {
+	// Flag wins over env
+	env := &config.Environment{RunnerTraceSpoolMaxBytes: 50000}
+	_, _, _, spool := resolveRunnerFlags("https://x.example.com", "tok", "local", 20000, env)
+	if spool != 20000 {
+		t.Fatalf("spool = %d, want flag value 20000", spool)
+	}
+
+	// Falls back to env when flag is 0
+	_, _, _, spool = resolveRunnerFlags("https://x.example.com", "tok", "local", 0, env)
+	if spool != 50000 {
+		t.Fatalf("spool = %d, want env value 50000", spool)
+	}
+
+	// Falls back to DefaultTraceSpoolMaxBytes when neither flag nor env set
+	emptyEnv := &config.Environment{}
+	_, _, _, spool = resolveRunnerFlags("https://x.example.com", "tok", "local", 0, emptyEnv)
+	if spool != DefaultTraceSpoolMaxBytes {
+		t.Fatalf("spool = %d, want default %d", spool, DefaultTraceSpoolMaxBytes)
 	}
 }
 

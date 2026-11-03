@@ -412,7 +412,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"HTTPMaxBodyBytes": true, "WebhookMaxBodyBytes": true,
 		"RunnerJobMaxBodyBytes": true, "RunnerArtifactMaxBytes": true, "RunnerJobMaxConcurrentPolls": true,
 		"RunnerJobTimeout": true, "RunnerJobMaxReclaims": true, "RunnerOfflineAfter": true,
-		"RunnerServer": true, "RunnerToken": true, "RunnerMode": true,
+		"RunnerServer": true, "RunnerToken": true, "RunnerMode": true, "RunnerTraceSpoolMaxBytes": true,
 		"LogLevel": true,
 	}
 	envFieldToSetting := map[string]string{
