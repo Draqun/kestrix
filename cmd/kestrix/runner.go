@@ -330,9 +330,6 @@ type traceWriter struct {
 }
 
 func newTraceWriter(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, maxBytes int) *traceWriter {
-	if maxBytes <= 0 {
-		maxBytes = DefaultTraceSpoolMaxBytes
-	}
 	tw := &traceWriter{
 		client:   client,
 		baseURL:  baseURL,
@@ -340,8 +337,8 @@ func newTraceWriter(ctx context.Context, client *http.Client, baseURL, token str
 		jobID:    jobID,
 		epoch:    epoch,
 		maxBytes: maxBytes,
-		spool:    NewTraceSpool(maxBytes, 0),
 	}
+	tw.ensureSpoolLocked()
 	tw.ensureFlusherLocked(ctx)
 	return tw
 }
