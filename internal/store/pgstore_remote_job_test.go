@@ -298,15 +298,15 @@ func TestPG_AppendJobTrace_DuplicateOffsetIsNoOp(t *testing.T) {
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-dup-offset"))
 
-	appended1, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
-	if err != nil || !ok || appended1 != 5 {
-		t.Fatalf("first append = (%d, %v, %v), want (5, true, nil)", appended1, ok, err)
+	res1, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
+	if err != nil || !ok || res1.Appended != 5 || res1.RunID != runID || res1.TaskName != "build" {
+		t.Fatalf("first append = (%+v, %v, %v), want (Appended:5 RunID:%d TaskName:build, true, nil)", res1, ok, err, runID)
 	}
 	// A retry of the same chunk at the same offset (as after a dropped HTTP
 	// response) is a safe no-op, not an error, returning appended=0.
-	appended2, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
-	if err != nil || !ok || appended2 != 0 {
-		t.Fatalf("duplicate append = (%d, %v, %v), want (0, true, nil)", appended2, ok, err)
+	res2, ok, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "hello", 0, nil)
+	if err != nil || !ok || res2.Appended != 0 || res2.RunID != runID || res2.TaskName != "build" {
+		t.Fatalf("duplicate append = (%+v, %v, %v), want (Appended:0 RunID:%d TaskName:build, true, nil)", res2, ok, err, runID)
 	}
 	run, err := pg.GetRun(runID)
 	if err != nil {

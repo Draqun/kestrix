@@ -225,8 +225,12 @@ func TestRunService_AppendRemoteJobTrace_DedupRetries(t *testing.T) {
 	hub := NewRunEventHub()
 	runStore := &mocks.MockRunStore{}
 	pipeline := &mocks.MockPipelineRunner{}
+	runID := 42
+	taskName := "build"
 	remoteJobs := &mocks.MockRemoteJobStore{
-		AppendJobTraceOK: true,
+		AppendJobTraceOK:       true,
+		AppendJobTraceRunID:    &runID,
+		AppendJobTraceTaskName: &taskName,
 		Jobs: map[int]*domain.RemoteJob{
 			1: {ID: 1, RunID: 42, TaskName: "build"},
 		},
@@ -235,7 +239,6 @@ func TestRunService_AppendRemoteJobTrace_DedupRetries(t *testing.T) {
 	svc.SetRemoteJobStore(remoteJobs)
 	svc.SetEventHub(hub)
 
-	runID := 42
 	sub := hub.Subscribe(runID)
 	defer hub.Unsubscribe(runID, sub)
 

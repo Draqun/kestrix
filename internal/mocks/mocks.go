@@ -617,6 +617,8 @@ type MockRemoteJobStore struct {
 	AppendJobTraceOK       bool
 	AppendJobTraceErr      error
 	AppendJobTraceAppended *int
+	AppendJobTraceRunID    *int
+	AppendJobTraceTaskName *string
 
 	CompleteJobOK    bool
 	CompleteJobErr   error
@@ -703,7 +705,7 @@ func (m *MockRemoteJobStore) GetRemoteJob(jobID int) (*domain.RemoteJob, error) 
 	return m.Jobs[jobID], nil
 }
 
-func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (int, bool, error) {
+func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (domain.AppendTraceResult, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.AppendJobTraceChunks = append(m.AppendJobTraceChunks, chunk)
@@ -713,7 +715,20 @@ func (m *MockRemoteJobStore) AppendJobTrace(jobID, epoch, offset int, chunk stri
 	} else if m.AppendJobTraceOK {
 		appended = len(chunk)
 	}
-	return appended, m.AppendJobTraceOK, m.AppendJobTraceErr
+	runID := 1
+	if m.AppendJobTraceRunID != nil {
+		runID = *m.AppendJobTraceRunID
+	}
+	taskName := "task"
+	if m.AppendJobTraceTaskName != nil {
+		taskName = *m.AppendJobTraceTaskName
+	}
+	res := domain.AppendTraceResult{
+		Appended: appended,
+		RunID:    runID,
+		TaskName: taskName,
+	}
+	return res, m.AppendJobTraceOK, m.AppendJobTraceErr
 }
 
 func (m *MockRemoteJobStore) RemoteJobSecretValues(jobID int) ([]string, error) {

@@ -422,18 +422,15 @@ func (s *RunService) AppendRemoteJobTrace(jobID, epoch, offset int, chunk string
 	if s.remoteJobStore == nil {
 		return false, fmt.Errorf("remote job store not configured")
 	}
-	appended, ok, err := s.remoteJobStore.AppendJobTrace(jobID, epoch, offset, chunk, s.MaxOutputBytes, callerRunnerID)
+	res, ok, err := s.remoteJobStore.AppendJobTrace(jobID, epoch, offset, chunk, s.MaxOutputBytes, callerRunnerID)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
 		return false, nil
 	}
-	if appended > 0 && s.eventHub != nil {
-		job, err := s.remoteJobStore.GetRemoteJob(jobID)
-		if err == nil && job != nil {
-			s.eventHub.BroadcastTrace(job.RunID, job.TaskName, chunk[:appended], offset)
-		}
+	if res.Appended > 0 && s.eventHub != nil {
+		s.eventHub.BroadcastTrace(res.RunID, res.TaskName, chunk[:res.Appended], offset)
 	}
 	return true, nil
 }

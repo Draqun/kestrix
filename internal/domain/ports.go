@@ -316,6 +316,14 @@ type RemoteJob struct {
 // the caller must not record it as failed.
 var ErrRemoteJobExists = errors.New("remote job already exists")
 
+// AppendTraceResult carries the outcome of an accepted trace append, including
+// newly appended byte counts and run attribution for real-time subscribers.
+type AppendTraceResult struct {
+	Appended int
+	RunID    int
+	TaskName string
+}
+
 // RemoteJobStore is the port for dispatching, claiming, and completing
 // remote-runner jobs; see remote-runner-execution spec.md and design.md D1/D9.
 type RemoteJobStore interface {
@@ -356,7 +364,7 @@ type RemoteJobStore interface {
 	// simply guess). callerRunnerID is nil only for system-initiated calls
 	// that are not attributed to an authenticated runner; every HTTP-driven
 	// call passes the authenticated runner's ID.
-	AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (appended int, ok bool, err error)
+	AppendJobTrace(jobID, epoch, offset int, chunk string, maxOutputBytes int, callerRunnerID *int) (result AppendTraceResult, ok bool, err error)
 	// CompleteJob records a job's terminal report. The epoch check, the
 	// ownership check, and the parent run's terminal-status check happen in
 	// the same transaction as the task-result write (task 1.2/3.4): ok is

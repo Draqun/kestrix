@@ -336,8 +336,12 @@ func TestHandleRunnerJobTrace_RedactsRunSecretBeforeStorage(t *testing.T) {
 }
 
 func TestHandleRunnerJobTrace_BroadcastsToEventHub(t *testing.T) {
+	runID := 42
+	taskName := "test-task"
 	remoteJobs := &mocks.MockRemoteJobStore{
-		AppendJobTraceOK: true,
+		AppendJobTraceOK:       true,
+		AppendJobTraceRunID:    &runID,
+		AppendJobTraceTaskName: &taskName,
 		Jobs: map[int]*domain.RemoteJob{
 			1: {ID: 1, RunID: 42, TaskName: "test-task"},
 		},
@@ -367,8 +371,12 @@ func TestHandleRunnerJobTrace_BroadcastsToEventHub(t *testing.T) {
 }
 
 func TestHandleRunnerJobTrace_DedupRetriedChunk(t *testing.T) {
+	runID := 42
+	taskName := "test-task"
 	remoteJobs := &mocks.MockRemoteJobStore{
-		AppendJobTraceOK: true,
+		AppendJobTraceOK:       true,
+		AppendJobTraceRunID:    &runID,
+		AppendJobTraceTaskName: &taskName,
 		Jobs: map[int]*domain.RemoteJob{
 			1: {ID: 1, RunID: 42, TaskName: "test-task"},
 		},
