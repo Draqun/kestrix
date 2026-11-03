@@ -1,3 +1,0 @@
-kind: Fixed
-body: Avoid [skip ci] in release commit message so tag push triggers release pipeline
-time: 2026-11-01T11:21:36.499551797+01:00

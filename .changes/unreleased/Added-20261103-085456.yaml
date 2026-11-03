@@ -1,3 +1,0 @@
-kind: Added
-body: Add bounded in-memory trace spooling for remote runners during network disconnects
-time: 2026-11-03T08:54:56.107324827+01:00

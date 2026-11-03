@@ -1,3 +1,0 @@
-kind: Added
-body: Add Server-Sent Events (SSE) real-time streaming for run status, task transitions, and live logs with polling fallback
-time: 2026-11-02T14:53:36.868007317+01:00

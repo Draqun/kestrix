@@ -3,6 +3,16 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.5.0] - 2026-11-03
+### Added
+- Add cancel_in_progress pipeline option to automatically cancel superseded in-flight and queued runs on consecutive pushes to the same branch
+- Require OpenSpec specifications for all deferred items and establish proposals for all previously deferred items
+- Add Server-Sent Events (SSE) real-time streaming for run status, task transitions, and live logs with polling fallback
+- Add bounded in-memory trace spooling for remote runners during network disconnects
+### Fixed
+- Avoid [skip ci] in release commit message so tag push triggers release pipeline
+- Deduplicate remote runner trace broadcasts and emit running transition on job claim
+
 ## [v0.4.0] - 2026-11-01
 ### Added
 - Release automation tooling (`scripts/release.py`, `scripts/verify_version.py`, `scripts/verify_version_bump.py`, `scripts/generate_release_notes.py`) and Makefile targets (`release`, `release-push`, `release-dry-run`, `release-notes`).

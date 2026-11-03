@@ -1,3 +1,0 @@
-kind: Fixed
-body: Deduplicate remote runner trace broadcasts and emit running transition on job claim
-time: 2026-11-03T12:49:03.952780871+01:00
