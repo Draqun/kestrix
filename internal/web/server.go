@@ -194,6 +194,13 @@ type Server struct {
 	runnerPollLimiter  *runnerPollLimiter
 	unmatchedMu        sync.Mutex
 	unmatchedLoggedIDs map[int]bool
+	// eventHub distributes real-time events to active SSE listeners; set once
+	// at construction (see NewServer and EventHub) and never reassigned, so
+	// it needs no mutex of its own (see REVIEW.md R8).
+	eventHub *service.RunEventHub
+	// sseHeartbeatInterval overrides the SSE handler's heartbeat period in
+	// tests; zero means defaultSSEHeartbeatInterval.
+	sseHeartbeatInterval time.Duration
 }
 
 // knownSecrets returns the control-plane secret values that could plausibly
@@ -484,9 +491,30 @@ func NewServerWithDeps(
 	}
 	if s.runService != nil {
 		s.runService.Metrics = s.metrics
+	} else {
+		// With no RunService there is nothing else for EventHub() to read
+		// through, so this is the only hub that will ever back it.
+		s.eventHub = service.NewRunEventHub()
 	}
 	s.router = s.buildRouter()
 	return s
+}
+
+// EventHub returns the RunEventHub every SSE subscriber and publisher on
+// this server shares: runService.EventHub() when a RunService is
+// configured - RunService's own task/trace callbacks publish through that
+// same hub, so Server must read it rather than keep a copy that could fall
+// out of sync - or the server's own fallback hub otherwise. Either way the
+// hub is fixed once it exists and never reassigned, so no lock is needed
+// here (see REVIEW.md R8).
+func (s *Server) EventHub() *service.RunEventHub {
+	if s.runService != nil {
+		return s.runService.EventHub()
+	}
+	if s.eventHub == nil {
+		s.eventHub = service.NewRunEventHub()
+	}
+	return s.eventHub
 }
 
 // newTokenIssuer validates the configured JWT signing key and returns a
@@ -594,6 +622,7 @@ func (s *Server) buildRouter() chi.Router {
 				r.Post("/projects/{name}/resolve", s.handleResolveProject)
 				r.Get("/projects/{name}/runs", s.handleListRuns)
 				r.Get("/projects/{name}/runs/{runID}", s.handleGetRun)
+				r.Get("/projects/{name}/runs/{runID}/events", s.handleRunEvents)
 				r.Get("/runs", s.handleListAllRuns)
 				r.Post("/resolve", s.handleResolve)
 				r.Post("/generate", s.handleGenerate)

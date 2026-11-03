@@ -407,6 +407,7 @@ the minimum needed.
 | POST | `/api/projects/{name}/resolve` | viewer | Resolve a project's triggers |
 | GET | `/api/projects/{name}/runs`, `/api/runs` | viewer | Run history |
 | GET | `/api/projects/{name}/runs/{runID}` | viewer | One run with task results |
+| GET | `/api/projects/{name}/runs/{runID}/events` | viewer | SSE (`text/event-stream`): `status`, `task`, `trace`, and terminal `complete` events; 15s heartbeat; client falls back to polling the run endpoint above if the stream fails |
 | POST | `/api/projects/{name}/run` | operator | Start a run |
 | POST | `/api/projects/{name}/tasks/{task}/run` | operator | Start a run of a single task; returns `run_id` and `running`/`queued` at once |
 | POST | `/api/projects/{name}/runs/{runID}/cancel` | operator | Cancel a running run |

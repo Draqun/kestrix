@@ -258,6 +258,134 @@ func TestRunService_CompleteRemoteJob_DependentBecomesEligibleAfterCompletion(t 
 	}
 }
 
+// TestRunService_CompleteRemoteJob_EmitsTaskAndTerminalStatusEvents pins
+// that completing a remote job broadcasts its task transition, and that
+// the run's final status/complete pair fires once FinishRunWithRetry makes
+// the run terminal (see REVIEW.md R16 - previously unasserted even at
+// 100% line coverage, since no test subscribed to the hub).
+func TestRunService_CompleteRemoteJob_EmitsTaskAndTerminalStatusEvents(t *testing.T) {
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+	hub := NewRunEventHub()
+	svc.SetEventHub(hub)
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	buildJobID := 1
+	remoteJobs.Jobs = map[int]*domain.RemoteJob{buildJobID: {ID: buildJobID, RunID: runID, TaskName: "build"}}
+	remoteJobs.CompleteJobOK = true
+
+	sub := hub.Subscribe(runID)
+	defer hub.Unsubscribe(runID, sub)
+
+	ok, err := svc.CompleteRemoteJob(buildJobID, 1, domain.RunStatusPassed, "build output", "", nil)
+	if err != nil || !ok {
+		t.Fatalf("CompleteRemoteJob: ok=%v err=%v", ok, err)
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != EventTypeTask {
+			t.Fatalf("ev.Type = %q, want task", ev.Type)
+		}
+		p := ev.Data.(TaskPayload)
+		if p.TaskName != "build" || p.Status != domain.RunStatusPassed {
+			t.Fatalf("task payload = %+v, want build/passed", p)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for task event")
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != EventTypeStatus {
+			t.Fatalf("ev.Type = %q, want status", ev.Type)
+		}
+		p := ev.Data.(StatusPayload)
+		if p.Status != domain.RunStatusPassed {
+			t.Fatalf("status payload = %+v, want passed", p)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for status event")
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != EventTypeComplete {
+			t.Fatalf("ev.Type = %q, want complete", ev.Type)
+		}
+		p := ev.Data.(CompletePayload)
+		if p.Status != domain.RunStatusPassed {
+			t.Fatalf("complete payload = %+v, want passed", p)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for complete event")
+	}
+}
+
+// TestRunService_CompleteRemoteJob_NonTerminalEmitsTaskButNoStatusOrComplete
+// pins the other half of the same pair: when a dependent task is now
+// dispatched instead of the run finishing, the run stays "running" and no
+// status/complete event follows the task event (see REVIEW.md R16).
+func TestRunService_CompleteRemoteJob_NonTerminalEmitsTaskButNoStatusOrComplete(t *testing.T) {
+	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
+		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
+	}}
+	runStore := newFakeStatefulRunStore()
+	remoteJobs := &mocks.MockRemoteJobStore{}
+	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
+	hub := NewRunEventHub()
+	svc.SetEventHub(hub)
+
+	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	buildJobID := 1
+	remoteJobs.Jobs = map[int]*domain.RemoteJob{buildJobID: {ID: buildJobID, RunID: runID, TaskName: "build"}}
+	remoteJobs.CompleteJobOK = true
+
+	sub := hub.Subscribe(runID)
+	defer hub.Unsubscribe(runID, sub)
+
+	ok, err := svc.CompleteRemoteJob(buildJobID, 1, domain.RunStatusPassed, "build output", "", nil)
+	if err != nil || !ok {
+		t.Fatalf("CompleteRemoteJob: ok=%v err=%v", ok, err)
+	}
+	if runStore.status(runID) != "running" {
+		t.Fatalf("run status = %q, want running (deploy not completed yet)", runStore.status(runID))
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != EventTypeTask {
+			t.Fatalf("ev.Type = %q, want task", ev.Type)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for task event")
+	}
+
+	select {
+	case ev := <-sub:
+		t.Fatalf("unexpected event after a non-terminal completion: %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+		// No status/complete event follows - the run is still running.
+	}
+}
+
 func TestRunService_CompleteRemoteJob_NotOKIsNoOpNoResumption(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: 9, TaskName: "build"}},

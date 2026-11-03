@@ -35,6 +35,7 @@ import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, l
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 import { useAuth } from '../context/AuthContext';
+import useRunEvents from '../hooks/useRunEvents.js';
 
 // actorLabel renders an attribution actor string for display: an empty or
 // missing actor (a run recorded before run-attribution existed) shows as
@@ -145,15 +146,85 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
     });
   }, [load, runId]);
 
-  // Poll while running or a job is running after manual approve.
+  const busy = Boolean(detail && (detail.status === 'running' || detail.status === 'queued' || (detail.task_results || []).some(j => j.status === 'running')));
+
+  const { isConnected, isFallback } = useRunEvents({
+    projectName,
+    runId,
+    enabled: busy,
+    onOpen: () => { load(); },
+    onStatus: (data) => {
+      if (routedRunIdRef.current !== runId) return;
+      setDetail(prev => {
+        if (!prev || prev.id !== runId) return prev;
+        return { ...prev, status: data.status, error: data.error || prev.error };
+      });
+    },
+    onTask: (data) => {
+      if (routedRunIdRef.current !== runId) return;
+      setDetail(prev => {
+        if (!prev || prev.id !== runId) return prev;
+        const currentResults = prev.task_results || [];
+        // task_results holds one entry per task name - update that task's
+        // existing entry in place (preserving its accumulated live output)
+        // rather than appending a running/final pair under the same name;
+        // see REVIEW.md R6.
+        const idx = currentResults.findIndex(t => t.name === data.task_name);
+        let nextResults;
+        if (idx !== -1) {
+          nextResults = [...currentResults];
+          nextResults[idx] = { ...nextResults[idx], status: data.status, error: data.error || '' };
+        } else {
+          nextResults = [...currentResults, {
+            name: data.task_name,
+            status: data.status,
+            error: data.error || '',
+          }];
+        }
+        return { ...prev, task_results: nextResults };
+      });
+    },
+    onTrace: (data) => {
+      if (routedRunIdRef.current !== runId) return;
+      setDetail(prev => {
+        if (!prev || prev.id !== runId) return prev;
+        const chunk = data.chunk || '';
+        const prevResults = prev.task_results || [];
+        const taskIdx = data.task_name ? prevResults.findIndex(t => t.name === data.task_name) : -1;
+        let nextResults = prevResults;
+        if (taskIdx !== -1) {
+          nextResults = [...prevResults];
+          const tr = nextResults[taskIdx];
+          nextResults[taskIdx] = {
+            ...tr,
+            output: (tr.output || '') + chunk,
+          };
+        }
+        return {
+          ...prev,
+          output: (prev.output || '') + chunk,
+          task_results: nextResults,
+        };
+      });
+    },
+    onComplete: (data) => {
+      if (routedRunIdRef.current !== runId) return;
+      setDetail(prev => {
+        if (!prev || prev.id !== runId) return prev;
+        return { ...prev, status: data.status };
+      });
+      load();
+    },
+  });
+
+  // Poll while running or a job is running after manual approve when SSE is inactive or in fallback.
   useEffect(() => {
-    if (!detail) return;
-    const jobs = detail.task_results || [];
-    const busy = detail.status === 'running' || detail.status === 'queued' || jobs.some(j => j.status === 'running');
     if (!busy) return;
+    if (isConnected && !isFallback) return;
+
     const id = setInterval(() => { load(); }, 1500);
     return () => clearInterval(id);
-  }, [detail?.status, detail?.task_results, load]);
+  }, [busy, isConnected, isFallback, load]);
 
   useEffect(() => {
     if (!detail?.pipeline_def) { setDagNodes([]); setDagEdges([]); return; }

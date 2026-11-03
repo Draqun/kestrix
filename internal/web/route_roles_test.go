@@ -30,6 +30,7 @@ var routeRoleCases = []struct {
 	{"POST", "/api/projects/demo/resolve", domain.RoleViewer},
 	{"GET", "/api/projects/demo/runs", domain.RoleViewer},
 	{"GET", "/api/projects/demo/runs/1", domain.RoleViewer},
+	{"GET", "/api/projects/demo/runs/1/events", domain.RoleViewer},
 	{"GET", "/api/runs", domain.RoleViewer},
 	{"POST", "/api/resolve", domain.RoleViewer},
 	{"POST", "/api/generate", domain.RoleViewer},

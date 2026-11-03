@@ -645,6 +645,69 @@
                 }
             }
         },
+        "/api/projects/{name}/runs/{runID}/events": {
+            "get": {
+                "description": "Streams status, task, trace, and complete events as they happen (service.StatusPayload, service.TaskPayload, service.TracePayload, service.CompletePayload), with a \": ping\" comment heartbeat every 15s and the stream closing once the run reaches a terminal status.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "runs"
+                ],
+                "summary": "Stream pipeline run events via SSE",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Run ID",
+                        "name": "runID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "text/event-stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid run ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "run not found, or project name does not match",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "streaming unsupported by the response writer",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/projects/{name}/tasks/{task}/run": {
             "post": {
                 "description": "Accepts the run and returns at once; the task executes in the background. Read the outcome from GET /api/projects/{name}/runs/{runID}.",

@@ -843,6 +843,51 @@ paths:
       summary: Get a pipeline run by ID
       tags:
       - runs
+  /api/projects/{name}/runs/{runID}/events:
+    get:
+      description: 'Streams status, task, trace, and complete events as they happen
+        (service.StatusPayload, service.TaskPayload, service.TracePayload, service.CompletePayload),
+        with a ": ping" comment heartbeat every 15s and the stream closing once the
+        run reaches a terminal status.'
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: runID
+        required: true
+        type: integer
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: text/event-stream
+          schema:
+            type: string
+        "400":
+          description: invalid run ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: run not found, or project name does not match
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: streaming unsupported by the response writer
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stream pipeline run events via SSE
+      tags:
+      - runs
   /api/projects/{name}/tasks/{task}/run:
     post:
       description: Accepts the run and returns at once; the task executes in the background.

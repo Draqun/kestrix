@@ -45,6 +45,7 @@ func setupRunServer(t *testing.T, projectStore domain.ProjectStore, runStore dom
 		taskRunner:     pipeline,
 		projectService: projectService,
 		runService:     runService,
+		eventHub:       runService.EventHub(),
 		sourceSessions: &testSourceSessions{},
 	}
 	if runners, ok := runStore.(domain.RunnerStore); ok {
