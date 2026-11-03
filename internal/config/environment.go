@@ -41,6 +41,10 @@ type Environment struct {
 	RunnerServer string
 	RunnerToken  string
 	RunnerMode   string
+	// RunnerTraceSpoolMaxBytes backs KESTRIX_RUNNER_TRACE_SPOOL_MAX_BYTES
+	// (default 10485760 / 10 MiB): maximum in-memory trace spool bytes
+	// buffered by `kestrix runner` during network disconnects.
+	RunnerTraceSpoolMaxBytes int
 	// RunnerAllowLocal backs runner.allow_local (KESTRIX_RUNNER_ALLOW_LOCAL,
 	// default false): whether Kestrix may execute a task in `local` mode
 	// inside its own process. See safe-production-execution design.md D1.
@@ -381,6 +385,11 @@ func LoadEnvironment(environ []string) *Environment {
 		validationErr = err
 	}
 
+	runnerTraceSpoolMaxBytes, err := parsePositiveIntEnv(values, "RUNNER_TRACE_SPOOL_MAX_BYTES", 10485760)
+	if err != nil && validationErr == nil {
+		validationErr = err
+	}
+
 	httpReadTimeout := 30 * time.Second
 	if raw := values[Prefix+"HTTP_READ_TIMEOUT"]; raw != "" {
 		parsed, err := time.ParseDuration(raw)
@@ -574,6 +583,7 @@ func LoadEnvironment(environ []string) *Environment {
 		RunHistoryLimit:             runHistoryLimit,
 		RunnerMaxOutputBytes:        runnerMaxOutputBytes,
 		RunnerArtifactMaxBytes:      runnerArtifactMaxBytes,
+		RunnerTraceSpoolMaxBytes:    runnerTraceSpoolMaxBytes,
 		HTTPReadTimeout:             httpReadTimeout,
 		HTTPWriteTimeout:            httpWriteTimeout,
 		HTTPIdleTimeout:             httpIdleTimeout,

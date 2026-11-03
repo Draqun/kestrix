@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,31 +37,31 @@ func cmdRunner(args []string) {
 	server := fs.String("server", "", "Kestrix server base URL, e.g. https://kestrix.example.com (env: KESTRIX_RUNNER_SERVER)")
 	token := fs.String("token", "", "runner bearer token, issued by POST /api/runners (env: KESTRIX_RUNNER_TOKEN)")
 	mode := fs.String("mode", "", "execution backend: local or docker (env: KESTRIX_RUNNER_MODE, default local)")
+	traceSpoolMaxBytes := fs.Int("trace-spool-max-bytes", 0, "max in-memory trace spool bytes during network disconnects (env: KESTRIX_RUNNER_TRACE_SPOOL_MAX_BYTES, default 10485760)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	resolvedServer, resolvedToken, resolvedMode := resolveRunnerFlags(*server, *token, *mode, config.Current())
+	resolvedServer, resolvedToken, resolvedMode, resolvedSpoolMaxBytes := resolveRunnerFlags(*server, *token, *mode, *traceSpoolMaxBytes, config.Current())
 	if resolvedServer == "" || resolvedToken == "" {
 		fmt.Fprintln(os.Stderr, "kestrix runner: --server and --token (or KESTRIX_RUNNER_SERVER / KESTRIX_RUNNER_TOKEN) are required")
 		os.Exit(2)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	fmt.Fprintf(os.Stderr, "kestrix runner: polling %s (mode=%s)\n", resolvedServer, resolvedMode)
-	if err := runPollLoop(context.Background(), client, resolvedServer, resolvedToken, resolvedMode); err != nil {
+	fmt.Fprintf(os.Stderr, "kestrix runner: polling %s (mode=%s, traceSpoolMaxBytes=%d)\n", resolvedServer, resolvedMode, resolvedSpoolMaxBytes)
+	if err := runPollLoop(context.Background(), client, resolvedServer, resolvedToken, resolvedMode, resolvedSpoolMaxBytes); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// resolveRunnerFlags applies --server/--token/--mode's precedence over
-// KESTRIX_RUNNER_SERVER/TOKEN/MODE (flag wins, then env, then "local" for
-// mode) - pulled out of cmdRunner so this precedence is unit-testable
-// directly: cmdRunner itself can only be driven as a subprocess (it either
-// os.Exits or blocks forever in runPollLoop), which would make asserting on
-// precedence alone needlessly heavy (REVIEW.md R9).
-func resolveRunnerFlags(server, token, mode string, env *config.Environment) (resolvedServer, resolvedToken, resolvedMode string) {
+// resolveRunnerFlags applies --server/--token/--mode/--trace-spool-max-bytes's precedence over
+// KESTRIX_RUNNER_SERVER/TOKEN/MODE/TRACE_SPOOL_MAX_BYTES (flag wins, then env, then defaults)
+// - pulled out of cmdRunner so this precedence is unit-testable directly: cmdRunner itself can
+// only be driven as a subprocess (it either os.Exits or blocks forever in runPollLoop), which would
+// make asserting on precedence alone needlessly heavy (REVIEW.md R9).
+func resolveRunnerFlags(server, token, mode string, spoolMaxBytes int, env *config.Environment) (resolvedServer, resolvedToken, resolvedMode string, resolvedSpoolMaxBytes int) {
 	resolvedServer, resolvedToken, resolvedMode = server, token, mode
 	if resolvedServer == "" {
 		resolvedServer = env.RunnerServer
@@ -75,7 +76,15 @@ func resolveRunnerFlags(server, token, mode string, env *config.Environment) (re
 		resolvedMode = "local"
 	}
 	resolvedServer = strings.TrimRight(resolvedServer, "/")
-	return resolvedServer, resolvedToken, resolvedMode
+
+	resolvedSpoolMaxBytes = spoolMaxBytes
+	if resolvedSpoolMaxBytes <= 0 {
+		resolvedSpoolMaxBytes = env.RunnerTraceSpoolMaxBytes
+	}
+	if resolvedSpoolMaxBytes <= 0 {
+		resolvedSpoolMaxBytes = DefaultTraceSpoolMaxBytes
+	}
+	return resolvedServer, resolvedToken, resolvedMode, resolvedSpoolMaxBytes
 }
 
 // pollErrorRetryDelay bounds how long runPollLoop waits after a poll error
@@ -95,7 +104,11 @@ var errRunnerRejected = errors.New("server rejected the runner token")
 // long-poll wait (tasks.md 3.2), so a 204 here means "nothing pending right
 // now" and the loop re-polls immediately rather than sleeping - it already
 // just spent up to that long-poll interval waiting.
-func runPollLoop(ctx context.Context, client *http.Client, baseURL, token, mode string) error {
+func runPollLoop(ctx context.Context, client *http.Client, baseURL, token, mode string, spoolMaxBytes ...int) error {
+	maxSpoolBytes := DefaultTraceSpoolMaxBytes
+	if len(spoolMaxBytes) > 0 && spoolMaxBytes[0] > 0 {
+		maxSpoolBytes = spoolMaxBytes[0]
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,7 +128,7 @@ func runPollLoop(ctx context.Context, client *http.Client, baseURL, token, mode 
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "kestrix runner: claimed job %d (task %q, epoch %d)\n", job.ID, job.TaskName, job.ClaimEpoch)
-		runJob(ctx, client, baseURL, token, mode, job)
+		runJob(ctx, client, baseURL, token, mode, job, maxSpoolBytes)
 	}
 }
 
@@ -165,12 +178,16 @@ func serverMessage(body []byte) string {
 // --mode, never anything the job payload names - design.md D3), and
 // reports the outcome. Every failure still reports completion so the job
 // does not sit "claimed" until it times out and gets reclaimed for nothing.
-func runJob(ctx context.Context, client *http.Client, baseURL, token, mode string, job *domain.RemoteJob) {
+func runJob(ctx context.Context, client *http.Client, baseURL, token, mode string, job *domain.RemoteJob, spoolMaxBytes ...int) {
+	maxSpoolBytes := DefaultTraceSpoolMaxBytes
+	if len(spoolMaxBytes) > 0 && spoolMaxBytes[0] > 0 {
+		maxSpoolBytes = spoolMaxBytes[0]
+	}
 	workDir, err := os.MkdirTemp("", "kestrix-runner-job-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: create workdir: %v\n", err)
 		msg := "runner: create workdir: " + err.Error()
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 		return
 	}
 	defer os.RemoveAll(workDir)
@@ -178,14 +195,14 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 	if err := unpackArchive(job.Payload.Archive, workDir); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: unpack archive: %v\n", err)
 		msg := "runner: unpack archive: " + err.Error()
-		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+		reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 		return
 	}
 	for _, artArchive := range job.Payload.Artifacts {
 		if err := unpackArchive(artArchive, workDir); err != nil {
 			fmt.Fprintf(os.Stderr, "kestrix runner: unpack artifact: %v\n", err)
 			msg := "runner: unpack artifact: " + err.Error()
-			reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg)
+			reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, "failed", msg, msg, nil)
 			return
 		}
 	}
@@ -195,7 +212,9 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 		Tasks:        []model.Task{job.Payload.Task},
 		DefaultImage: job.Payload.DefaultImage,
 	}
-	tw := &traceWriter{client: client, baseURL: baseURL, token: token, jobID: job.ID, epoch: job.ClaimEpoch}
+	tw := newTraceWriter(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, maxSpoolBytes)
+	defer tw.Stop()
+
 	// Redact here, where the stream is still whole: the server redacts each
 	// trace chunk too, but a secret split across two chunks only matches
 	// on this side (remote-runner-fixes design.md D1).
@@ -234,7 +253,7 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 	// this call's own output carries.
 	// taskError carries why a task failed when it never produced output to
 	// say so itself - e.g. a missing shell (design.md D4).
-	if err := reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, status, "", redact.Values(taskError, job.Payload.SecretValues)); err != nil {
+	if err := reportComplete(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, status, "", redact.Values(taskError, job.Payload.SecretValues), tw.spool); err != nil {
 		fmt.Fprintf(os.Stderr, "kestrix runner: report completion for job %d: %v\n", job.ID, err)
 	}
 }
@@ -258,7 +277,14 @@ func buildRunnerOptions(workDir string, payload domain.RemoteJobPayload, mode st
 
 // reportComplete makes one PUT /api/runner-jobs/{id}/complete call.
 // taskError may be empty.
-func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output, taskError string) error {
+// If spool is non-nil, it flushes all pending spooled trace chunks
+// before sending the completion request (tasks.md 2.4).
+func reportComplete(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, status, output, taskError string, spool *TraceSpool) error {
+	if spool != nil {
+		if err := spool.WaitEmpty(ctx); err != nil {
+			return fmt.Errorf("flush trace spool: %w", err)
+		}
+	}
 	body, _ := json.Marshal(map[string]any{"epoch": epoch, "status": status, "output": output, "error": taskError})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
 		baseURL+"/api/runner-jobs/"+strconv.Itoa(jobID)+"/complete", bytes.NewReader(body))
@@ -279,43 +305,196 @@ func reportComplete(ctx context.Context, client *http.Client, baseURL, token str
 	return nil
 }
 
+var (
+	traceRetryBaseDelay = 50 * time.Millisecond
+	traceRetryMaxDelay  = 2 * time.Second
+)
+
 // traceWriter streams task output to PATCH /api/runner-jobs/{id}/trace as
-// it is written, tracking its own offset (tasks.md 3.3). A push failure is
-// logged and the write still succeeds from the caller's (the executor's)
-// point of view - a lost trace chunk must never abort task execution; the
-// task's own exit status is what CompleteJob ultimately records.
+// it is written, tracking its own offset (tasks.md 3.3). When network connectivity
+// drops or server returns 5xx errors, chunks are queued into an in-memory
+// TraceSpool and flushed sequentially in background with exponential backoff and jitter.
 type traceWriter struct {
 	client         *http.Client
 	baseURL, token string
 	jobID, epoch   int
 	mu             sync.Mutex
 	offset         int
+	spool          *TraceSpool
+	maxBytes       int
+
+	flusherCtx    context.Context
+	flusherCancel context.CancelFunc
+	flusherWg     sync.WaitGroup
+	stopped       bool
+}
+
+func newTraceWriter(ctx context.Context, client *http.Client, baseURL, token string, jobID, epoch int, maxBytes int) *traceWriter {
+	tw := &traceWriter{
+		client:   client,
+		baseURL:  baseURL,
+		token:    token,
+		jobID:    jobID,
+		epoch:    epoch,
+		maxBytes: maxBytes,
+	}
+	tw.ensureSpoolLocked()
+	tw.ensureFlusherLocked(ctx)
+	return tw
+}
+
+func (w *traceWriter) ensureSpoolLocked() {
+	if w.spool == nil {
+		max := w.maxBytes
+		if max <= 0 {
+			max = DefaultTraceSpoolMaxBytes
+		}
+		w.spool = NewTraceSpool(max, w.offset)
+	}
+}
+
+func (w *traceWriter) ensureFlusherLocked(parentCtx ...context.Context) {
+	if w.stopped || (w.spool != nil && w.spool.IsDead()) {
+		return
+	}
+	if w.flusherCancel == nil {
+		ctx := context.Background()
+		if len(parentCtx) > 0 && parentCtx[0] != nil {
+			ctx = parentCtx[0]
+		}
+		w.flusherCtx, w.flusherCancel = context.WithCancel(ctx)
+		w.flusherWg.Add(1)
+		go func() {
+			defer w.flusherWg.Done()
+			w.runFlusher(w.flusherCtx)
+		}()
+	}
+}
+
+func (w *traceWriter) Stop() {
+	w.mu.Lock()
+	w.stopped = true
+	if w.flusherCancel != nil {
+		w.flusherCancel()
+	}
+	w.mu.Unlock()
+	w.flusherWg.Wait()
+}
+
+func (w *traceWriter) Flush(ctx context.Context) error {
+	w.mu.Lock()
+	w.ensureSpoolLocked()
+	w.ensureFlusherLocked(ctx)
+	spool := w.spool
+	w.mu.Unlock()
+
+	return spool.WaitEmpty(ctx)
 }
 
 func (w *traceWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"epoch": w.epoch, "offset": w.offset, "chunk": string(p)})
+
+	w.ensureSpoolLocked()
+
+	if w.stopped || w.spool.IsDead() {
+		return len(p), nil
+	}
+
+	w.spool.Append(p)
+	w.ensureFlusherLocked()
+	return len(p), nil
+}
+
+func (w *traceWriter) pushChunk(offset int, data []byte) (int, error) {
+	body, _ := json.Marshal(map[string]any{"epoch": w.epoch, "offset": offset, "chunk": string(data)})
 	req, err := http.NewRequest(http.MethodPatch,
 		w.baseURL+"/api/runner-jobs/"+strconv.Itoa(w.jobID)+"/trace", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "kestrix runner: build trace request: %v\n", err)
-		return len(p), nil
+		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+w.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := w.client.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "kestrix runner: push trace: %v\n", err)
-		return len(p), nil
+		return 0, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNoContent {
-		w.offset += len(p)
-	} else {
-		fmt.Fprintf(os.Stderr, "kestrix runner: trace push rejected: %s\n", resp.Status)
+	return resp.StatusCode, nil
+}
+
+func (w *traceWriter) runFlusher(ctx context.Context) {
+	delay := traceRetryBaseDelay
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		w.mu.Lock()
+		if w.stopped || (w.spool != nil && w.spool.IsDead()) {
+			w.mu.Unlock()
+			return
+		}
+		chunk, ok := w.spool.Peek()
+		if !ok {
+			ch := w.spool.notifyCh
+			w.mu.Unlock()
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-ch:
+				continue
+			}
+		}
+		w.spool.SetInFlight(true)
+		w.mu.Unlock()
+
+		statusCode, err := w.pushChunk(chunk.Offset, chunk.Data)
+
+		if statusCode == http.StatusConflict {
+			w.mu.Lock()
+			w.spool.Clear()
+			w.spool.MarkDead()
+			w.stopped = true
+			w.mu.Unlock()
+			return
+		}
+
+		if err == nil && statusCode == http.StatusNoContent {
+			w.mu.Lock()
+			acked := w.spool.Acknowledge(chunk.Offset, len(chunk.Data))
+			if acked {
+				w.offset = chunk.Offset + len(chunk.Data)
+			}
+			w.mu.Unlock()
+
+			delay = traceRetryBaseDelay
+			continue
+		}
+
+		// Transient failure: clear in-flight state and apply backoff and jitter
+		w.spool.SetInFlight(false)
+		jitter := time.Duration(0)
+		if delay > 1 {
+			jitter = time.Duration(rand.Int64N(int64(delay / 2)))
+		}
+		sleepDuration := delay + jitter
+
+		delay *= 2
+		if delay > traceRetryMaxDelay {
+			delay = traceRetryMaxDelay
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(sleepDuration):
+		}
 	}
-	return len(p), nil
 }
 
 // flatVariableResolver adapts a single already-resolved variable map (the
