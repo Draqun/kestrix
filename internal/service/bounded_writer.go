@@ -32,6 +32,12 @@ func (b *boundedWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if b.max <= 0 {
 		_, err := b.w.Write(p)
+		// Unbounded still forwards every byte, so Written() must advance
+		// here too - callers such as eventHubTraceWriter use the delta to
+		// learn how much of this Write actually reached the wrapped writer
+		// (see REVIEW.md R3), and must see it even when nothing is ever
+		// truncated.
+		b.written += len(p)
 		return n, err
 	}
 	if b.written >= b.max {
@@ -48,6 +54,15 @@ func (b *boundedWriter) Write(p []byte) (int, error) {
 	b.written += remaining
 	b.truncated = true
 	return n, err
+}
+
+// Written returns the number of bytes actually forwarded to the wrapped
+// writer so far, as opposed to Write's return value, which always reports
+// len(p) to satisfy the upstream writer chain's contract even past the
+// bound (see REVIEW.md R3): a caller that needs to know how much of its
+// last Write survived truncation compares Written before and after.
+func (b *boundedWriter) Written() int {
+	return b.written
 }
 
 // Flush appends the truncation marker line once, only if Write ever dropped

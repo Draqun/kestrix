@@ -18,6 +18,7 @@ export default mergeConfig(baseConfig, defineConfig({
         'src/hooks/useCredentials.js',
         'src/hooks/useKeyboardNav.js',
         'src/hooks/useListResource.js',
+        'src/hooks/useRunEvents.js',
         'src/hooks/useRunners.js',
         'src/lib/credentialForm.js',
         'src/lib/projectForm.js',

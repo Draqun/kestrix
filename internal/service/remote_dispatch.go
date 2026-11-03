@@ -314,6 +314,8 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 			redactedErr := redactValues(recordErr.Error(), opts.ResolvedSecretValues)
 			if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, skippedTasks); finishErr != nil {
 				slog.Warn("could not finish run after skipped task append failure", "run_id", runID, "error", finishErr)
+			} else {
+				s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
 			}
 			return runID, recordErr
 		}
@@ -336,6 +338,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		if err := s.runStore.FinishRun(runID, domain.RunStatusPassed, "", "", skippedTasks); err != nil {
 			return runID, fmt.Errorf("finish run %d: %w", runID, err)
 		}
+		s.publishRunState(runID, domain.RunStatusPassed, "")
 		return runID, nil
 	}
 
@@ -343,7 +346,9 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if err != nil {
 		archiveErr := fmt.Errorf("build source archive: %w", err)
 		redactedErr := redactValues(archiveErr.Error(), opts.ResolvedSecretValues)
-		_ = s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil)
+		if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil); finishErr == nil {
+			s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
+		}
 		return runID, archiveErr
 	}
 	// Persist the archive and every triggered task's resolved
@@ -361,7 +366,9 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if err := s.remoteJobStore.SetRemoteRunSnapshot(runID, archive, perTaskVars, opts.ResolvedSecretValues); err != nil {
 		snapshotErr := fmt.Errorf("persist remote run snapshot: %w", err)
 		redactedErr := redactValues(snapshotErr.Error(), opts.ResolvedSecretValues)
-		_ = s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil)
+		if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil); finishErr == nil {
+			s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
+		}
 		return runID, snapshotErr
 	}
 
@@ -384,6 +391,9 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 			_ = s.runStore.AppendTaskResult(runID, skip)
 		}
 		_ = s.finishRunWithRetry(runID)
+		if run, getErr := s.runStore.GetRun(runID); getErr == nil && run != nil && domain.IsTerminalRunStatus(run.Status) {
+			s.publishRunState(runID, run.Status, run.Error)
+		}
 		return runID, fmt.Errorf("dispatch failed: %w", errors.Join(dispatchErrs...))
 	}
 	return runID, nil
@@ -425,6 +435,7 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 	if !ok {
 		return false, nil
 	}
+	s.eventHub.BroadcastTask(job.RunID, job.TaskName, status, taskError)
 	decided, resumeErr := s.resumeRemoteRun(job.RunID)
 	if resumeErr != nil && !decided {
 		// The walker failed before it knew what was due, so the run
@@ -442,6 +453,11 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 			return true, errors.Join(fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err), resumeErr)
 		}
 		return true, fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err)
+	}
+	if s.runStore != nil {
+		if run, err := s.runStore.GetRun(job.RunID); err == nil && run != nil && domain.IsTerminalRunStatus(run.Status) {
+			s.publishRunState(job.RunID, run.Status, run.Error)
+		}
 	}
 	if resumeErr != nil {
 		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, resumeErr)

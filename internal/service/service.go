@@ -527,6 +527,9 @@ type RunService struct {
 	// installs a bounded channel pre-filled with one token per slot.
 	slots chan struct{}
 
+	// eventHub distributes real-time events to active SSE subscribers.
+	eventHub *RunEventHub
+
 	mu     sync.Mutex
 	active map[int]activeRun
 	done   map[int]chan struct{}
@@ -574,6 +577,28 @@ func NewRunService(runStore domain.RunStore, pipeline domain.PipelineRunner, tas
 		active:     make(map[int]activeRun),
 		done:       make(map[int]chan struct{}),
 		runLocks:   newRunLocker(),
+		eventHub:   NewRunEventHub(),
+	}
+}
+
+// SetEventHub configures the RunEventHub used by RunService.
+func (s *RunService) SetEventHub(hub *RunEventHub) {
+	s.eventHub = hub
+}
+
+// EventHub returns the RunEventHub configured on RunService.
+func (s *RunService) EventHub() *RunEventHub {
+	return s.eventHub
+}
+
+// publishRunState broadcasts runID's overall status and, when status is
+// terminal, a completion event - the single place that pairs the two so
+// every finishing path agrees on what "terminal" means and on the hub's
+// nil-safety, instead of each call site repeating both (see REVIEW.md R9).
+func (s *RunService) publishRunState(runID int, status, errMsg string) {
+	s.eventHub.BroadcastStatus(runID, status, errMsg)
+	if domain.IsTerminalRunStatus(status) {
+		s.eventHub.BroadcastComplete(runID, status)
 	}
 }
 
@@ -633,6 +658,12 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
 	if err != nil {
 		return 0, err
+	}
+	if s.eventHub != nil {
+		s.eventHub.BroadcastStatus(runID, "running", "")
+		for _, st := range skippedTasks {
+			s.eventHub.BroadcastTask(runID, st.Name, st.Status, st.Error)
+		}
 	}
 	// Persist initial sources immediately when cancel_in_progress is enabled so
 	// subsequent pushes to the same ref can discover and cancel this run even
@@ -769,6 +800,9 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 		}
 		slog.Info("run canceled", "run_id", runID, "account", actor)
 		s.recordCanceledMetric(changed, runID)
+		if changed {
+			s.publishRunState(runID, domain.RunStatusCanceled, "")
+		}
 		return nil
 	}
 
@@ -803,6 +837,9 @@ func (s *RunService) Cancel(ctx context.Context, runID int, actor string) error 
 		}
 		slog.Info("run canceled", "run_id", runID, "account", actor)
 		s.recordCanceledMetric(changed, runID)
+		if changed {
+			s.publishRunState(runID, domain.RunStatusCanceled, "")
+		}
 		return nil
 	case <-timer.C:
 		return fmt.Errorf("run %d did not terminate within %s: %w", runID, timeout, ErrRunCancelTimedOut)
@@ -855,6 +892,51 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 	return runID, skippedTasks, nil
 }
 
+// eventHubTraceWriter broadcasts every chunk written to it as a trace
+// event, tagged with whichever task is currently running - set via
+// setCurrentTask from OnTaskStart - so the client can attribute live
+// output to the right task instead of guessing from task_results (see
+// REVIEW.md R6).
+//
+// It wraps a *boundedWriter rather than a generic io.Writer so it can
+// broadcast only the bytes boundedWriter actually kept: boundedWriter.Write
+// always reports len(p) consumed to satisfy the writer chain's contract,
+// even once output is truncated, so that return value cannot tell this tap
+// where the bound was reached. Comparing Written() before and after can
+// (see REVIEW.md R3) - without it, SSE subscribers would keep receiving
+// output and advancing past MaxOutputBytes after the stored run output has
+// stopped growing, diverging from what a reload or polling fallback shows.
+type eventHubTraceWriter struct {
+	mu          sync.Mutex
+	w           *boundedWriter
+	hub         *RunEventHub
+	runID       int
+	offset      int
+	currentTask string
+}
+
+func (tw *eventHubTraceWriter) setCurrentTask(name string) {
+	tw.mu.Lock()
+	tw.currentTask = name
+	tw.mu.Unlock()
+}
+
+func (tw *eventHubTraceWriter) Write(p []byte) (n int, err error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	offset := tw.offset
+	taskName := tw.currentTask
+	before := tw.w.Written()
+	n, err = tw.w.Write(p)
+	kept := tw.w.Written() - before
+	if kept > 0 {
+		chunk := string(p[:kept])
+		tw.hub.BroadcastTrace(tw.runID, taskName, chunk, offset)
+		tw.offset += kept
+	}
+	return n, err
+}
+
 // prepareRunExecution wires runID's lifecycle callbacks onto opts and wraps
 // its output in a redactingWriter built from opts.ResolvedSecretValues, so
 // opts.Stdout/Stderr, FlushRunOutput, and FinishRun all see redacted text
@@ -863,12 +945,17 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *domain.RunnerOptions) *redactingWriter {
 	previousSourcesAcquired := opts.OnSourcesAcquired
 	bounded := newBoundedWriter(output, s.MaxOutputBytes)
-	redactor := newRedactingWriter(bounded, opts.ResolvedSecretValues)
+	traceWriter := &eventHubTraceWriter{w: bounded, hub: s.eventHub, runID: runID}
+	redactor := newRedactingWriter(traceWriter, opts.ResolvedSecretValues)
 	opts.Stdout = redactor
 	opts.Stderr = redactor
 	opts.OnTaskStart = func(name string) {
+		traceWriter.setCurrentTask(name)
 		if s.runStore != nil {
 			_ = s.runStore.AppendTaskResult(runID, domain.TaskResult{Name: name, Status: "running"})
+		}
+		if s.eventHub != nil {
+			s.eventHub.BroadcastTask(runID, name, "running", "")
 		}
 	}
 	opts.OnTaskComplete = func(tr domain.TaskResult) {
@@ -880,6 +967,9 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 			if err := s.runStore.FlushRunOutput(runID, output.String()); err != nil {
 				slog.Warn("could not flush run output", "run_id", runID, "err", redact.Err(err, opts.ResolvedSecretValues))
 			}
+		}
+		if s.eventHub != nil {
+			s.eventHub.BroadcastTask(runID, tr.Name, tr.Status, tr.Error)
 		}
 	}
 	opts.OnSourcesAcquired = func(sources []domain.AcquiredSource) error {
@@ -908,8 +998,10 @@ func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Proj
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
 			_ = redactor.Flush()
-			_ = s.runStore.FinishRun(runID, "failed", output.String(), fmt.Sprintf("panic: %v", r), nil)
-			s.recordRunFinished("failed", proj.Name, startedAt)
+			panicMsg := fmt.Sprintf("panic: %v", r)
+			_ = s.runStore.FinishRun(runID, domain.RunStatusFailed, output.String(), panicMsg, nil)
+			s.recordRunFinished(domain.RunStatusFailed, proj.Name, startedAt)
+			s.publishRunState(runID, domain.RunStatusFailed, panicMsg)
 			if opts.SourceSessions != nil {
 				_ = opts.SourceSessions.Release(context.Background(), runID)
 			}
@@ -974,6 +1066,7 @@ func (s *RunService) finishRun(runID int, projectName string, output string, tas
 			s.persistCanceledByIfLost(runID)
 		}
 	}
+	s.publishRunState(runID, status, errMsg)
 	// runStatus can return "running" (a manual task is still pending) - not
 	// a terminal status, so it does not count toward kestrix_runs_total; see
 	// observability spec.md "Run outcome counted once".
@@ -1177,6 +1270,7 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 	}
 	if s.runStore != nil {
 		_, _ = s.runStore.ApplyTaskResult(runID, domain.TaskResult{Name: taskName, Status: "running", ApprovedBy: approvedBy, ApprovedAt: approvedAt}, "")
+		s.eventHub.BroadcastTask(runID, taskName, "running", "")
 	}
 	if !opts.SourcesPrepared {
 		previousSourcesAcquired := opts.OnSourcesAcquired
@@ -1219,6 +1313,10 @@ func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName
 		runStatus, _ = s.runStore.ApplyTaskResult(runID, tr, tr.Output)
 		if runStatus == "canceled" {
 			s.persistCanceledByIfLost(runID)
+		}
+		s.eventHub.BroadcastTask(runID, tr.Name, tr.Status, tr.Error)
+		if runStatus != "" {
+			s.publishRunState(runID, runStatus, "")
 		}
 	}
 	// ApplyTaskResult's returned status tells us, synchronously and without

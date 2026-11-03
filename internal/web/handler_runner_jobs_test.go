@@ -335,6 +335,37 @@ func TestHandleRunnerJobTrace_RedactsRunSecretBeforeStorage(t *testing.T) {
 	}
 }
 
+func TestHandleRunnerJobTrace_BroadcastsToEventHub(t *testing.T) {
+	remoteJobs := &mocks.MockRemoteJobStore{
+		AppendJobTraceOK: true,
+		Jobs: map[int]*domain.RemoteJob{
+			1: {ID: 1, RunID: 42, TaskName: "test-task"},
+		},
+	}
+	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)
+	sub := srv.EventHub().Subscribe(42)
+	defer srv.EventHub().Unsubscribe(42, sub)
+
+	w := httptest.NewRecorder()
+	srv.handleRunnerJobTrace(w, traceReq(`{"epoch":1,"offset":0,"chunk":"runner logs line 1\n"}`))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+
+	select {
+	case ev := <-sub:
+		if ev.Type != service.EventTypeTrace {
+			t.Fatalf("ev.Type = %q, want trace", ev.Type)
+		}
+		p, ok := ev.Data.(service.TracePayload)
+		if !ok || p.Chunk != "runner logs line 1\n" || p.Offset != 0 {
+			t.Fatalf("payload = %+v, want chunk 'runner logs line 1\\n' offset 0", ev.Data)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for trace event on EventHub")
+	}
+}
+
 func TestHandleRunnerJobTrace_SecretLookupErrorIs500(t *testing.T) {
 	remoteJobs := &mocks.MockRemoteJobStore{AppendJobTraceOK: true, SecretValuesErr: errGap}
 	srv := setupRunnerJobServer(t, &mocks.MockRunnerStore{}, remoteJobs, nil)

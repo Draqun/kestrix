@@ -211,6 +211,12 @@ func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "stale epoch, job not owned by this runner, or job already terminal")
 		return
 	}
+	hub := s.EventHub()
+	if hub != nil {
+		if job, err := s.remoteJobStore.GetRemoteJob(jobID); err == nil && job != nil {
+			hub.BroadcastTrace(job.RunID, job.TaskName, chunk, *req.Offset)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

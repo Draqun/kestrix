@@ -10,6 +10,7 @@ The Kestrix UI is a single‑page application built with **React 19**, **MUI v9*
 - **Pipeline viewer** — read-only HCL with syntax highlighting; Git is the source of truth
 - **Run history** — paginated list of pipeline runs with filtering by status and repository
 - **DAG visualization** — interactive task graph using React Flow
+- **Real-time run updates** — live DAG node colors and log output via SSE, with automatic polling fallback
 - **Documentation** — generated Markdown documentation served at `/docs/`
 
 ## Navigation and repository credentials
@@ -58,6 +59,21 @@ text for every field. Focusable information controls add detailed pointer,
 keyboard, touch, and assistive-technology guidance. The dialog also makes the
 security boundary explicit: encrypted, write-only repository credentials are
 used only for Git source acquisition and are not task or deployment secrets.
+
+## Real-time run updates
+
+While a run is active, `RunDetail` opens a Server-Sent Events connection via
+the `useRunEvents` hook (`GET /api/projects/{name}/runs/{runID}/events`)
+instead of polling `GET /api/projects/{name}/runs/{runID}` every 1.5 seconds.
+The server streams `status`, `task`, and `trace` events as they happen, plus
+a terminal `complete` event, so the React Flow DAG node colors and the log
+terminal update live instead of waiting for the next poll.
+
+If the SSE connection fails to establish or drops - a proxy that buffers or
+times out idle connections, a network blip - `useRunEvents` reports
+`isFallback: true` and `Pipelines.jsx` reverts to the same 1.5-second polling
+it always used, transparently to the user. The connection closes on its own
+once the run reaches a terminal status.
 
 ## Tech Stack
 
