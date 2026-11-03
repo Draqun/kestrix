@@ -58,6 +58,14 @@ func (s *TraceSpool) SetTruncationMarker(marker string) {
 	s.truncationMarker = marker
 }
 
+// SetOffset updates the monotonic nextOffset. It should only be called when
+// the spool is empty to synchronize with external direct pushes.
+func (s *TraceSpool) SetOffset(offset int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextOffset = offset
+}
+
 // notifyLocked wakes up goroutines waiting on changes to the spool.
 // Must be called while holding s.mu.
 func (s *TraceSpool) notifyLocked() {

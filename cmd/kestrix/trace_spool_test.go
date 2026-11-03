@@ -83,6 +83,18 @@ func TestTraceSpool_ThreadSafety(t *testing.T) {
 	}
 }
 
+func TestTraceSpool_SetOffset(t *testing.T) {
+	spool := NewTraceSpool(1024, 0)
+	spool.SetOffset(250)
+	if spool.NextOffset() != 250 {
+		t.Fatalf("expected NextOffset 250, got %d", spool.NextOffset())
+	}
+	c := spool.Append([]byte("hello"))
+	if c.Offset != 250 {
+		t.Fatalf("expected chunk offset 250, got %d", c.Offset)
+	}
+}
+
 // ── Task 1.2: Truncation policy when buffered chunks exceed capacity limit ──
 
 func TestTraceSpool_TruncationPolicyAndByteCalculation(t *testing.T) {

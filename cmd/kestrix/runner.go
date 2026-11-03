@@ -428,6 +428,7 @@ func (w *traceWriter) Write(p []byte) (int, error) {
 
 	if statusCode == http.StatusNoContent {
 		w.offset += len(p)
+		w.spool.SetOffset(w.offset)
 		return len(p), nil
 	}
 
