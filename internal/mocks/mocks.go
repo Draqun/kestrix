@@ -834,6 +834,21 @@ func (m *MockRemoteJobStore) CompleteJobCallCount() int {
 	return len(m.CompleteJobCalls)
 }
 
+// RecordedCompleteJobCalls returns a snapshot of recorded CompleteJob calls,
+// synchronized so a test can inspect them without racing CompleteJob.
+func (m *MockRemoteJobStore) RecordedCompleteJobCalls() []CompleteJobCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := make([]CompleteJobCall, len(m.CompleteJobCalls))
+	copy(copied, m.CompleteJobCalls)
+	return copied
+}
+
+// GetCompleteJobCalls is an alias for RecordedCompleteJobCalls.
+func (m *MockRemoteJobStore) GetCompleteJobCalls() []CompleteJobCall {
+	return m.RecordedCompleteJobCalls()
+}
+
 func (m *MockRemoteJobStore) OutstandingJobRunIDsForProject(projectName string) ([]int, error) {
 	return m.OutstandingJobRunIDsResult, m.OutstandingJobRunIDsErr
 }

@@ -524,9 +524,11 @@ func TestRunPollLoop_ClaimsAndRunsJob(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runPollLoop did not return after context cancellation")
 	}
+	ts.Close()
 
-	if len(runStore.CompleteJobCalls) == 0 || runStore.CompleteJobCalls[0].Status != "passed" {
-		t.Fatalf("expected at least one passed CompleteJob call, got %+v", runStore.CompleteJobCalls)
+	calls := runStore.GetCompleteJobCalls()
+	if len(calls) == 0 || calls[0].Status != "passed" {
+		t.Fatalf("expected at least one passed CompleteJob call, got %+v", calls)
 	}
 }
 
