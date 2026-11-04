@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.7.0] - 2026-11-04
+### Changed
+- Persist run initial sources atomically in CreateRun and eliminate redundant gated update in RunService.Start
+
 ## [v0.6.0] - 2026-11-04
 ### Added
 - Support execution timeout in ci_task definitions across local, docker, and remote executors
