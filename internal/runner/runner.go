@@ -226,9 +226,16 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 
 	args = append(args, image, "sh", "-c", task.Execute.Script)
 
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if d := task.ParsedDuration(); d > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
-	cmd := commandContext(ctx, "docker", args...)
+	cmd := commandContext(runCtx, "docker", args...)
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
 	cmd.Stderr = io.MultiWriter(opts.Stderr, taskOutWriter)
 	cmd.Cancel = func() error {
@@ -238,6 +245,10 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 	}
 
 	runErr := cmd.Run()
+
+	if runErr != nil && runCtx.Err() == context.DeadlineExceeded && (ctx == nil || ctx.Err() == nil) {
+		runErr = fmt.Errorf("task execution timed out after %s", task.Timeout)
+	}
 
 	if runErr == nil {
 		if err := checkArtifacts(taskDir, task.Artifacts); err != nil {
@@ -273,9 +284,16 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 	envSettings := config.Current()
 	env := envSettings.TaskEnv(ci, vars)
 
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if d := task.ParsedDuration(); d > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+
 	var taskOut bytes.Buffer
 	taskOutWriter := &lockedWriter{mu: &sync.Mutex{}, w: &taskOut}
-	cmd := commandContext(ctx, "bash", "-c", task.Execute.Script)
+	cmd := commandContext(runCtx, "bash", "-c", task.Execute.Script)
 	cmd.Dir = taskDir
 	cmd.Env = env
 	cmd.Stdout = io.MultiWriter(opts.Stdout, taskOutWriter)
@@ -284,6 +302,10 @@ func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Optio
 
 	runErr := cmd.Run()
 	stopCancelTimer()
+
+	if runErr != nil && runCtx.Err() == context.DeadlineExceeded && (ctx == nil || ctx.Err() == nil) {
+		runErr = fmt.Errorf("task execution timed out after %s", task.Timeout)
+	}
 
 	if runErr == nil {
 		if err := checkArtifacts(taskDir, task.Artifacts); err != nil {

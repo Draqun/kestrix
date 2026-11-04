@@ -74,6 +74,7 @@ ci_task "build" {
   trigger    = "repo.auth.changed"
   depends_on = ["lint"]
   manual     = false
+  timeout    = "15m"
   artifacts  = ["dist/"]
 
   execute {
@@ -89,8 +90,33 @@ ci_task "build" {
 | `trigger` | string | No | Boolean expression deciding if the task runs; defaults to always run |
 | `depends_on` | list(string) | No | Tasks that must complete before this one starts |
 | `manual` | bool | No | If `true`, requires human approval before execution |
+| `timeout` | string | No | Execution deadline for the task as a duration string (e.g. `15m`, `30s`, `1h30m`); if exceeded, the task fails and terminates across `local`, `docker`, and `remote` runners |
 | `artifacts` | list(string) | No | Paths produced by the task to preserve for dependent tasks |
 | `runner_tags` | list(string) | No | Tags a runner must carry to execute the task in `remote` mode; ignored in other modes (see [remote runners](remote-runners.md#runner-tags)) |
+
+### Task Timeouts
+
+Tasks can declare an optional `timeout` attribute with a duration string specifying the maximum allowable execution time:
+
+```hcl
+ci_task "test" {
+  timeout = "10m"
+
+  execute {
+    repo   = "auth"
+    script = "go test ./..."
+  }
+}
+```
+
+Rules for declared timeouts:
+- Duration syntax follows standard Go `time.ParseDuration` formats (e.g., `30s`, `15m`, `1h`, `1h30m`). Unparseable strings, empty values, and non-positive durations are rejected at pipeline parse time.
+- **Enforcement across all modes**:
+  - In `local` mode: when the deadline expires, the executor signals the task's process group with SIGTERM, followed by SIGKILL after `cancel_grace` (default 10s).
+  - In `docker` mode: when the deadline expires, the executor stops the task's container via `docker stop -t <grace>`.
+  - In `remote` mode: the remote runner process enforces the task timeout locally, terminating execution and reporting completion with status `failed` (remote runners must be running a Kestrix version supporting task timeouts; older runner binaries ignore unknown payload fields and execute tasks without a deadline).
+- When a task times out, its status is recorded as `failed` with error reason `task execution timed out after <duration>`.
+- Any downstream tasks depending on the timed-out task transition to `skipped` with dependency failure.
 
 ### Artifacts
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -278,6 +279,15 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 			t.Manual = val == "true"
 		case "depends_on":
 			t.DependsOn = splitList(val)
+		case "timeout":
+			d, err := time.ParseDuration(val)
+			if err != nil {
+				return model.Task{}, fmt.Errorf("attribute %q: invalid duration %q: %w", name, val, err)
+			}
+			if d <= 0 {
+				return model.Task{}, fmt.Errorf("attribute %q: duration must be positive, got %q", name, val)
+			}
+			t.Timeout = val
 		}
 	}
 

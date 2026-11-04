@@ -44,8 +44,8 @@ flowchart TD
 - **Rationale:** Standard idiomatic Go pattern. All existing cancel routines (`cancelGrace`, SIGTERM, SIGKILL) trigger automatically when the context is cancelled due to deadline expiration.
 
 ### 3. Remote runner payload inclusion
-- **Chosen:** Pass the parsed duration (e.g. `timeout_seconds: 900`) in the job payload returned by `GET /api/runner-jobs/next`.
-- **Rationale:** The remote runner process executes the task locally and must enforce the deadline locally, reporting the timeout cleanly back to Kestrix before the server-side reclaim timer fires.
+- **Chosen:** Carry the declared timeout via `Task.Timeout` in `RemoteJobPayload` (no separate seconds field); the runner reads `job.Payload.Task.Timeout` directly.
+- **Rationale:** Eliminates duplicate sources of truth and duration truncation. The remote runner process executes the task locally and enforces the deadline via `Task.ParsedDuration()`, reporting the timeout cleanly back to Kestrix before the server-side reclaim timer fires.
 
 ## Security Considerations
 

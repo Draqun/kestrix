@@ -32,6 +32,7 @@ type Task struct {
 	Execute   ExecuteSpec `hcl:"execute,block" json:"execute"`
 	DependsOn []string    `hcl:"depends_on,optional" json:"depends_on,omitempty"`
 	Manual    bool        `hcl:"manual,optional" json:"manual"`
+	Timeout   string      `hcl:"timeout,optional" json:"timeout,omitempty"`
 	// RunnerTags are the tags a runner must carry to execute this task in
 	// remote mode, normalised by NormalizeRunnerTags; ignored in every other
 	// mode (remote-runner-management).
@@ -39,6 +40,19 @@ type Task struct {
 	// Artifacts names paths relative to the task's working directory that
 	// the task produces for tasks depending on it (remote-task-artifacts).
 	Artifacts []string `hcl:"artifacts,optional" json:"artifacts,omitempty"`
+}
+
+// ParsedDuration parses Timeout as a time.Duration. If Timeout is empty or invalid,
+// it returns 0.
+func (t Task) ParsedDuration() time.Duration {
+	if t.Timeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(t.Timeout)
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
 }
 
 // Variable is a pipeline variable with optional repository/job scope.

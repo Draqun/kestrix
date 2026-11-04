@@ -593,6 +593,62 @@ func TestRunLocal_ManualAndDepBlocked(t *testing.T) {
 	}
 }
 
+func TestRunLocal_TaskTimeoutDownstreamSkipped(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	project := model.Project{
+		Name:  "timeout-proj",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{
+				Name:    "upstream",
+				Trigger: "repo.repo.changed",
+				Timeout: "50ms",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: "sleep 5"},
+			},
+			{
+				Name:      "downstream",
+				Trigger:   "repo.repo.changed",
+				DependsOn: []string{"upstream"},
+				Execute:   model.ExecuteSpec{Repo: "repo", Script: "echo should-not-run"},
+			},
+		},
+	}
+	var out bytes.Buffer
+	results, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir, Stdout: &out, Stderr: &out},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	byName := map[string]TaskResult{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+	up, ok := byName["upstream"]
+	if !ok || up.Status != "failed" {
+		t.Fatalf("upstream status = %q, want 'failed'", up.Status)
+	}
+	if !strings.Contains(up.Error, "task execution timed out after 50ms") {
+		t.Errorf("upstream error = %q, want containing 'task execution timed out after 50ms'", up.Error)
+	}
+
+	down, ok := byName["downstream"]
+	if !ok || down.Status != "skipped" {
+		t.Fatalf("downstream status = %q, want 'skipped'", down.Status)
+	}
+	if down.SkipReason == nil || down.SkipReason.Category != domain.SkipCategoryDependencyFailed {
+		t.Errorf("downstream SkipReason = %+v, want category %q", down.SkipReason, domain.SkipCategoryDependencyFailed)
+	}
+	if len(down.SkipReason.FailedDependencies) != 1 || down.SkipReason.FailedDependencies[0] != "upstream" {
+		t.Errorf("failed dependencies = %v, want ['upstream']", down.SkipReason.FailedDependencies)
+	}
+}
+
 func TestRunLocal_IncludeManual(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {
