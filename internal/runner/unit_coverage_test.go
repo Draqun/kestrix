@@ -946,3 +946,94 @@ func TestPipelineExecutorDefaultDispatch(t *testing.T) {
 		t.Fatalf("RunTask result=%+v err=%v", result, err)
 	}
 }
+
+func TestLocalExecutor_Timeout(t *testing.T) {
+	root := t.TempDir()
+	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := model.Task{
+		Name:    "task",
+		Timeout: "10ms",
+		Execute: model.ExecuteSpec{Repo: "repo", Script: "run"},
+	}
+
+	oldCmd := commandContext
+	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "0.1")
+	}
+	defer func() { commandContext = oldCmd }()
+
+	var killedSignals []syscall.Signal
+	oldKill := killGroup
+	killGroup = func(pgid int, sig syscall.Signal) error {
+		killedSignals = append(killedSignals, sig)
+		return nil
+	}
+	defer func() { killGroup = oldKill }()
+
+	local := &LocalExecutor{WorkDir: root, Repos: repos}
+	_, err := local.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "task execution timed out after 10ms") {
+		t.Errorf("expected timeout error message, got: %v", err)
+	}
+	if len(killedSignals) == 0 || killedSignals[0] != syscall.SIGTERM {
+		t.Errorf("expected SIGTERM signal, got: %v", killedSignals)
+	}
+}
+
+func TestDockerExecutor_Timeout(t *testing.T) {
+	root := t.TempDir()
+	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := model.Task{
+		Name:    "task",
+		Timeout: "10ms",
+		Execute: model.ExecuteSpec{Repo: "repo", Script: "run"},
+	}
+
+	type invocation struct {
+		name string
+		args []string
+	}
+	var invocations []invocation
+	var mu sync.Mutex
+
+	oldCmd := commandContext
+	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		invocations = append(invocations, invocation{name: name, args: append([]string(nil), args...)})
+		mu.Unlock()
+		if len(args) > 0 && args[0] == "stop" {
+			return exec.Command("true")
+		}
+		return exec.CommandContext(ctx, "sleep", "0.1")
+	}
+	defer func() { commandContext = oldCmd }()
+
+	docker := &DockerExecutor{
+		WorkDir: root,
+		Repos:   repos,
+		Grace:   5 * time.Second,
+	}
+	_, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "task execution timed out after 10ms") {
+		t.Errorf("expected timeout error message, got: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	foundStop := false
+	for _, inv := range invocations {
+		if len(inv.args) > 0 && inv.args[0] == "stop" {
+			foundStop = true
+			break
+		}
+	}
+	if !foundStop {
+		t.Errorf("expected docker stop to be called on timeout, invocations: %+v", invocations)
+	}
+}

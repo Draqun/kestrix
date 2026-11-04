@@ -1389,6 +1389,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "timeout": {
+                    "type": "string"
+                },
                 "trigger": {
                     "type": "string"
                 }

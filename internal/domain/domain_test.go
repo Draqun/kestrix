@@ -277,3 +277,44 @@ func TestIsActiveTaskStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestTask_ParsedDuration(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string
+		want    time.Duration
+	}{
+		{"empty", "", 0},
+		{"valid seconds", "30s", 30 * time.Second},
+		{"valid minutes", "15m", 15 * time.Minute},
+		{"valid compound", "1h30m", 90 * time.Minute},
+		{"invalid format", "invalid", 0},
+		{"negative duration", "-5s", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			task := Task{Timeout: tc.timeout}
+			if got := task.ParsedDuration(); got != tc.want {
+				t.Errorf("ParsedDuration() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTask_TimeoutJSONRoundTrip(t *testing.T) {
+	task := Task{
+		Name:    "build",
+		Timeout: "10m",
+	}
+	data, err := json.Marshal(task)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded Task
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Timeout != "10m" {
+		t.Errorf("decoded.Timeout = %q, want %q", decoded.Timeout, "10m")
+	}
+}

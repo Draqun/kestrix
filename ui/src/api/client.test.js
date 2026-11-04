@@ -557,4 +557,20 @@ test('normalizeProject maps cancel_in_progress to CancelInProgress', () => {
   assert.equal(disabled.CancelInProgress, false);
 });
 
+test('normalizeProject maps task timeout to Timeout', () => {
+  const input = {
+    name: 'test-proj',
+    tasks: [
+      { name: 'build', timeout: '15m' },
+      { name: 'test' },
+    ],
+  };
+  const normalized = normalizeProject(input);
+  assert.equal(normalized.Tasks[0].Name, 'build');
+  assert.equal(normalized.Tasks[0].Timeout, '15m');
+  assert.equal(normalized.Tasks[1].Name, 'test');
+  assert.equal(normalized.Tasks[1].Timeout, undefined);
+});
+
+
 

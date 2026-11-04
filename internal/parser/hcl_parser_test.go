@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseFile(t *testing.T) {
@@ -420,5 +421,64 @@ func TestProjectCustomAttribute_Error(t *testing.T) {
 	_, err := ParseSource([]byte(src), "custom_err.tf")
 	if err == nil {
 		t.Fatal("expected error for object literal in custom_attr")
+	}
+}
+
+func TestParseTask_ValidTimeout(t *testing.T) {
+	src := `project "test" {
+  ci_task "build" {
+    trigger = "repo.a.changed"
+    timeout = "10m"
+    execute {
+      repo = "a"
+      script = "make build"
+    }
+  }
+}`
+	proj, err := ParseSource([]byte(src), "test.tf")
+	if err != nil {
+		t.Fatalf("ParseSource: %v", err)
+	}
+	if len(proj.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(proj.Tasks))
+	}
+	if proj.Tasks[0].Timeout != "10m" {
+		t.Errorf("proj.Tasks[0].Timeout = %q, want '10m'", proj.Tasks[0].Timeout)
+	}
+	if d := proj.Tasks[0].ParsedDuration(); d != 10*time.Minute {
+		t.Errorf("ParsedDuration() = %v, want 10m", d)
+	}
+}
+
+func TestParseTask_InvalidTimeout(t *testing.T) {
+	cases := []struct {
+		name    string
+		timeout string
+	}{
+		{"invalid format", "invalid-time"},
+		{"negative duration", "-5s"},
+		{"zero duration", "0s"},
+		{"empty string", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := fmt.Sprintf(`project "test" {
+  ci_task "build" {
+    trigger = "repo.a.changed"
+    timeout = %q
+    execute {
+      repo = "a"
+      script = "make build"
+    }
+  }
+}`, tc.timeout)
+			_, err := ParseSource([]byte(src), "test.tf")
+			if err == nil {
+				t.Fatalf("expected error for timeout %q, got nil", tc.timeout)
+			}
+			if !strings.Contains(err.Error(), "timeout") {
+				t.Errorf("expected error to name 'timeout', got: %v", err)
+			}
+		})
 	}
 }

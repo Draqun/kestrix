@@ -961,3 +961,28 @@ func TestRunJob_MissingArtifactFailsTask(t *testing.T) {
 		t.Fatalf("error = %q, want containing 'artifact \"dist/\" not found'", msg)
 	}
 }
+
+func TestRunJob_TaskTimeoutReportsFailed(t *testing.T) {
+	ts, _, complete := recordingRunnerServer(t)
+	job := &domain.RemoteJob{
+		ID:         1,
+		ClaimEpoch: 1,
+		Payload: domain.RemoteJobPayload{
+			Task: domain.Task{
+				Name:    "hang",
+				Timeout: "50ms",
+				Execute: domain.ExecuteSpec{Repo: "app", Script: "sleep 5"},
+			},
+			Repos:   []domain.Repo{{Name: "app", Path: "app"}},
+			Archive: buildTestArchive(t, map[string]string{"app/.keep": ""}),
+		},
+	}
+	runJob(context.Background(), ts.Client(), ts.URL, "tok", "local", job)
+	if (*complete)["status"] != "failed" {
+		t.Fatalf("status = %v, want failed", (*complete)["status"])
+	}
+	msg, _ := (*complete)["error"].(string)
+	if !strings.Contains(msg, "task execution timed out after 50ms") {
+		t.Fatalf("error = %q, want containing 'task execution timed out after 50ms'", msg)
+	}
+}

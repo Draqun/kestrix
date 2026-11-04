@@ -171,6 +171,8 @@ definitions:
         items:
           type: string
         type: array
+      timeout:
+        type: string
       trigger:
         type: string
     type: object

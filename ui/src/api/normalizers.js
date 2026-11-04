@@ -36,6 +36,7 @@ export function normalizeProject(proj) {
       if (task.trigger) t.Trigger = task.trigger;
       if (task.depends_on) t.DependsOn = task.depends_on;
       if (task.manual !== undefined) t.Manual = task.manual;
+      if (task.timeout) t.Timeout = task.timeout;
       if (task.artifacts) t.Artifacts = task.artifacts;
       if (task.execute) {
         t.Execute = { ...task.execute };

@@ -206,6 +206,18 @@ func TestBuildRemoteJobPayload_NamesNoEngineOrImageSelector(t *testing.T) {
 	}
 }
 
+func TestBuildRemoteJobPayload_PreservesTaskTimeout(t *testing.T) {
+	task := model.Task{
+		Name:    "build",
+		Timeout: "15m",
+		Execute: domain.ExecuteSpec{Repo: "app", Script: "make build"},
+	}
+	payload := buildRemoteJobPayload(task, nil, "", nil, nil, nil)
+	if payload.Task.Timeout != "15m" {
+		t.Fatalf("Task.Timeout = %q, want 15m", payload.Task.Timeout)
+	}
+}
+
 // ── startRemote / RunService.Start remote branch ───────────────────
 
 func TestRunService_Start_RemoteMode_DispatchesEligibleTasksNoInProcessCall(t *testing.T) {
