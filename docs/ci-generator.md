@@ -90,17 +90,13 @@ test_integration:
 
 ## Usage
 
-### CLI
-
-```bash
-# Preview the generated YAML for a pipeline
-kestrix generate path/to/pipeline.tf
-```
-
 ### API
 
+Generate a GitLab CI YAML from a pipeline definition and changed repositories:
+
 ```bash
-curl -X POST /api/generate \
+curl -X POST http://localhost:8080/api/generate \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"dir": "path/to/pipeline.tf", "changed": ["repo-a"]}'
 ```

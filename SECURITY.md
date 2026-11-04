@@ -26,10 +26,14 @@ the report is triaged.
 
 ### Supported versions
 
-Only the latest released tag receives security fixes. As of this writing
-that is `v0.3.0`. Check the latest tag on the
+Only the latest released tag receives security fixes. Check the latest tag on the
 [repository's tags page](https://gitlab.com/kestrix/kestrix/-/tags) or with
-`git tag --sort=-v:refname | head -1` before reporting against an older build.
+`kestrix version` / `git tag --sort=-v:refname | head -1` before reporting against an older build.
+
+| Version | Supported |
+| :--- | :---: |
+| Latest released tag (`latest`) | :white_check_mark: |
+| Older release tags | :x: |
 
 ## Areas that matter most
 

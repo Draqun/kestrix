@@ -233,3 +233,11 @@ kestrix keys rotate-master --new-key-path /path/to/new.key [--database-url postg
 2. Run rotation: `kestrix keys rotate-master --new-key-path /path/to/new.key`
 3. Replace the active key file at `KESTRIX_MASTER_KEY_PATH` with the new key.
 4. Restart the Kestrix server.
+
+## 9. `kestrix version`
+
+Prints the running binary version, git commit SHA, and build date.
+
+```bash
+kestrix version
+```

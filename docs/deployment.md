@@ -59,7 +59,12 @@ an explicit `DATABASE_URL` always wins.
 
 ## 3. First start
 
+By default, `docker-compose.prod.yml` pulls `registry.gitlab.com/kestrix/kestrix:latest`. You can pull from **Docker Hub** ([`draqun/kestrix`](https://hub.docker.com/r/draqun/kestrix)) or pin a specific version tag (e.g. `:v0.8.0`) by setting `KESTRIX_IMAGE` in `.env` or in the environment:
+
 ```bash
+# Optional: use Docker Hub instead of the default GitLab registry
+# export KESTRIX_IMAGE=draqun/kestrix:latest
+
 cd docker
 docker compose -f docker-compose.prod.yml up -d
 ```
@@ -219,11 +224,15 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## 11. Rollback
 
-Pin `KESTRIX_IMAGE` to the previous release tag and restart; volumes are
+Pin `KESTRIX_IMAGE` to the previous release tag (using either Docker Hub or GitLab Container Registry) and restart; volumes are
 untouched, so this is safe as long as no forward-only database migration ran
 in between (check `CHANGELOG.md` for the versions in between):
 
 ```bash
+# Docker Hub:
+KESTRIX_IMAGE=draqun/kestrix:<previous-tag> docker compose -f docker-compose.prod.yml up -d
+
+# GitLab Container Registry:
 KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:<previous-tag> docker compose -f docker-compose.prod.yml up -d
 ```
 
