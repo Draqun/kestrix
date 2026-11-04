@@ -3,7 +3,9 @@
 ## Purpose
 
 Defines the safety and completeness guarantees of the production Compose deployment a customer installs from the repository or the release image.
+
 ## Requirements
+
 ### Requirement: No shared default database credential
 
 The production Compose file SHALL refuse to start unless `POSTGRES_PASSWORD` is set, and SHALL use that value for both the database container and the Kestrix `DATABASE_URL`. No default password SHALL be embedded in the file.
@@ -87,3 +89,17 @@ starting that profile.
 - **WHEN** an operator registers a runner, sets its token, and starts the `runner` profile
 - **THEN** a project run's tasks SHALL execute on the runner and the run SHALL complete
 
+### Requirement: Production deployment health verification
+The production deployment SHALL respond with HTTP 200 to `GET /api/health` and verify PostgreSQL connectivity upon container startup without requiring manual intervention.
+
+#### Scenario: Automated health check on startup
+- **WHEN** the production deployment is started via `docker compose -f docker/docker-compose.prod.yml up -d`
+- **THEN** `GET /api/health` returns HTTP 200 within 30 seconds
+
+### Requirement: First administrator bootstrap flow
+The production deployment SHALL expose the `/api/setup` endpoint until the first administrator account is created, and SHALL lock down setup access immediately upon account persistence.
+
+#### Scenario: Initial administrator creation
+- **WHEN** an operator submits the initial administrator credentials on `/api/setup`
+- **THEN** the administrator account is persisted in PostgreSQL
+- **AND** subsequent requests to `/api/setup` are rejected
