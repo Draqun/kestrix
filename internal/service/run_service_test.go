@@ -817,7 +817,7 @@ func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
 
 func TestRunService_createRun_NoStore(t *testing.T) {
 	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	runID, _, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "")
+	runID, _, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "", nil)
 	if err == nil || err.Error() != "run store is not configured" {
 		t.Fatalf("error = %v, want missing run store error", err)
 	}
@@ -836,7 +836,7 @@ func TestRunService_createRun_ResolveError(t *testing.T) {
 			{Name: "t1", Trigger: "repo.r1.changed && @invalid"},
 		},
 	}
-	runID, skipped, err := svc.createRun("bad-proj", nil, false, proj, "user")
+	runID, skipped, err := svc.createRun("bad-proj", nil, false, proj, "user", nil)
 	if err == nil {
 		t.Fatal("expected error from createRun on invalid trigger, got nil")
 	}
@@ -1800,7 +1800,7 @@ type seqRunStore struct {
 	finish int
 }
 
-func (s *seqRunStore) CreateRun(string, []string, string, bool, *model.Project, string) (int, error) {
+func (s *seqRunStore) CreateRun(string, []string, string, bool, *model.Project, string, []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++
@@ -1998,7 +1998,7 @@ type seqIDMockRunStore struct {
 	next int
 }
 
-func (s *seqIDMockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string) (int, error) {
+func (s *seqIDMockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++

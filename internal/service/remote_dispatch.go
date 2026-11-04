@@ -293,7 +293,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		return 0, fmt.Errorf("resolve pipeline: %w", err)
 	}
 
-	runID, err := s.runStore.CreateRun(projectName, changed, "", opts.IncludeManual, proj, opts.Actor)
+	runID, err := s.runStore.CreateRun(projectName, changed, "", opts.IncludeManual, proj, opts.Actor, opts.InitialSources)
 	if err != nil {
 		return 0, fmt.Errorf("create run: %w", err)
 	}

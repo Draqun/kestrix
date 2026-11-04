@@ -242,12 +242,13 @@ type findActiveCall struct {
 }
 
 type createRunCall struct {
-	ProjectName   string
-	Changed       []string
-	RerunTask     string
-	IncludeManual bool
-	Snap          *model.Project
-	StartedBy     string
+	ProjectName    string
+	Changed        []string
+	RerunTask      string
+	IncludeManual  bool
+	Snap           *model.Project
+	StartedBy      string
+	InitialSources []domain.AcquiredSource
 }
 
 type cancelRunCall struct {
@@ -269,9 +270,9 @@ type applyTaskCall struct {
 	OutputExtra string
 }
 
-func (m *MockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string) (int, error) {
+func (m *MockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	m.mu.Lock()
-	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, rerunTask, im, snap, startedBy})
+	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, rerunTask, im, snap, startedBy, initialSources})
 	m.mu.Unlock()
 	return m.CreateRunID, m.CreateRunErr
 }

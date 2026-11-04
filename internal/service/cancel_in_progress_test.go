@@ -56,7 +56,7 @@ func newCipStatefulRunStore() *cipStatefulRunStore {
 	}
 }
 
-func (s *cipStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
+func (s *cipStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++
@@ -68,6 +68,7 @@ func (s *cipStatefulRunStore) CreateRun(projectName string, changed []string, re
 		PipelineDef: snap,
 		StartedBy:   startedBy,
 		StartedAt:   time.Now(),
+		Sources:     initialSources,
 	}
 	return id, nil
 }
@@ -519,25 +520,27 @@ func TestRunService_Start_CancelInProgress_CancelErrorLogged(t *testing.T) {
 	}
 }
 
-func TestRunService_Start_CancelInProgress_UpdateRunSourcesErrorLogged(t *testing.T) {
+func TestRunService_Start_PersistsInitialSourcesAtCreation(t *testing.T) {
+	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{
-		CreateRunID:      57,
-		UpdateSourcesErr: fmt.Errorf("disk full"),
+		CreateRunID: 57,
+		FinishRunCh: finishCh,
 	}
 	runner := &mocks.MockPipelineRunner{}
 	svc := NewRunService(mockRun, runner, runner)
 
 	proj := &model.Project{
 		Name:             "demo",
-		CancelInProgress: true,
+		CancelInProgress: false,
 		Tasks:            []model.Task{{Name: "test"}},
 	}
+	initialSources := []domain.AcquiredSource{{
+		RepoName:     "demo",
+		RequestedRef: "feat/x",
+		Primary:      true,
+	}}
 	opts := domain.RunnerOptions{
-		InitialSources: []domain.AcquiredSource{{
-			RepoName:     "demo",
-			RequestedRef: "feat/x",
-			Primary:      true,
-		}},
+		InitialSources: initialSources,
 	}
 	runID, err := svc.Start(context.Background(), "demo", proj, nil, opts)
 	if err != nil {
@@ -546,10 +549,19 @@ func TestRunService_Start_CancelInProgress_UpdateRunSourcesErrorLogged(t *testin
 	if runID != 57 {
 		t.Errorf("runID = %d, want 57", runID)
 	}
+	mockRun.WaitFinish()
+	if len(mockRun.CreateRunCalls) != 1 {
+		t.Fatalf("CreateRunCalls = %d, want 1", len(mockRun.CreateRunCalls))
+	}
+	call := mockRun.CreateRunCalls[0]
+	if len(call.InitialSources) != 1 || call.InitialSources[0].RequestedRef != "feat/x" {
+		t.Errorf("CreateRun initialSources = %+v, want feat/x", call.InitialSources)
+	}
 }
 
 func TestRunService_Start_CancelInProgress_NoPrimarySourceRefIsNoop(t *testing.T) {
-	mockRun := &mocks.MockRunStore{CreateRunID: 58}
+	finishCh := make(chan struct{})
+	mockRun := &mocks.MockRunStore{CreateRunID: 58, FinishRunCh: finishCh}
 	runner := &mocks.MockPipelineRunner{}
 	svc := NewRunService(mockRun, runner, runner)
 
@@ -572,6 +584,7 @@ func TestRunService_Start_CancelInProgress_NoPrimarySourceRefIsNoop(t *testing.T
 	if runID != 58 {
 		t.Errorf("runID = %d, want 58", runID)
 	}
+	mockRun.WaitFinish()
 	if len(mockRun.FindActiveCalls) != 0 {
 		t.Errorf("expected 0 FindActiveRunsByRef calls, got %d", len(mockRun.FindActiveCalls))
 	}

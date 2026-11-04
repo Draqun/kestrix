@@ -174,7 +174,7 @@ type ProjectSource struct {
 type RunStore interface {
 	// CreateRun records a new run. rerunTask names the task of a single-task
 	// re-run (whose changed is empty); it is "" for every other run.
-	CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *Project, startedBy string) (int, error)
+	CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *Project, startedBy string, initialSources []AcquiredSource) (int, error)
 	FinishRun(id int, status, output, errMsg string, taskResults []TaskResult) error
 	// FinishRunIfDone finishes a run whose recorded results leave nothing in
 	// flight, and only then: while any task is still pending or running the
