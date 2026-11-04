@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.8.0] - 2026-11-04
+### Changed
+- Verify initial production deployment with hardened Compose stack, remote runner isolation, and admin bootstrap
+
 ## [v0.7.0] - 2026-11-04
 ### Changed
 - Persist run initial sources atomically in CreateRun and eliminate redundant gated update in RunService.Start
