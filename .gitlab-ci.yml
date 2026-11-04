@@ -188,12 +188,6 @@ runner-integration:
   extends: .go-job-rules
   stage: test
   image: golang:1.25-alpine
-  services:
-    - name: docker:27-dind
-      alias: docker
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
   before_script:
     - apk add --no-cache bash docker-cli make gcc musl-dev
   script:
@@ -270,11 +264,7 @@ publish-image:
     name: prod
     url: https://hub.docker.com/r/draqun/kestrix
   image: docker:27
-  services:
-    - docker:27-dind
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
     GIT_DEPTH: 0
   retry: 1
   before_script:

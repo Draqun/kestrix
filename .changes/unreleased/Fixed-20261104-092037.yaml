@@ -1,0 +1,3 @@
+kind: Fixed
+body: Use mounted host Docker socket directly in CI for publish-image and runner-integration instead of Docker-in-Docker
+time: 2026-11-04T09:20:37.406361196+01:00
