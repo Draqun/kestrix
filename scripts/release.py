@@ -167,12 +167,12 @@ def commit_and_tag(version: str, push: bool = False, changelog_updated: bool = T
             print("Describing Jujutsu commit...")
             run_command(["jj", "describe", "-m", f"chore: release {tag_name}"])
             run_command(["jj", "bookmark", "set", "main", "-r", "@"])
-        print(f"Creating tag {tag_name}...")
-        run_command(["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"])
-        if push:
-            print(f"Pushing Jujutsu bookmark main and tag {tag_name}...")
-            run_command(["jj", "git", "push"])
-            run_command(["git", "push", "origin", tag_name])
+        # In a colocated jj repo, git HEAD may not point to @.
+        # Query jj for the exact git commit ID of @ so git tag tags the intended commit:
+        res = run_command(["jj", "log", "-r", "@", "-T", "commit_id", "--no-graph"])
+        target_commit = res.stdout.strip()
+        print(f"Creating tag {tag_name} pointing to commit {target_commit}...")
+        run_command(["git", "tag", "-a", tag_name, target_commit, "-m", f"Release {tag_name}"])
     else:
         if changelog_updated:
             print("Committing changelog updates...")
@@ -180,7 +180,17 @@ def commit_and_tag(version: str, push: bool = False, changelog_updated: bool = T
             run_command(["git", "commit", "-m", f"chore: release {tag_name}"])
         print(f"Creating git tag {tag_name}...")
         run_command(["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"])
-        if push:
+
+    # Pre-release validation gate: verify that CHANGELOG.md and tag match strictly BEFORE pushing!
+    print(f"Validating release tag {tag_name} before pushing...")
+    run_command(["python3", "scripts/verify_version.py", "--tag", tag_name, "--strict"])
+
+    if push:
+        if has_jj():
+            print(f"Pushing Jujutsu bookmark main and tag {tag_name}...")
+            run_command(["jj", "git", "push"])
+            run_command(["git", "push", "origin", tag_name])
+        else:
             print(f"Pushing commit and tag {tag_name} to remote...")
             run_command(["git", "push", "origin", "main"])
             run_command(["git", "push", "origin", tag_name])

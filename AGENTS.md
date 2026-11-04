@@ -96,6 +96,29 @@ go test -run TestWebhook ./internal/web/ -count=1
     --title "..." --description "..."
   ```
 
+## Release Workflow & Tagging
+- **Prefer CI-driven releases**: Releases and tags should be created using the CI pipeline on `main`:
+  - After merging an MR into `main` and confirming the `main` pipeline passed, trigger the manual `create-release-tag` job:
+    ```bash
+    # Find create-release-tag job ID on main:
+    glab api projects/:id/pipelines?ref=main | jq '.[0].id'
+    glab api projects/:id/pipelines/<pipeline_id>/jobs | jq '.[] | select(.name=="create-release-tag") | .id'
+    # Play the manual release job:
+    glab ci play <job_id>
+    ```
+  - The `create-release-tag` job batches unreleased changelog fragments with Changie, creates the release commit `chore: release vX.Y.Z`, tags `vX.Y.Z`, and pushes to GitLab.
+  - The pushed tag triggers the release pipeline (`version-verification`, `publish-image`, `release-binary`, `create-release`).
+- **Pre-Release Validation Gate**:
+  - NEVER push a release tag without validating version consistency!
+  - Always verify that the target tag strictly matches the latest version in `CHANGELOG.md`:
+    ```bash
+    python3 scripts/verify_version.py --tag <tag_name> --strict
+    ```
+- **Local release tool (`scripts/release.py` / `make release-push`) & Jujutsu (`jj`)**:
+  - When running releases locally:
+    - In colocated `jj` repos, `git tag` must target the explicit commit SHA (`jj log -r @ -T commit_id --no-graph`), never default `git HEAD` (which does not advance on `jj describe` until export).
+    - `scripts/release.py` runs `scripts/verify_version.py --tag <tag> --strict` before pushing to guarantee the tag points to the commit with the updated `CHANGELOG.md`.
+
 ## HCL Pipeline Format
 ```hcl
 project "name" {
