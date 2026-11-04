@@ -381,6 +381,12 @@ func (w *traceWriter) Stop() {
 	w.flusherWg.Wait()
 }
 
+func (w *traceWriter) Offset() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.offset
+}
+
 func (w *traceWriter) Flush(ctx context.Context) error {
 	w.mu.Lock()
 	w.ensureSpoolLocked()

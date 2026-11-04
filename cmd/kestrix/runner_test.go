@@ -717,6 +717,7 @@ func TestTraceWriter_Write_NetworkErrorStillReturnsLenPNil(t *testing.T) {
 	ts.Close()
 
 	tw := &traceWriter{client: http.DefaultClient, baseURL: badURL, token: "tok", jobID: 1, epoch: 1}
+	defer tw.Stop()
 	n, err := tw.Write([]byte("hello"))
 	if err != nil {
 		t.Fatalf("Write must never fail on a push error, got %v", err)
@@ -724,8 +725,8 @@ func TestTraceWriter_Write_NetworkErrorStillReturnsLenPNil(t *testing.T) {
 	if n != 5 {
 		t.Fatalf("n = %d, want 5 (len(p)), even though the push failed", n)
 	}
-	if tw.offset != 0 {
-		t.Fatalf("offset = %d, want 0: a failed push must not advance it", tw.offset)
+	if tw.Offset() != 0 {
+		t.Fatalf("offset = %d, want 0: a failed push must not advance it", tw.Offset())
 	}
 }
 
@@ -736,6 +737,7 @@ func TestTraceWriter_Write_NonNoContentStillReturnsLenPNil(t *testing.T) {
 	defer ts.Close()
 
 	tw := &traceWriter{client: ts.Client(), baseURL: ts.URL, token: "tok", jobID: 1, epoch: 1}
+	defer tw.Stop()
 	n, err := tw.Write([]byte("hello"))
 	if err != nil {
 		t.Fatalf("Write must never fail on a rejected push, got %v", err)
@@ -743,8 +745,8 @@ func TestTraceWriter_Write_NonNoContentStillReturnsLenPNil(t *testing.T) {
 	if n != 5 {
 		t.Fatalf("n = %d, want 5 (len(p))", n)
 	}
-	if tw.offset != 0 {
-		t.Fatalf("offset = %d, want 0: a rejected push must not advance it", tw.offset)
+	if tw.Offset() != 0 {
+		t.Fatalf("offset = %d, want 0: a rejected push must not advance it", tw.Offset())
 	}
 }
 
@@ -759,14 +761,15 @@ func TestTraceWriter_Write_SuccessAdvancesOffset(t *testing.T) {
 	defer ts.Close()
 
 	tw := &traceWriter{client: ts.Client(), baseURL: ts.URL, token: "tok", jobID: 1, epoch: 1}
+	defer tw.Stop()
 	if _, err := tw.Write([]byte("hello")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if err := tw.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if tw.offset != 5 {
-		t.Fatalf("offset = %d, want 5 after a successful push", tw.offset)
+	if tw.Offset() != 5 {
+		t.Fatalf("offset = %d, want 5 after a successful push", tw.Offset())
 	}
 	if _, err := tw.Write([]byte("!")); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -777,8 +780,8 @@ func TestTraceWriter_Write_SuccessAdvancesOffset(t *testing.T) {
 	if gotOffset != 5 {
 		t.Fatalf("second push's offset field = %d, want 5 (the first write's length)", gotOffset)
 	}
-	if tw.offset != 6 {
-		t.Fatalf("offset = %d, want 6", tw.offset)
+	if tw.Offset() != 6 {
+		t.Fatalf("offset = %d, want 6", tw.Offset())
 	}
 }
 
