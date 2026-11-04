@@ -3,6 +3,12 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.6.0] - 2026-11-04
+### Added
+- Support execution timeout in ci_task definitions across local, docker, and remote executors
+### Fixed
+- Use mounted host Docker socket directly in CI for publish-image and runner-integration instead of Docker-in-Docker
+
 ## [v0.5.0] - 2026-11-03
 ### Added
 - Add cancel_in_progress pipeline option to automatically cancel superseded in-flight and queued runs on consecutive pushes to the same branch

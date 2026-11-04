@@ -1,3 +1,0 @@
-kind: Added
-body: Support execution timeout in ci_task definitions across local, docker, and remote executors
-time: 2026-11-04T07:42:58.331014469+01:00
