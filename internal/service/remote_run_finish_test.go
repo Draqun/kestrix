@@ -175,7 +175,7 @@ func TestResumeRemoteRun_CanceledRunDispatchesNothing(t *testing.T) {
 // remote-run-waits-for-dependents design.md D5.
 func TestResumeRemoteRun_DispatchFailureFailsTheTaskAndTheRun(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestResumeRemoteRun_DispatchFailureKeepsTheRestOfTheBatch(t *testing.T) {
 		{Name: "notify", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestResumeRemoteRun_DispatchFailureKeepsTheRestOfTheBatch(t *testing.T) {
 // remote-run-waits-for-dependents design.md D5.
 func TestResumeRemoteRun_PendingRecordFailureFailsTheTask(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestResumeRemoteRun_PendingRecordFailureFailsTheTask(t *testing.T) {
 // error names both failures.
 func TestResumeRemoteRun_PendingAndFailedRecordErrorsReportBoth(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestResumeRemoteRun_BlockedDependentRecordFailureIsReported(t *testing.T) {
 		{Name: "package", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestResumeRemoteRun_BlockedDependentRecordFailureIsReported(t *testing.T) {
 // The run's finishing fails after a dispatch failure: both failures travel.
 func TestResumeRemoteRun_DispatchFailureAndFinishFailureReportBoth(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestResumeRemoteRun_DispatchFailureAndFinishFailureReportBoth(t *testing.T)
 // failures - the dispatch's and the record's.
 func TestResumeRemoteRun_DispatchFailureAndFailedRecordReportBoth(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func TestResumeRemoteRun_DispatchFailureAndFailedRecordReportBoth(t *testing.T) 
 // remote-run-waits-for-dependents design.md D5.
 func TestResumeRemoteRun_SnapshotErrorLeavesTheRunRunning(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestRunService_CompleteRemoteJob_FinishRunIfDoneErrorPropagates(t *testing.
 // remote-run-waits-for-dependents design.md D5.
 func TestRunService_CompleteRemoteJob_FinishingIsRetried(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestRunService_CompleteRemoteJob_FinishingIsRetried(t *testing.T) {
 // task is not recorded failed and the run keeps running.
 func TestResumeRemoteRun_AnAlreadyDispatchedTaskIsNotFailed(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, buildThenDeploy(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

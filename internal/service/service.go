@@ -655,7 +655,7 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 	if s.pipeline == nil {
 		return 0, fmt.Errorf("pipeline runner not configured")
 	}
-	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor)
+	runID, skippedTasks, err := s.createRun(projectName, changed, opts.IncludeManual, proj, opts.Actor, opts.InitialSources)
 	if err != nil {
 		return 0, err
 	}
@@ -663,17 +663,6 @@ func (s *RunService) Start(ctx context.Context, projectName string, proj *model.
 		s.eventHub.BroadcastStatus(runID, "running", "")
 		for _, st := range skippedTasks {
 			s.eventHub.BroadcastTask(runID, st.Name, st.Status, st.Error)
-		}
-	}
-	// Persist initial sources immediately when cancel_in_progress is enabled so
-	// subsequent pushes to the same ref can discover and cancel this run even
-	// while it is still queued or waiting for background execution. See follow-up
-	// OpenSpec change atomic-run-sources for atomic CreateRun-with-sources unification.
-	if proj != nil && proj.CancelInProgress && len(opts.InitialSources) > 0 {
-		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
-			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
-				slog.Warn("could not persist initial run sources", "run_id", runID, "err", err)
-			}
 		}
 	}
 	startedAt := time.Now()
@@ -863,7 +852,7 @@ func resolvePipelineWithSkipped(proj model.Project, changed []string) ([]dag.Nod
 	return dag.New(proj).ResolveWithSkipped(toChangedSet(changed))
 }
 
-func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string) (int, []domain.TaskResult, error) {
+func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, []domain.TaskResult, error) {
 	if proj == nil {
 		return 0, nil, fmt.Errorf("project not loaded")
 	}
@@ -874,7 +863,7 @@ func (s *RunService) createRun(projectName string, changed []string, includeManu
 	if err != nil {
 		return 0, nil, fmt.Errorf("resolve pipeline: %w", err)
 	}
-	runID, err := s.runStore.CreateRun(projectName, changed, "", includeManual, proj, startedBy)
+	runID, err := s.runStore.CreateRun(projectName, changed, "", includeManual, proj, startedBy, initialSources)
 	if err != nil {
 		return 0, nil, fmt.Errorf("create run: %w", err)
 	}

@@ -77,7 +77,7 @@ func TestPG_SingleTaskRerun_CompletionDispatchesNothingElse(t *testing.T) {
 func TestPG_CreateRun_RerunTaskRoundTrips(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rerun-label", "")
-	id, err := pg.CreateRun("rerun-label", nil, "build", false, nil, "user:alice")
+	id, err := pg.CreateRun("rerun-label", nil, "build", false, nil, "user:alice", nil)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}

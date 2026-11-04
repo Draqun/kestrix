@@ -293,7 +293,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		return 0, fmt.Errorf("resolve pipeline: %w", err)
 	}
 
-	runID, err := s.runStore.CreateRun(projectName, changed, "", opts.IncludeManual, proj, opts.Actor)
+	runID, err := s.runStore.CreateRun(projectName, changed, "", opts.IncludeManual, proj, opts.Actor, opts.InitialSources)
 	if err != nil {
 		return 0, fmt.Errorf("create run: %w", err)
 	}
@@ -318,14 +318,6 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 				s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
 			}
 			return runID, recordErr
-		}
-	}
-
-	if len(opts.InitialSources) > 0 {
-		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
-			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
-				return runID, fmt.Errorf("persist run sources: %w", err)
-			}
 		}
 	}
 

@@ -150,7 +150,7 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 
 	var runID int
 	snap := &proj
-	runID, err = s.runStore.CreateRun(name, nil, taskName, false, snap, actor)
+	runID, err = s.runStore.CreateRun(name, nil, taskName, false, snap, actor, []domain.AcquiredSource{primary.Source})
 	if err != nil {
 		primary.Cleanup()
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -505,7 +505,7 @@ func (s *Server) failRunOnSecretError(projectName string, proj *domain.Project, 
 		return
 	}
 	startedAt := time.Now()
-	runID, err := s.runStore.CreateRun(projectName, changed, rerunTask, includeManual, proj, actor)
+	runID, err := s.runStore.CreateRun(projectName, changed, rerunTask, includeManual, proj, actor, nil)
 	if err != nil {
 		slog.Warn("could not record run for secret resolution failure", "project", projectName, "err", redact.Err(err, s.knownSecrets()))
 		return

@@ -12,7 +12,7 @@ import (
 	"kestrix/internal/redact"
 )
 
-func (s *PGStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
+func (s *PGStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	changedJSON := "[]"
 	if len(changed) > 0 {
 		b, _ := json.Marshal(changed)
@@ -24,10 +24,15 @@ func (s *PGStore) CreateRun(projectName string, changed []string, rerunTask stri
 		s := string(b)
 		snapJSON = &s
 	}
+	sourcesJSON := "[]"
+	if len(initialSources) > 0 {
+		b, _ := json.Marshal(initialSources)
+		sourcesJSON = string(b)
+	}
 	var id int
 	err := s.db.QueryRow(
-		`INSERT INTO runs (project_name, changed, rerun_task, include_manual, pipeline_def, started_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		projectName, changedJSON, rerunTask, includeManual, snapJSON, startedBy,
+		`INSERT INTO runs (project_name, changed, rerun_task, include_manual, pipeline_def, started_by, sources) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		projectName, changedJSON, rerunTask, includeManual, snapJSON, startedBy, sourcesJSON,
 	).Scan(&id)
 	return id, err
 }

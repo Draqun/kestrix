@@ -82,7 +82,7 @@ func mustUpsert(t *testing.T, pg *PGStore, name, _ string) {
 // mustCreateRun creates a run and fails the test on error.
 func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *model.Project) int {
 	t.Helper()
-	id, err := pg.CreateRun(projectName, nil, "", false, snap, "")
+	id, err := pg.CreateRun(projectName, nil, "", false, snap, "", nil)
 	if err != nil {
 		t.Fatalf("CreateRun(%q): %v", projectName, err)
 	}
@@ -481,7 +481,7 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rp2", "/rp2")
 	snap := &model.Project{Name: "rp2"}
-	id, err := pg.CreateRun("rp2", []string{"main"}, "", false, snap, "user:alice")
+	id, err := pg.CreateRun("rp2", []string{"main"}, "", false, snap, "user:alice", nil)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -556,6 +556,68 @@ func TestPG_UpdateRunSourcesPersistsRemoteRevisionWithoutCheckoutPath(t *testing
 	}
 	if got.Path != "" {
 		t.Fatalf("stored source path = %q, want omitted ephemeral checkout", got.Path)
+	}
+}
+
+func TestPG_CreateRunWithInitialSourcesPersistsImmediately(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "atomic-sources-proj", "")
+	snap := &model.Project{Name: "atomic-sources-proj"}
+	sources := []domain.AcquiredSource{{
+		RepoName:         "main",
+		URL:              "https://git.example/atomic.git",
+		RequestedRef:     "feat/atomic",
+		ResolvedRevision: "fedcba9876543210fedcba9876543210fedcba98",
+		CredentialRef:    "cred_atomic",
+		Primary:          true,
+	}}
+
+	id, err := pg.CreateRun("atomic-sources-proj", []string{"main"}, "", false, snap, "user:bob", sources)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run == nil || len(run.Sources) != 1 {
+		t.Fatalf("stored sources = %+v, want 1 source", run)
+	}
+	got := run.Sources[0]
+	if got.URL != sources[0].URL || got.RequestedRef != sources[0].RequestedRef || got.ResolvedRevision != sources[0].ResolvedRevision || !got.Primary {
+		t.Fatalf("stored source = %+v, want %+v", got, sources[0])
+	}
+
+	// Verify FindActiveRunsByRef matches the newly created run immediately
+	activeIDs, err := pg.FindActiveRunsByRef("atomic-sources-proj", "feat/atomic")
+	if err != nil {
+		t.Fatalf("FindActiveRunsByRef: %v", err)
+	}
+	if len(activeIDs) != 1 || activeIDs[0] != id {
+		t.Fatalf("FindActiveRunsByRef = %v, want [%d]", activeIDs, id)
+	}
+}
+
+func TestPG_CreateRunWithoutInitialSourcesDefaultsToEmpty(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "empty-sources-proj", "")
+	snap := &model.Project{Name: "empty-sources-proj"}
+
+	id, err := pg.CreateRun("empty-sources-proj", nil, "", false, snap, "user:bob", nil)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	run, err := pg.GetRun(id)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run == nil {
+		t.Fatal("GetRun returned nil")
+	}
+	if len(run.Sources) != 0 {
+		t.Fatalf("stored sources = %+v, want empty", run.Sources)
 	}
 }
 

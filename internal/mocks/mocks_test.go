@@ -40,7 +40,8 @@ func TestMockProjectStore_DeleteRecordsCall(t *testing.T) {
 func TestMockRunStore_CreateRunRecordsCall(t *testing.T) {
 	m := &MockRunStore{CreateRunID: 42}
 	snap := &model.Project{Name: "demo"}
-	id, err := m.CreateRun("demo", []string{"svc"}, "", true, snap, "user:alice")
+	sources := []domain.AcquiredSource{{RepoName: "svc", RequestedRef: "feat/x"}}
+	id, err := m.CreateRun("demo", []string{"svc"}, "", true, snap, "user:alice", sources)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -49,6 +50,9 @@ func TestMockRunStore_CreateRunRecordsCall(t *testing.T) {
 	}
 	if len(m.CreateRunCalls) != 1 || m.CreateRunCalls[0].ProjectName != "demo" {
 		t.Errorf("CreateRunCalls = %+v", m.CreateRunCalls)
+	}
+	if len(m.CreateRunCalls[0].InitialSources) != 1 || m.CreateRunCalls[0].InitialSources[0].RepoName != "svc" {
+		t.Errorf("InitialSources = %+v, want svc", m.CreateRunCalls[0].InitialSources)
 	}
 }
 

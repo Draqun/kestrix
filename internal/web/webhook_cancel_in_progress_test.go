@@ -56,7 +56,7 @@ func newWebhookCipStore() *webhookCipStore {
 	}
 }
 
-func (s *webhookCipStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
+func (s *webhookCipStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++
@@ -68,6 +68,7 @@ func (s *webhookCipStore) CreateRun(projectName string, changed []string, rerunT
 		PipelineDef: snap,
 		StartedBy:   startedBy,
 		StartedAt:   time.Now(),
+		Sources:     initialSources,
 	}
 	return id, nil
 }

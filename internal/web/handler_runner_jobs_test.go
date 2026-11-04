@@ -464,7 +464,7 @@ func TestIntegration_RemoteDAG_TaskRunningOnClaim(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Upsert project: %v", err)
 	}
-	runID, err := pg.CreateRun(projName, nil, "", false, nil, "")
+	runID, err := pg.CreateRun(projName, nil, "", false, nil, "", nil)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}

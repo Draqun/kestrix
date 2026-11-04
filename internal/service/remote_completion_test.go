@@ -40,12 +40,12 @@ func newFakeStatefulRunStore() *fakeStatefulRunStore {
 	return &fakeStatefulRunStore{MockRunStore: &mocks.MockRunStore{}, nextID: 1, runs: make(map[int]*domain.Run)}
 }
 
-func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string) (int, error) {
+func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := f.nextID
 	f.nextID++
-	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, RerunTask: rerunTask, PipelineDef: snap, Status: "running", StartedBy: startedBy}
+	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, RerunTask: rerunTask, PipelineDef: snap, Status: "running", StartedBy: startedBy, Sources: initialSources}
 	return id, nil
 }
 
@@ -758,7 +758,7 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, &model.Project{
 		Name:  "proj",
 		Tasks: []model.Task{{Name: "t", Trigger: "not a valid ( expression"}},
-	}, "")
+	}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -777,7 +777,7 @@ func TestResumeRemoteRun_AppendTaskResultErrorForSkipPropagates(t *testing.T) {
 		{Name: "unrelated", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +803,7 @@ func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "")
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, proj, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +912,7 @@ func TestResumeRemoteRun_RunWithoutSnapshotDispatchesNothing(t *testing.T) {
 	for _, status := range []string{"passed", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			runStore := newFakeStatefulRunStore()
-			runID, err := runStore.CreateRun("proj", nil, "build", false, rerunProject(), "")
+			runID, err := runStore.CreateRun("proj", nil, "build", false, rerunProject(), "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
