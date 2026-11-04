@@ -321,14 +321,6 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		}
 	}
 
-	if len(opts.InitialSources) > 0 {
-		if sourceStore, ok := s.runStore.(domain.RunSourceStore); ok {
-			if err := sourceStore.UpdateRunSources(runID, opts.InitialSources); err != nil {
-				return runID, fmt.Errorf("persist run sources: %w", err)
-			}
-		}
-	}
-
 	latest := make(map[string]domain.TaskResult, len(nodes))
 	eligible, _, gates := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 

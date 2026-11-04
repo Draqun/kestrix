@@ -1607,30 +1607,26 @@ func TestRunService_StartRemote_GateAppendedBeforeFirstCreateRemoteJob(t *testin
 	}
 }
 
-type plainRunStore struct {
-	domain.RunStore
-}
-
-// remote-manual-gates 2.3: a store without RunSourceStore is skipped.
-func TestRunService_StartRemote_StoreWithoutRunSourceStoreIsSkipped(t *testing.T) {
+// atomic-run-sources: startRemote passes initial sources atomically to CreateRun.
+func TestRunService_StartRemote_PersistsInitialSourcesAtCreation(t *testing.T) {
 	proj := &model.Project{
-		Name:  "test-no-source-store-proj",
+		Name:  "test-remote-sources-proj",
 		Repos: []domain.Repo{{Name: "app"}},
 		Tasks: []model.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 		},
 	}
-	baseStore := &mocks.MockRunStore{CreateRunID: 200}
-	store := &plainRunStore{RunStore: baseStore}
+	store := &mocks.MockRunStore{CreateRunID: 200}
 	jobStore := &mocks.MockRemoteJobStore{}
 
 	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(jobStore)
 
-	runID, err := svc.Start(context.Background(), "test-no-source-store-proj", proj, []string{"app"}, domain.RunnerOptions{
+	initialSources := []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}}
+	runID, err := svc.Start(context.Background(), "test-remote-sources-proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode:           "remote",
 		WorkDir:        t.TempDir(),
-		InitialSources: []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}},
+		InitialSources: initialSources,
 	})
 	if err != nil {
 		t.Fatalf("Start returned unexpected error: %v", err)
@@ -1638,34 +1634,12 @@ func TestRunService_StartRemote_StoreWithoutRunSourceStoreIsSkipped(t *testing.T
 	if runID != 200 {
 		t.Fatalf("runID = %d, want 200", runID)
 	}
-}
-
-// remote-manual-gates 2.3: a failing UpdateRunSources returns the error.
-func TestRunService_StartRemote_FailingUpdateRunSourcesReturnsError(t *testing.T) {
-	proj := &model.Project{
-		Name:  "test-failing-sources-proj",
-		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
-			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
-		},
+	if len(store.CreateRunCalls) != 1 {
+		t.Fatalf("CreateRunCalls = %d, want 1", len(store.CreateRunCalls))
 	}
-	expectedErr := errors.New("update sources db failure")
-	store := &mocks.MockRunStore{CreateRunID: 300, UpdateSourcesErr: expectedErr}
-	jobStore := &mocks.MockRemoteJobStore{}
-
-	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
-	svc.SetRemoteJobStore(jobStore)
-
-	_, err := svc.Start(context.Background(), "test-failing-sources-proj", proj, []string{"app"}, domain.RunnerOptions{
-		Mode:           "remote",
-		WorkDir:        t.TempDir(),
-		InitialSources: []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}},
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("err = %v, want errors.Is expectedErr (%v)", err, expectedErr)
+	call := store.CreateRunCalls[0]
+	if len(call.InitialSources) != 1 || call.InitialSources[0].RepoName != "app" {
+		t.Errorf("CreateRun initialSources = %+v, want app", call.InitialSources)
 	}
 }
 
