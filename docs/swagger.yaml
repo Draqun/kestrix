@@ -426,7 +426,7 @@ info:
     name: Kestrix Team
   description: GitLab webhook secret token for signature verification
   title: Kestrix API
-  version: 0.3.0
+  version: 0.8.0
 paths:
   /api/auth/login:
     post:

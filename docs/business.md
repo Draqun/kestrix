@@ -4,7 +4,7 @@ This section contains public‑facing documentation and business‑oriented cont
 
 ## Overview
 
-Kestrix is a repo‑agnostic CI/CD control plane designed to decouple pipeline logic from vendor‑specific CI config files. Teams define pipelines in HCL using a common syntax and execute them locally, in Docker, or on GitLab runners.
+Kestrix is a repo‑agnostic CI/CD control plane designed to decouple pipeline logic from vendor‑specific CI config files. Teams define pipelines in HCL using a common syntax and execute them locally, in Docker, or on distributed remote runners.
 
 ## Target Audience
 
@@ -14,7 +14,7 @@ Kestrix is a repo‑agnostic CI/CD control plane designed to decouple pipeline l
 
 ## Benefits
 
-- Write pipelines once, run anywhere (local, Docker, GitLab Runner)
+- Write pipelines once, run anywhere (local, Docker, remote runners)
 - HCL-based definitions are readable, versionable, and reviewable
 - Trigger expressions enable fine‑grained dependency ordering
 - Paginated API and UI scale to hundreds of projects and thousands of runs

@@ -5,6 +5,7 @@
 [![Terraform Provider](https://img.shields.io/badge/Terraform%20Provider-v0.1.0-844FBA?logo=terraform&logoColor=white)](https://registry.terraform.io/providers/Draqun/kestrix/latest)
 [![GitHub Mirror](https://img.shields.io/badge/GitHub-Mirror-181717?logo=github&logoColor=white)](https://github.com/Draqun/kestrix)
 [![Container: Docker](https://img.shields.io/badge/Container-Docker-049cec?logo=docker&logoColor=white)](https://www.docker.com)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-draqun%2Fkestrix-0db7ed?logo=docker&logoColor=white)](https://hub.docker.com/r/draqun/kestrix)
 [![Documentation](https://img.shields.io/badge/Docs-GitLab%20Pages-FC6D26?logo=gitlab&logoColor=white)](https://kestrix.gitlab.io/kestrix/)
 [![Sponsor: GitHub](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/draqun)
 [![Donate: PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/damiandraqungiebas)
@@ -53,17 +54,24 @@ ci_task "deploy_staging" {
 
 ## Install
 
-Pull a released image from the GitLab Container Registry - `latest` tracks
-the newest tagged release, or pin a specific one:
+Pull a released container image from **Docker Hub** or the **GitLab Container Registry**. The `:latest` tag tracks
+the newest tagged release, or pin an immutable version tag (e.g. `:v0.8.0`):
 
+### Option A: Docker Hub (Recommended)
+Official container images are mirrored on Docker Hub at [`draqun/kestrix`](https://hub.docker.com/r/draqun/kestrix):
 ```bash
-docker pull registry.gitlab.com/kestrix/kestrix:latest   # or a pinned tag, e.g. :v0.3.0
+docker pull draqun/kestrix:latest   # or a pinned tag, e.g. :v0.8.0
+docker run --rm draqun/kestrix:latest version
+```
+
+### Option B: GitLab Container Registry
+```bash
+docker pull registry.gitlab.com/kestrix/kestrix:latest   # or a pinned tag, e.g. :v0.8.0
 docker run --rm registry.gitlab.com/kestrix/kestrix:latest version
 ```
 
-For a full production deployment (Docker Compose, TLS, backups, upgrades),
-see [Production deployment](docs/deployment.md), which defaults to this same
-registry image.
+For a full production deployment (Docker Compose, TLS, backups, upgrades, and remote runners),
+see [Production deployment](docs/deployment.md). By default, Docker Compose pulls from the GitLab Container Registry, but you can set `KESTRIX_IMAGE=draqun/kestrix:latest` (or a pinned version) to pull from Docker Hub instead.
 
 ## Quick Start
 
@@ -153,7 +161,7 @@ The CLI works on a pipeline file and needs no server:
 ./bin/kestrix keys rotate-master --new-key-path /path/to/new.key
 
 # Print the running build's version - a released build reports its tag,
-# e.g. v0.3.0; an unversioned local build reports dev
+# e.g. v0.8.0; an unversioned local build reports dev
 ./bin/kestrix version
 ```
 
@@ -331,8 +339,8 @@ project identity.
    repository is never the source of the pipeline: the definition comes from
    the project's primary repository at its configured ref, and the pushed
    `ci_repo` is simply marked changed
-5. If triggers match → dispatches a pipeline to GitLab via API, one per project
-6. GitLab Runner picks up the job and executes
+5. If triggers match → executes the pipeline directly (via local host processes, hardened Docker containers, or distributed remote runner workers) or dispatches to GitLab CI via API
+6. Runners pick up the tasks and execute them in dependency order
 
 [Webhook receiver](docs/webhook-receiver.md) carries the full contract:
 resolution order, fan-out, secondary-push semantics and the recorded history.

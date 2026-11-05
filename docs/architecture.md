@@ -7,7 +7,7 @@ The system consists of several loosely coupled components:
 - **CI Generator** – converts the resolved task set into a `gitlab‑ci.yml`.
 - **Dispatch** – uses the GitLab API to start a pipeline.
 - **Webhook Receiver** – accepts GitLab push events, extracts changed repos, and triggers the resolution flow.
-- **Runner** – executes tasks locally (default) or via Docker/GitLab‑Runner.
+- **Runner** – executes tasks across local bash subprocesses, hardened Docker containers, or distributed remote runners.
 - **Store** – persists project metadata and run history in PostgreSQL.
 
 These components communicate via Go interfaces and share configuration via the startup environment snapshot (`KESTRIX_*`).

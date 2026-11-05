@@ -4,11 +4,7 @@ Kestrix includes tooling for generating GitLab CI configuration, dispatching pip
 
 ## CI Generator
 
-Converts a resolved Kestrix pipeline into a standard `gitlab-ci.yml` file, enabling integration with GitLab's CI/CD runner ecosystem.
-
-```bash
-kestrix generate path/to/pipeline.tf
-```
+Converts a resolved Kestrix pipeline into a standard `gitlab-ci.yml` file, enabling integration with GitLab's CI/CD runner ecosystem via `POST /api/generate`.
 
 ## Dispatch Client
 

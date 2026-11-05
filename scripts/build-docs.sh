@@ -20,6 +20,23 @@ output_dir = os.environ.get('OUTPUT_DIR', './ui/dist/docs')
 
 os.makedirs(output_dir, exist_ok=True)
 
+def get_docs_version():
+    env_v = os.environ.get('KESTRIX_VERSION')
+    if env_v:
+        return env_v if env_v.startswith('v') else f'v{env_v}'
+    changelog_path = os.path.join(source_dir, '..', 'CHANGELOG.md')
+    if os.path.exists(changelog_path):
+        try:
+            with open(changelog_path, 'r', encoding='utf-8') as f:
+                match = re.search(r"^##\s+\[v?([0-9]+\.[0-9]+\.[0-9]+[^\]]*)\]", f.read(), re.MULTILINE)
+                if match:
+                    return f"v{match.group(1).strip()}"
+        except Exception:
+            pass
+    return "v0.8.0"
+
+docs_version = get_docs_version()
+
 # Categories and ordering of documentation pages
 CATEGORIES = [
     {
@@ -715,7 +732,7 @@ for root, dirs, files in os.walk(source_dir):
       <button class="mobile-toggle" aria-label="Toggle navigation">☰</button>
       <a href="{root_prefix}index.html" class="brand-wrapper">
         <span class="brand-logo">Kestrix<span>.</span></span>
-        <span class="brand-badge">Docs · v0.3.0</span>
+        <span class="brand-badge">Docs · {docs_version}</span>
       </a>
     </div>
 
@@ -728,6 +745,7 @@ for root, dirs, files in os.walk(source_dir):
       <a href="{root_prefix}getting-started.html" class="header-link">Quick Start</a>
       <a href="{root_prefix}cli-reference.html" class="header-link">CLI Reference</a>
       <a href="{root_prefix}pipeline-definition.html" class="header-link">Pipeline Syntax</a>
+      <a href="https://hub.docker.com/r/draqun/kestrix" target="_blank" rel="noopener" class="header-link">Docker Hub</a>
       <a href="https://gitlab.com/kestrix/kestrix" target="_blank" rel="noopener" class="header-btn">GitLab</a>
     </div>
   </header>
@@ -808,7 +826,7 @@ index_html = f"""<!DOCTYPE html>
       <button class="mobile-toggle" aria-label="Toggle navigation">☰</button>
       <a href="index.html" class="brand-wrapper">
         <span class="brand-logo">Kestrix<span>.</span></span>
-        <span class="brand-badge">Docs · v0.3.0</span>
+        <span class="brand-badge">Docs · {docs_version}</span>
       </a>
     </div>
 
@@ -821,6 +839,7 @@ index_html = f"""<!DOCTYPE html>
       <a href="getting-started.html" class="header-link">Quick Start</a>
       <a href="cli-reference.html" class="header-link">CLI Reference</a>
       <a href="pipeline-definition.html" class="header-link">Pipeline Syntax</a>
+      <a href="https://hub.docker.com/r/draqun/kestrix" target="_blank" rel="noopener" class="header-link">Docker Hub</a>
       <a href="https://gitlab.com/kestrix/kestrix" target="_blank" rel="noopener" class="header-btn">GitLab</a>
     </div>
   </header>

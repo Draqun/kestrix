@@ -8,7 +8,8 @@
 #     docker compose -f docker-compose.prod.yml up -d
 #
 # Pulls registry.gitlab.com/kestrix/kestrix:latest by default. Pin a specific
-# release instead with KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:vX.Y.Z.
+# release instead with KESTRIX_IMAGE=registry.gitlab.com/kestrix/kestrix:vX.Y.Z,
+# or use Docker Hub: KESTRIX_IMAGE=draqun/kestrix:latest (or :vX.Y.Z).
 #
 # Kestrix serves no request until an administrator account exists. Open the
 # UI: a fresh instance shows a "Create the first administrator" form instead

@@ -31,9 +31,23 @@ This guide walks you through setting up and using Kestrix from scratch. By the e
 
 ## 1. Quick Installation
 
-### Option A: Docker Compose (Recommended for Production)
+### Option A: Quick Container Run (Docker Hub or GitLab Registry)
 
-Clone the repository and start Kestrix using Docker Compose:
+Pull the published image directly from **Docker Hub** ([`draqun/kestrix`](https://hub.docker.com/r/draqun/kestrix)) or the **GitLab Container Registry**:
+
+```bash
+# From Docker Hub:
+docker pull draqun/kestrix:latest
+docker run --rm draqun/kestrix:latest version
+
+# From GitLab Container Registry:
+docker pull registry.gitlab.com/kestrix/kestrix:latest
+docker run --rm registry.gitlab.com/kestrix/kestrix:latest version
+```
+
+### Option B: Docker Compose (Recommended for Production)
+
+Clone the repository and start Kestrix using the hardened production Docker Compose configuration. By default, it pulls `registry.gitlab.com/kestrix/kestrix:latest`; you can also set `KESTRIX_IMAGE=draqun/kestrix:latest` (or pin a release tag like `:v0.8.0`) to pull from Docker Hub instead:
 
 ```bash
 # Clone the repository
@@ -49,12 +63,13 @@ head -c 32 /dev/urandom > ~/.kestrix/jwt.key
 # Start the stack (PostgreSQL + Kestrix Backend & UI)
 export KESTRIX_MASTER_KEY_PATH=~/.kestrix/master.key
 export KESTRIX_JWT_SIGNING_KEY_PATH=~/.kestrix/jwt.key
+# (Optional) export KESTRIX_IMAGE=draqun/kestrix:latest
 docker compose -f docker/docker-compose.prod.yml up -d
 ```
 
 The Web UI will be available at **`http://localhost:18080`** (or port `:8080` in development).
 
-### Option B: Pre-built Binary
+### Option C: Pre-built Binary
 
 Download the latest release binary for your platform from the GitLab Releases page:
 
@@ -68,7 +83,7 @@ sudo mv kestrix /usr/local/bin/
 kestrix version
 ```
 
-### Option C: From Source (Development)
+### Option D: From Source (Development)
 
 ```bash
 # Prerequisites: Go 1.25+, Node.js 22+, Docker (optional)

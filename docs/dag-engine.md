@@ -7,7 +7,7 @@ The DAG (Directed Acyclic Graph) engine resolves which tasks should run for a pi
 A pipeline definition contains:
 
 - **ci_repo** blocks – repositories that can trigger tasks.
-- **task** blocks – units of work with a trigger expression and optional dependencies.
+- **ci_task** blocks – units of work with a trigger expression and optional dependencies.
 
 When a webhook or a manual run is triggered, the engine receives:
 

@@ -134,22 +134,29 @@ edited and committed in Git. See [Remote projects](remote-projects.md).
 
 ## Cutting a release
 
-`scripts/release.sh <X.Y.Z>` is the only supported way to cut a release. Run
-it on a clean `main`:
+Releases are driven by the CI pipeline on `main` using Changie:
 
-```bash
-scripts/release.sh 0.3.0
-```
+1. **Trigger the release job on `main`**:
+   After merging a feature MR into `main` and confirming the pipeline has passed, trigger the manual `create-release-tag` job:
 
-It refuses to run on a dirty working copy or off `main`, moves the
-`CHANGELOG.md` `[Unreleased]` section under a new `## [vX.Y.Z] - YYYY-MM-DD`
-heading (leaving a fresh empty `[Unreleased]`), commits
-`chore: release vX.Y.Z`, tags it, and pushes the commit and tag. Pushing the
-tag triggers the `release` stage in `.gitlab-ci.yml`, which only runs once
-every analysis/test/build job for that commit has passed:
+   ```bash
+   # Find and trigger the manual release job:
+   JOB_ID=$(glab api projects/:id/pipelines?ref=main | jq '.[0].id' | xargs -I {} glab api projects/:id/pipelines/{}/jobs | jq '.[] | select(.name=="create-release-tag") | .id')
+   glab ci play $JOB_ID
+   ```
 
-- `publish-image` builds and pushes `registry.gitlab.com/kestrix/kestrix:vX.Y.Z`
-  and `:latest`.
+   Alternatively, for local release execution:
+   ```bash
+   make release-push   # or python3 scripts/release.py --push
+   ```
+
+2. The release automation batches unreleased changelog fragments from `.changes/unreleased/` with Changie, creates the release commit `chore: release vX.Y.Z`, tags `vX.Y.Z`, and pushes to GitLab.
+
+3. Pushing the tag triggers the `release` stage in `.gitlab-ci.yml`, which only runs once every analysis/test/build job for that commit has passed:
+
+- `publish-image` builds and pushes container images to both:
+  - **GitLab Container Registry**: `registry.gitlab.com/kestrix/kestrix:vX.Y.Z` and `:latest`
+  - **Docker Hub**: [`draqun/kestrix:vX.Y.Z`](https://hub.docker.com/r/draqun/kestrix) and `:latest`
 - `release-binary` builds the stripped Linux amd64 binary and uploads it to
   the project's generic package registry.
 - `create-release` creates a GitLab Release for the tag, with the matching
@@ -157,8 +164,8 @@ every analysis/test/build job for that commit has passed:
   asset.
 
 Watch it with `scripts/wait-green.sh vX.Y.Z`, then verify from outside the
-runner: `docker pull registry.gitlab.com/kestrix/kestrix:vX.Y.Z` and
-`docker run --rm registry.gitlab.com/kestrix/kestrix:vX.Y.Z version` should
+runner: `docker pull draqun/kestrix:vX.Y.Z` (or `registry.gitlab.com/kestrix/kestrix:vX.Y.Z`) and
+`docker run --rm draqun/kestrix:vX.Y.Z version` should
 both report the tag, and the project's Releases page should list it.
 
 **Rollback:** a tag pushed by mistake is not silently fixed - delete it by
