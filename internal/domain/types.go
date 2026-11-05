@@ -223,6 +223,46 @@ func IsTerminalRunStatus(status string) bool {
 	return false
 }
 
+// HasExecutableRunState reports whether any task is in an executable or awaiting state (manual or active).
+func HasExecutableRunState(taskResults []TaskResult) bool {
+	for _, tr := range taskResults {
+		if tr.Status == TaskStatusManual || IsActiveTaskStatus(tr.Status) {
+			return true
+		}
+	}
+	return false
+}
+
+// CalculateRunStatus computes the overall run status and error message from task results.
+func CalculateRunStatus(taskResults []TaskResult, runErr error) (string, string) {
+	status := RunStatusPassed
+	errMsg := ""
+	if runErr != nil {
+		status = RunStatusFailed
+		errMsg = runErr.Error()
+	}
+	canceled := false
+	for _, tr := range taskResults {
+		switch tr.Status {
+		case TaskStatusCanceled:
+			canceled = true
+		case TaskStatusFailed:
+			status = RunStatusFailed
+			if errMsg == "" {
+				errMsg = tr.Error
+			}
+		}
+	}
+	if canceled {
+		status = RunStatusCanceled
+		errMsg = "canceled"
+	}
+	if HasExecutableRunState(taskResults) {
+		status = "running"
+	}
+	return status, errMsg
+}
+
 // SkipCategory classifies why a task was skipped.
 type SkipCategory string
 

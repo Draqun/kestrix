@@ -1,0 +1,3 @@
+kind: Fixed
+body: Fix manual gate lifecycle in in-process runner to wait for dependencies and skip on upstream failure
+time: 2026-11-05T08:24:41.110292352+01:00

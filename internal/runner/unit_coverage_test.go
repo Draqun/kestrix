@@ -80,6 +80,9 @@ func TestUnitTaskLoopBranches(t *testing.T) {
 		{Task: model.Task{Name: "fail", DependsOn: []string{"pass"}}},
 		{Task: model.Task{Name: "blocked", DependsOn: []string{"fail"}}},
 		{Task: model.Task{Name: "manual", Manual: true}},
+		{Task: model.Task{Name: "waiting_manual", DependsOn: []string{"manual"}}},
+		{Task: model.Task{Name: "waiting_pending", DependsOn: []string{"waiting_manual"}}},
+		{Task: model.Task{Name: "manual_blocked", Manual: true, DependsOn: []string{"fail"}}},
 	}
 	executor := &stubExecutor{errors: map[string]error{"fail": errors.New("failed")}}
 	starts := []string{}
@@ -89,10 +92,11 @@ func TestUnitTaskLoopBranches(t *testing.T) {
 		OnTaskStart:    func(name string) { starts = append(starts, name) },
 		OnTaskComplete: func(result TaskResult) { completions = append(completions, result) },
 	})
-	if err != nil || len(results) != 4 || len(starts) != 2 || len(completions) != 4 {
+	if err != nil || len(results) != 7 || len(starts) != 2 || len(completions) != 7 {
 		t.Fatalf("results=%+v starts=%v completions=%+v err=%v", results, starts, completions, err)
 	}
-	if results[0].Status != "passed" || results[1].Status != "failed" || results[2].Status != "skipped" || results[3].Status != "manual" {
+	if results[0].Status != "passed" || results[1].Status != "failed" || results[2].Status != "skipped" || results[3].Status != "manual" ||
+		results[4].Status != "pending" || results[5].Status != "pending" || results[6].Status != "skipped" {
 		t.Fatalf("unexpected statuses: %+v", results)
 	}
 
