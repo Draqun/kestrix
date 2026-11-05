@@ -3,6 +3,12 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.9.0] - 2026-11-05
+### Changed
+- Document Docker Hub distribution alongside GitLab registry in README and deployment guides
+### Fixed
+- Fix manual gate lifecycle in in-process runner to wait for dependencies and skip on upstream failure
+
 ## [v0.8.0] - 2026-11-04
 ### Changed
 - Verify initial production deployment with hardened Compose stack, remote runner isolation, and admin bootstrap
