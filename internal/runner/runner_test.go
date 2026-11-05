@@ -695,38 +695,38 @@ func TestRunLocal_FailedUpstreamSkipsDownstreamManual(t *testing.T) {
 	if len(deploy.SkipReason.FailedDependencies) != 1 || deploy.SkipReason.FailedDependencies[0] != "build" {
 		t.Errorf("deploy.SkipReason.FailedDependencies = %v, want ['build']", deploy.SkipReason.FailedDependencies)
 	}
-	status, errMsg := CalculateRunStatus(results, nil)
+	status, errMsg := domain.CalculateRunStatus(results, nil)
 	if status != domain.RunStatusFailed || !strings.Contains(errMsg, "exit") {
-		t.Errorf("CalculateRunStatus(results) = (%q, %q), want failed with exit error", status, errMsg)
+		t.Errorf("domain.CalculateRunStatus(results) = (%q, %q), want failed with exit error", status, errMsg)
 	}
 }
 
 func TestCalculateRunStatusInRunner(t *testing.T) {
 	// Upstream failed + downstream manual skipped -> failed
-	status, errMsg := CalculateRunStatus([]TaskResult{
+	status, errMsg := domain.CalculateRunStatus([]TaskResult{
 		{Name: "build", Status: "failed", Error: "exit 1"},
 		{Name: "deploy", Status: "skipped"},
 	}, nil)
 	if status != domain.RunStatusFailed || errMsg != "exit 1" {
-		t.Errorf("CalculateRunStatus = (%q, %q), want (failed, exit 1)", status, errMsg)
+		t.Errorf("domain.CalculateRunStatus = (%q, %q), want (failed, exit 1)", status, errMsg)
 	}
 
 	// Mixed with active manual task -> running
-	status, _ = CalculateRunStatus([]TaskResult{
+	status, _ = domain.CalculateRunStatus([]TaskResult{
 		{Name: "build", Status: "failed", Error: "exit 1"},
 		{Name: "deploy", Status: "skipped"},
 		{Name: "other", Status: "manual"},
 	}, nil)
 	if status != "running" {
-		t.Errorf("CalculateRunStatus = %q, want running", status)
+		t.Errorf("domain.CalculateRunStatus = %q, want running", status)
 	}
 
 	// All passed -> passed
-	status, _ = CalculateRunStatus([]TaskResult{
+	status, _ = domain.CalculateRunStatus([]TaskResult{
 		{Name: "build", Status: "passed"},
 	}, nil)
 	if status != domain.RunStatusPassed {
-		t.Errorf("CalculateRunStatus = %q, want passed", status)
+		t.Errorf("domain.CalculateRunStatus = %q, want passed", status)
 	}
 }
 

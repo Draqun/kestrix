@@ -72,11 +72,6 @@ func setCancelViaProcessGroup(cmd *exec.Cmd, grace time.Duration) (cleanup func(
 // across runner, store, and service layers.
 type TaskResult = domain.TaskResult
 
-// CalculateRunStatus computes the overall run status and error message from task results.
-func CalculateRunStatus(taskResults []TaskResult, runErr error) (string, string) {
-	return domain.CalculateRunStatus(taskResults, runErr)
-}
-
 // Options controls a local pipeline run.
 type Options struct {
 	// WorkDir is the checkout that contains subpath repositories.
