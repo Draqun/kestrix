@@ -246,7 +246,7 @@ func TestIsTerminalRunStatus(t *testing.T) {
 			t.Errorf("IsTerminalRunStatus(%q) = false, want true", status)
 		}
 	}
-	for _, status := range []string{"", "running", "queued", "pending"} {
+	for _, status := range []string{"", RunStatusRunning, "queued", "pending"} {
 		if IsTerminalRunStatus(status) {
 			t.Errorf("IsTerminalRunStatus(%q) = true, want false", status)
 		}
@@ -350,14 +350,14 @@ func TestCalculateRunStatus(t *testing.T) {
 		t.Errorf("got (%q, %q), want (%q, %q)", status, errMsg, RunStatusFailed, "exit 1")
 	}
 
-	// 2. Mixed tasks with independent manual task -> run status remains "running"
+	// 2. Mixed tasks with independent manual task -> run status remains RunStatusRunning
 	status, errMsg = CalculateRunStatus([]TaskResult{
 		{Name: "build", Status: TaskStatusFailed, Error: "exit 1"},
 		{Name: "deploy", Status: TaskStatusSkipped},
 		{Name: "docs", Status: TaskStatusManual},
 	}, nil)
-	if status != "running" || errMsg != "exit 1" {
-		t.Errorf("got (%q, %q), want (running, exit 1)", status, errMsg)
+	if status != RunStatusRunning || errMsg != "exit 1" {
+		t.Errorf("got (%q, %q), want (%q, exit 1)", status, errMsg, RunStatusRunning)
 	}
 
 	// 3. Mixed tasks with passed and failed tasks -> run status is "failed"

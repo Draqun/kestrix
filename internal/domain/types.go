@@ -182,9 +182,10 @@ type Claims struct {
 	ExpiresAt    time.Time
 }
 
-// A run's terminal status: the values the runs.status column takes once the
-// run is finished. A run that is not finished reads "queued" or "running".
+// Run status constants: the values the runs.status column takes. A run that
+// is not finished reads "queued" or "running".
 const (
+	RunStatusRunning  = "running"
 	RunStatusPassed   = "passed"
 	RunStatusFailed   = "failed"
 	RunStatusCanceled = "canceled"
@@ -254,11 +255,15 @@ func CalculateRunStatus(taskResults []TaskResult, runErr error) (string, string)
 		}
 	}
 	if canceled {
+		// A task terminated by our own cancellation is not a pipeline
+		// failure; see design.md D5 and the "Cancel a running local task"
+		// scenario - the run SHALL be canceled even when the task that was
+		// killed reports its own result as canceled rather than failed.
 		status = RunStatusCanceled
 		errMsg = "canceled"
 	}
 	if HasExecutableRunState(taskResults) {
-		status = "running"
+		status = RunStatusRunning
 	}
 	return status, errMsg
 }
