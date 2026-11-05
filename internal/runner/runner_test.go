@@ -593,6 +593,143 @@ func TestRunLocal_ManualAndDepBlocked(t *testing.T) {
 	}
 }
 
+func TestRunLocal_ManualGateBlocksDownstream(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo build_done`}},
+			{Name: "deploy", Trigger: "repo.repo.changed", Manual: true,
+				DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
+			{Name: "notify", Trigger: "repo.repo.changed",
+				DependsOn: []string{"deploy"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo notify_done`}},
+			{Name: "cleanup", Trigger: "repo.repo.changed",
+				DependsOn: []string{"notify"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo cleanup_done`}},
+		},
+	}
+	var out bytes.Buffer
+	results, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir, Stdout: &out, Stderr: &out},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	byName := map[string]TaskResult{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+	if byName["build"].Status != "passed" {
+		t.Errorf("build status = %q, want passed", byName["build"].Status)
+	}
+	if byName["deploy"].Status != "manual" {
+		t.Errorf("deploy status = %q, want manual", byName["deploy"].Status)
+	}
+	if byName["notify"].Status != "pending" {
+		t.Errorf("notify status = %q, want pending", byName["notify"].Status)
+	}
+	if byName["cleanup"].Status != "pending" {
+		t.Errorf("cleanup status = %q, want pending", byName["cleanup"].Status)
+	}
+	if strings.Contains(out.String(), "notify_done") {
+		t.Errorf("notify should not have executed, but stdout was: %s", out.String())
+	}
+	if strings.Contains(out.String(), "cleanup_done") {
+		t.Errorf("cleanup should not have executed, but stdout was: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "[PENDING] notify (waiting for dependency)") {
+		t.Errorf("stdout should contain pending notification for notify: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "[PENDING] cleanup (waiting for dependency)") {
+		t.Errorf("stdout should contain pending notification for cleanup: %s", out.String())
+	}
+}
+
+func TestRunLocal_FailedUpstreamSkipsDownstreamManual(t *testing.T) {
+	skipOnWindows(t)
+	if !bashAvailable() {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	project := model.Project{
+		Name:  "p1",
+		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.repo.changed",
+				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+			{Name: "deploy", Trigger: "repo.repo.changed", Manual: true,
+				DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
+		},
+	}
+	var out bytes.Buffer
+	results, err := RunLocal(context.Background(), project,
+		map[string]bool{"repo": true},
+		Options{WorkDir: dir, Stdout: &out, Stderr: &out},
+	)
+	if err != nil {
+		t.Fatalf("RunLocal: %v", err)
+	}
+	byName := map[string]TaskResult{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+	if byName["build"].Status != "failed" {
+		t.Errorf("build status = %q, want failed", byName["build"].Status)
+	}
+	deploy := byName["deploy"]
+	if deploy.Status != "skipped" {
+		t.Fatalf("deploy status = %q, want skipped", deploy.Status)
+	}
+	if deploy.SkipReason == nil {
+		t.Fatal("deploy.SkipReason is nil, want non-nil")
+	}
+	if deploy.SkipReason.Category != domain.SkipCategoryDependencyFailed {
+		t.Errorf("deploy.SkipReason.Category = %q, want %q", deploy.SkipReason.Category, domain.SkipCategoryDependencyFailed)
+	}
+	if len(deploy.SkipReason.FailedDependencies) != 1 || deploy.SkipReason.FailedDependencies[0] != "build" {
+		t.Errorf("deploy.SkipReason.FailedDependencies = %v, want ['build']", deploy.SkipReason.FailedDependencies)
+	}
+	status, errMsg := domain.CalculateRunStatus(results, nil)
+	if status != domain.RunStatusFailed || !strings.Contains(errMsg, "exit") {
+		t.Errorf("domain.CalculateRunStatus(results) = (%q, %q), want failed with exit error", status, errMsg)
+	}
+}
+
+func TestCalculateRunStatusInRunner(t *testing.T) {
+	// Upstream failed + downstream manual skipped -> failed
+	status, errMsg := domain.CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: "failed", Error: "exit 1"},
+		{Name: "deploy", Status: "skipped"},
+	}, nil)
+	if status != domain.RunStatusFailed || errMsg != "exit 1" {
+		t.Errorf("domain.CalculateRunStatus = (%q, %q), want (failed, exit 1)", status, errMsg)
+	}
+
+	// Mixed with active manual task -> running
+	status, _ = domain.CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: "failed", Error: "exit 1"},
+		{Name: "deploy", Status: "skipped"},
+		{Name: "other", Status: "manual"},
+	}, nil)
+	if status != "running" {
+		t.Errorf("domain.CalculateRunStatus = %q, want running", status)
+	}
+
+	// All passed -> passed
+	status, _ = domain.CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: "passed"},
+	}, nil)
+	if status != domain.RunStatusPassed {
+		t.Errorf("domain.CalculateRunStatus = %q, want passed", status)
+	}
+}
+
 func TestRunLocal_TaskTimeoutDownstreamSkipped(t *testing.T) {
 	skipOnWindows(t)
 	if !bashAvailable() {

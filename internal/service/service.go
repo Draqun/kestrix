@@ -1074,45 +1074,11 @@ func (s *RunService) finishRun(runID int, projectName string, output string, tas
 }
 
 func runStatus(taskResults []domain.TaskResult, runErr error) (string, string) {
-	status := domain.RunStatusPassed
-	errMsg := ""
-	if runErr != nil {
-		status = domain.RunStatusFailed
-		errMsg = runErr.Error()
-	}
-	canceled := false
-	for _, tr := range taskResults {
-		switch tr.Status {
-		case domain.TaskStatusCanceled:
-			canceled = true
-		case domain.TaskStatusFailed:
-			status = domain.RunStatusFailed
-			if errMsg == "" {
-				errMsg = tr.Error
-			}
-		}
-	}
-	if canceled {
-		// A task terminated by our own cancellation is not a pipeline
-		// failure; see design.md D5 and the "Cancel a running local task"
-		// scenario - the run SHALL be canceled even when the task that was
-		// killed reports its own result as canceled rather than failed.
-		status = domain.RunStatusCanceled
-		errMsg = "canceled"
-	}
-	if hasExecutableRunState(taskResults) {
-		status = "running"
-	}
-	return status, errMsg
+	return domain.CalculateRunStatus(taskResults, runErr)
 }
 
 func hasExecutableRunState(taskResults []domain.TaskResult) bool {
-	for _, tr := range taskResults {
-		if tr.Status == domain.TaskStatusManual || domain.IsActiveTaskStatus(tr.Status) {
-			return true
-		}
-	}
-	return false
+	return domain.HasExecutableRunState(taskResults)
 }
 
 // trackActive registers runID in active/done so Cancel terminates the

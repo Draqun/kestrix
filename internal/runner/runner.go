@@ -350,12 +350,6 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 			record(canceled)
 			continue
 		}
-		if task.Manual && !opts.IncludeManual {
-			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
-			waiting := TaskResult{Name: task.Name, Status: "manual"}
-			record(waiting)
-			continue
-		}
 		blocked, anyCanceled, failedDeps := domain.ScanBlockedDeps(task.DependsOn, func(dep string) (string, *domain.SkipReason, bool) {
 			if !failedTasks[dep] {
 				return "", nil, false
@@ -368,6 +362,29 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 			skipped := domain.NewDependencySkipResult(task.Name, failedDeps, anyCanceled)
 			failedTasks[task.Name] = true
 			record(skipped)
+			continue
+		}
+
+		waitingForDep := false
+		for _, dep := range task.DependsOn {
+			if r, ok := resByName[dep]; ok {
+				if r.Status == domain.TaskStatusManual || r.Status == domain.TaskStatusPending {
+					waitingForDep = true
+					break
+				}
+			}
+		}
+		if waitingForDep {
+			fmt.Fprintf(opts.Stdout, "[PENDING] %s (waiting for dependency)\n", task.Name)
+			pending := TaskResult{Name: task.Name, Status: domain.TaskStatusPending}
+			record(pending)
+			continue
+		}
+
+		if task.Manual && !opts.IncludeManual {
+			fmt.Fprintf(opts.Stdout, "[MANUAL] %s (waiting for approval)\n", task.Name)
+			waiting := TaskResult{Name: task.Name, Status: "manual"}
+			record(waiting)
 			continue
 		}
 

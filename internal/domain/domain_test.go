@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -245,7 +246,7 @@ func TestIsTerminalRunStatus(t *testing.T) {
 			t.Errorf("IsTerminalRunStatus(%q) = false, want true", status)
 		}
 	}
-	for _, status := range []string{"", "running", "queued", "pending"} {
+	for _, status := range []string{"", RunStatusRunning, "queued", "pending"} {
 		if IsTerminalRunStatus(status) {
 			t.Errorf("IsTerminalRunStatus(%q) = true, want false", status)
 		}
@@ -316,5 +317,96 @@ func TestTask_TimeoutJSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Timeout != "10m" {
 		t.Errorf("decoded.Timeout = %q, want %q", decoded.Timeout, "10m")
+	}
+}
+
+func TestHasExecutableRunState(t *testing.T) {
+	if HasExecutableRunState(nil) {
+		t.Error("HasExecutableRunState(nil) = true, want false")
+	}
+	for _, status := range []string{TaskStatusManual, TaskStatusPending, TaskStatusRunning, TaskStatusClaimed} {
+		if !HasExecutableRunState([]TaskResult{{Name: "t", Status: status}}) {
+			t.Errorf("HasExecutableRunState with status %q = false, want true", status)
+		}
+	}
+	terminalResults := []TaskResult{
+		{Name: "t1", Status: TaskStatusPassed},
+		{Name: "t2", Status: TaskStatusFailed},
+		{Name: "t3", Status: TaskStatusSkipped},
+		{Name: "t4", Status: TaskStatusCanceled},
+	}
+	if HasExecutableRunState(terminalResults) {
+		t.Error("HasExecutableRunState with only terminal results = true, want false")
+	}
+}
+
+func TestCalculateRunStatus(t *testing.T) {
+	// 1. Upstream fails, downstream manual gate is skipped -> run status is "failed"
+	status, errMsg := CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: TaskStatusFailed, Error: "exit 1"},
+		{Name: "deploy", Status: TaskStatusSkipped, Error: "dependency failed"},
+	}, nil)
+	if status != RunStatusFailed || errMsg != "exit 1" {
+		t.Errorf("got (%q, %q), want (%q, %q)", status, errMsg, RunStatusFailed, "exit 1")
+	}
+
+	// 2. Mixed tasks with independent manual task -> run status remains RunStatusRunning
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: TaskStatusFailed, Error: "exit 1"},
+		{Name: "deploy", Status: TaskStatusSkipped},
+		{Name: "docs", Status: TaskStatusManual},
+	}, nil)
+	if status != RunStatusRunning || errMsg != "exit 1" {
+		t.Errorf("got (%q, %q), want (%q, exit 1)", status, errMsg, RunStatusRunning)
+	}
+
+	// 3. Mixed tasks with passed and failed tasks -> run status is "failed"
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "lint", Status: TaskStatusPassed},
+		{Name: "build", Status: TaskStatusFailed, Error: "exit 2"},
+		{Name: "deploy", Status: TaskStatusSkipped},
+	}, nil)
+	if status != RunStatusFailed || errMsg != "exit 2" {
+		t.Errorf("got (%q, %q), want (%q, %q)", status, errMsg, RunStatusFailed, "exit 2")
+	}
+
+	// 4. All passed -> "passed"
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: TaskStatusPassed},
+	}, nil)
+	if status != RunStatusPassed || errMsg != "" {
+		t.Errorf("got (%q, %q), want (%q, empty)", status, errMsg, RunStatusPassed)
+	}
+
+	// 5. Canceled task -> "canceled"
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: TaskStatusCanceled},
+	}, nil)
+	if status != RunStatusCanceled || errMsg != "canceled" {
+		t.Errorf("got (%q, %q), want (%q, canceled)", status, errMsg, RunStatusCanceled)
+	}
+
+	// 6. Canceled outranks failed
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "build", Status: TaskStatusFailed, Error: "exit 1"},
+		{Name: "deploy", Status: TaskStatusCanceled},
+	}, nil)
+	if status != RunStatusCanceled || errMsg != "canceled" {
+		t.Errorf("got (%q, %q), want (%q, canceled)", status, errMsg, RunStatusCanceled)
+	}
+
+	// 7. runErr with no tasks
+	status, errMsg = CalculateRunStatus(nil, errors.New("infrastructure failure"))
+	if status != RunStatusFailed || errMsg != "infrastructure failure" {
+		t.Errorf("got (%q, %q), want (%q, infrastructure failure)", status, errMsg, RunStatusFailed)
+	}
+
+	// 8. Multiple failed tasks (verifies first error preserved)
+	status, errMsg = CalculateRunStatus([]TaskResult{
+		{Name: "t1", Status: TaskStatusFailed, Error: "first"},
+		{Name: "t2", Status: TaskStatusFailed, Error: "second"},
+	}, nil)
+	if status != RunStatusFailed || errMsg != "first" {
+		t.Errorf("got (%q, %q), want (%q, first)", status, errMsg, RunStatusFailed)
 	}
 }
