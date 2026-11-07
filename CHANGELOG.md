@@ -3,6 +3,11 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.9.1] - 2026-11-07
+### Fixed
+- Fix missing Prometheus run completion telemetry (kestrix_runs_total and kestrix_run_duration_seconds) for remote runs and early dispatch aborts (excluding background stale job reclaim).
+- Record Prometheus run completion telemetry and broadcast event hub terminal state during background stale job reclaim
+
 ## [v0.9.0] - 2026-11-05
 ### Changed
 - Document Docker Hub distribution alongside GitLab registry in README and deployment guides

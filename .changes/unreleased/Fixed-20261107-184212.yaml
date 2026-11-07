@@ -1,3 +1,0 @@
-kind: Fixed
-body: Record Prometheus run completion telemetry and broadcast event hub terminal state during background stale job reclaim
-time: 2026-11-07T18:42:12.773064404+01:00

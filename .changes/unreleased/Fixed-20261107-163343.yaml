@@ -1,3 +1,0 @@
-kind: Fixed
-body: Fix missing Prometheus run completion telemetry (kestrix_runs_total and kestrix_run_duration_seconds) for remote runs and early dispatch aborts (excluding background stale job reclaim).
-time: 2026-11-07T16:33:43.099072651+01:00
