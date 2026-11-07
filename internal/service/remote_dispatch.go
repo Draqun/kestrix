@@ -281,6 +281,7 @@ func sanitizeReposForPayload(repos []domain.Repo) []domain.Repo {
 // startRemote's only caller (Start) has already checked s.remoteJobStore is
 // non-nil.
 func (s *RunService) startRemote(projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+	startedAt := time.Now()
 	if opts.WorkspaceCleanup != nil {
 		// The archive below copies everything a job needs out of the live
 		// checkout; nothing in this function touches opts.WorkDir again
@@ -316,6 +317,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 				slog.Warn("could not finish run after skipped task append failure", "run_id", runID, "error", finishErr)
 			} else {
 				s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
+				s.recordRunFinished(domain.RunStatusFailed, projectName, startedAt)
 			}
 			return runID, recordErr
 		}
@@ -331,6 +333,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 			return runID, fmt.Errorf("finish run %d: %w", runID, err)
 		}
 		s.publishRunState(runID, domain.RunStatusPassed, "")
+		s.recordRunFinished(domain.RunStatusPassed, projectName, startedAt)
 		return runID, nil
 	}
 
@@ -340,6 +343,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		redactedErr := redactValues(archiveErr.Error(), opts.ResolvedSecretValues)
 		if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil); finishErr == nil {
 			s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
+			s.recordRunFinished(domain.RunStatusFailed, projectName, startedAt)
 		}
 		return runID, archiveErr
 	}
@@ -360,6 +364,7 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		redactedErr := redactValues(snapshotErr.Error(), opts.ResolvedSecretValues)
 		if finishErr := s.runStore.FinishRun(runID, domain.RunStatusFailed, "", redactedErr, nil); finishErr == nil {
 			s.publishRunState(runID, domain.RunStatusFailed, redactedErr)
+			s.recordRunFinished(domain.RunStatusFailed, projectName, startedAt)
 		}
 		return runID, snapshotErr
 	}
@@ -378,13 +383,18 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		}
 	}
 	if len(dispatchErrs) > 0 {
+		unlock := s.runLocks.lock(runID)
+		defer unlock()
+		runBefore, _ := s.runStore.GetRun(runID)
+		isAlreadyTerminal := runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status)
+
 		_, newlySkipped, _ := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 		for _, skip := range newlySkipped {
 			_ = s.runStore.AppendTaskResult(runID, skip)
 		}
 		_ = s.finishRunWithRetry(runID)
-		if run, getErr := s.runStore.GetRun(runID); getErr == nil && run != nil && domain.IsTerminalRunStatus(run.Status) {
-			s.publishRunState(runID, run.Status, run.Error)
+		if !isAlreadyTerminal {
+			s.finalizeRemoteRun(runID)
 		}
 		return runID, fmt.Errorf("dispatch failed: %w", errors.Join(dispatchErrs...))
 	}
@@ -470,21 +480,42 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 	// failure - so the run takes the status its results imply, and a
 	// dispatch failure travels on top of it -
 	// remote-run-waits-for-dependents design.md D5.
+	runBefore, _ := s.runStore.GetRun(job.RunID)
+	isAlreadyTerminal := runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status)
+
 	if err := s.finishRunWithRetry(job.RunID); err != nil {
 		if resumeErr != nil {
 			return true, errors.Join(fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err), resumeErr)
 		}
 		return true, fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err)
 	}
-	if s.runStore != nil {
-		if run, err := s.runStore.GetRun(job.RunID); err == nil && run != nil && domain.IsTerminalRunStatus(run.Status) {
-			s.publishRunState(job.RunID, run.Status, run.Error)
-		}
+	if !isAlreadyTerminal {
+		s.finalizeRemoteRun(job.RunID)
 	}
 	if resumeErr != nil {
 		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, resumeErr)
 	}
 	return true, nil
+}
+
+// finalizeRemoteRun inspects runID's current status in the store, publishing the
+// run state and recording completion metrics (kestrix_runs_total and duration)
+// if the run has reached a terminal status (passed or failed). A run with
+// status "canceled" was canceled via Cancel, which already recorded the metric
+// and published state; it is ignored here to prevent duplicate recording.
+func (s *RunService) finalizeRemoteRun(runID int) {
+	if s.runStore == nil {
+		return
+	}
+	run, err := s.runStore.GetRun(runID)
+	if err != nil || run == nil || !domain.IsTerminalRunStatus(run.Status) {
+		return
+	}
+	if run.Status == domain.RunStatusCanceled {
+		return
+	}
+	s.publishRunState(runID, run.Status, run.Error)
+	s.recordRunFinished(run.Status, run.ProjectName, run.StartedAt)
 }
 
 // finishRunAttempts bounds how often the run's finishing write is retried.
