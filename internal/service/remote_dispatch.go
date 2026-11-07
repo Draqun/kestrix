@@ -389,14 +389,16 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 		if err != nil {
 			slog.Warn("cannot inspect run terminal status during dispatch abort", "run_id", runID, "error", err)
 		}
-		isAlreadyTerminal := err != nil || (runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status))
+		// Skip finalization (both metric recording and event publishing) if the run was already
+		// completed concurrently by a racing runner job, or if GetRun failed transiently, to prevent double-counting.
+		skipFinalize := err != nil || (runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status))
 
 		_, newlySkipped, _ := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 		for _, skip := range newlySkipped {
 			_ = s.runStore.AppendTaskResult(runID, skip)
 		}
 		_ = s.finishRunWithRetry(runID)
-		if !isAlreadyTerminal {
+		if !skipFinalize {
 			s.finalizeRemoteRun(runID)
 		}
 		return runID, fmt.Errorf("dispatch failed: %w", errors.Join(dispatchErrs...))
