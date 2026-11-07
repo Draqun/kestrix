@@ -4,6 +4,7 @@
 
 - [x] 1.1 In `internal/service/remote_dispatch.go` (`resumeRemoteRun`), invoke `recordRunFinished` with calculated duration when a remote run reaches status `passed` or `failed`; verify with a unit test that the Prometheus counter and duration histogram are incremented upon the last job's completion.
 - [x] 1.2 In `internal/service/remote_dispatch.go`, ensure that early aborts (e.g. initial dispatch failure or run cancellation) invoke `recordRunFinished` exactly once; verify with a cancellation unit test.
+- Note: Silent runner reclaim (`ReclaimStaleRemoteJobs`) is out of scope for this change and deferred to `stale-job-reclaim-telemetry`.
 
 ## 2. Verification
 
