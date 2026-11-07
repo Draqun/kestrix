@@ -88,9 +88,9 @@ func TestPG_completeJob_FinishesTheRun(t *testing.T) {
 		t.Fatalf("ClaimNextJob = %+v, %v", job, err)
 	}
 
-	ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", nil, 0, true)
-	if err != nil || !ok {
-		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
+	ok, finished, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "build output", "", nil, 0, true)
+	if err != nil || !ok || !finished {
+		t.Fatalf("CompleteJob = (%v, %v, %v)", ok, finished, err)
 	}
 
 	run, err := pg.GetRun(runID)
@@ -123,7 +123,7 @@ func TestPG_CompleteJob_FencedCompletionIsUnchanged(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late output", "", nil, 0, finishRun)
+			ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "late output", "", nil, 0, finishRun)
 			if err != nil {
 				t.Fatalf("CompleteJob: %v", err)
 			}
@@ -256,12 +256,15 @@ func TestPG_ReclaimFailures_KeepTheRunRunningWhileASiblingIsInFlight(t *testing.
 	pg.ClaimNextJob(mustCreateRunner(t, pg, "r-reclaim-sibling"))
 
 	// maxReclaims 0 fails the stale job on the first sweep.
-	reclaimed, failed, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 0, "silent runner, giving up")
+	reclaimed, failed, finishedRunIDs, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 0, "silent runner, giving up")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reclaimed != 0 || failed != 1 {
 		t.Fatalf("reclaimed=%d failed=%d, want 0,1", reclaimed, failed)
+	}
+	if len(finishedRunIDs) != 0 {
+		t.Fatalf("finishedRunIDs = %v, want empty (deploy is still in flight)", finishedRunIDs)
 	}
 	after, err := pg.GetRemoteJob(jobID)
 	if err != nil || after == nil {
@@ -280,6 +283,57 @@ func TestPG_ReclaimFailures_KeepTheRunRunningWhileASiblingIsInFlight(t *testing.
 	}
 	if run.FinishedAt != nil {
 		t.Fatalf("run finished_at = %v, want nil", run.FinishedAt)
+	}
+}
+
+// Two stale jobs of the same run failing in the same sweep transitions the run
+// to terminal once and returns the run ID deduplicated in finishedRunIDs.
+func TestPG_ReclaimFailures_TwoStaleJobsSameRun_DeduplicatesFinishedRunIDs(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-two-stale", "")
+	runID := mustRunWithResults(t, pg, "proj-two-stale",
+		domain.TaskResult{Name: "task1", Status: "pending"},
+		domain.TaskResult{Name: "task2", Status: "pending"},
+	)
+	job1 := mustCreateRemoteJob(t, pg, runID, "task1")
+	job2 := mustCreateRemoteJob(t, pg, runID, "task2")
+
+	runner1 := mustCreateRunner(t, pg, "runner-stale-dedup-1")
+	runner2 := mustCreateRunner(t, pg, "runner-stale-dedup-2")
+	pg.ClaimNextJob(runner1)
+	pg.ClaimNextJob(runner2)
+
+	// maxReclaims 0 fails both stale jobs on the first sweep.
+	reclaimed, failed, finishedRunIDs, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 0, "runner went silent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed != 0 || failed != 2 {
+		t.Fatalf("reclaimed=%d failed=%d, want 0, 2", reclaimed, failed)
+	}
+	if len(finishedRunIDs) != 1 || finishedRunIDs[0] != runID {
+		t.Fatalf("finishedRunIDs = %v, want exactly [%d]", finishedRunIDs, runID)
+	}
+
+	for _, jID := range []int{job1, job2} {
+		after, err := pg.GetRemoteJob(jID)
+		if err != nil || after == nil {
+			t.Fatalf("GetRemoteJob(%d): %+v, %v", jID, after, err)
+		}
+		if after.Status != domain.RemoteJobStatusFailed {
+			t.Fatalf("job %d status = %q, want failed", jID, after.Status)
+		}
+	}
+
+	run, err := pg.GetRun(runID)
+	if err != nil || run == nil {
+		t.Fatalf("GetRun = %+v, %v", run, err)
+	}
+	if run.Status != domain.RunStatusFailed {
+		t.Fatalf("run status = %q, want failed", run.Status)
+	}
+	if run.FinishedAt == nil {
+		t.Fatal("expected finished_at to be set on run")
 	}
 }
 

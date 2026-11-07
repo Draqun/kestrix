@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kestrix/internal/domain"
+	"kestrix/internal/metrics"
 	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
@@ -176,5 +178,110 @@ func TestPG_RemoteRunStart_NonExistentWorkDirFailsRun(t *testing.T) {
 	}
 	if job != nil {
 		t.Fatalf("expected no job, got %+v", job)
+	}
+}
+
+func TestPG_ReclaimStaleRemoteJobs_TelemetryAndEvents(t *testing.T) {
+	pg := testPG(t)
+	proj := &model.Project{
+		Name:  "reclaim-telemetry-proj",
+		Repos: []domain.Repo{{Name: "app"}},
+		Tasks: []model.Task{
+			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo ok"}},
+		},
+	}
+	mustUpsert(t, pg, proj.Name, "")
+
+	svc := service.NewRunService(pg, nil, nil)
+	svc.SetRemoteJobStore(pg)
+	reg := metrics.NewRegistry()
+	svc.Metrics = reg
+	hub := service.NewRunEventHub()
+	svc.SetEventHub(hub)
+
+	runID, err := svc.Start(context.Background(), proj.Name, proj, []string{"app"}, domain.RunnerOptions{
+		Mode: "remote", WorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ch := hub.Subscribe(runID)
+	defer hub.Unsubscribe(runID, ch)
+
+	runnerID := mustCreateRunner(t, pg, "runner-stale-tel")
+	job, err := pg.ClaimNextJob(runnerID)
+	if err != nil || job == nil {
+		t.Fatalf("ClaimNextJob: %+v, %v", job, err)
+	}
+
+	// 1. Silent runner recovery returns to pending when reclaim_count < maxReclaims
+	reclaimed, failed, err := svc.ReclaimStaleRemoteJobs(-time.Hour, 2, "runner went silent")
+	if err != nil || reclaimed != 1 || failed != 0 {
+		t.Fatalf("first reclaim: reclaimed=%d, failed=%d, err=%v, want 1, 0, nil", reclaimed, failed, err)
+	}
+
+	snap := reg.Snapshot(0, 0, 0, "")
+	if count := snap.RunTotal["failed"][proj.Name]; count != 0 {
+		t.Fatalf("expected 0 failed runs in telemetry while in flight, got %d", count)
+	}
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no EventHub events while in flight, got %+v", ev)
+	default:
+	}
+
+	// Claim again
+	job2, err := pg.ClaimNextJob(mustCreateRunner(t, pg, "runner-stale-tel-2"))
+	if err != nil || job2 == nil {
+		t.Fatalf("ClaimNextJob 2: %+v, %v", job2, err)
+	}
+
+	// 2. Silent runner recovery reaches maxReclaims -> fails job, ends run in PG, records telemetry and broadcasts events
+	reclaimed, failed, err = svc.ReclaimStaleRemoteJobs(-time.Hour, 1, "runner went silent")
+	if err != nil || reclaimed != 0 || failed != 1 {
+		t.Fatalf("second reclaim: reclaimed=%d, failed=%d, err=%v, want 0, 1, nil", reclaimed, failed, err)
+	}
+
+	// Run in PG is failed
+	run, err := pg.GetRun(runID)
+	if err != nil || run == nil {
+		t.Fatalf("GetRun: %+v, %v", run, err)
+	}
+	if run.Status != domain.RunStatusFailed {
+		t.Fatalf("run status in PG = %q, want failed", run.Status)
+	}
+	if run.FinishedAt == nil {
+		t.Fatal("expected finished_at to be set on run")
+	}
+
+	// Telemetry metrics recorded
+	snap = reg.Snapshot(0, 0, 0, "")
+	if count := snap.RunTotal["failed"][proj.Name]; count != 1 {
+		t.Fatalf("expected 1 failed run in telemetry, got %d", count)
+	}
+	if snap.DurationCountInf != 1 {
+		t.Fatalf("expected duration count 1 in telemetry, got %d", snap.DurationCountInf)
+	}
+
+	// EventHub broadcasted status and complete events
+	receivedStatus, receivedComplete := false, false
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == service.EventTypeStatus {
+				if payload, ok := ev.Data.(service.StatusPayload); ok && payload.RunID == runID && payload.Status == domain.RunStatusFailed {
+					receivedStatus = true
+				}
+			} else if ev.Type == service.EventTypeComplete {
+				if payload, ok := ev.Data.(service.CompletePayload); ok && payload.RunID == runID && payload.Status == domain.RunStatusFailed {
+					receivedComplete = true
+				}
+			}
+		default:
+		}
+	}
+	if !receivedStatus || !receivedComplete {
+		t.Fatalf("expected status and complete events on EventHub, got status=%v, complete=%v", receivedStatus, receivedComplete)
 	}
 }

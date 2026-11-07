@@ -486,7 +486,8 @@ func boundAppend(currentLen int, truncated bool, chunk string, maxOutputBytes in
 func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int) (bool, error) {
 	output = storable(output)
 	taskError = storable(taskError)
-	return s.completeJob(jobID, epoch, status, output, taskError, callerRunnerID, maxOutputBytes, false)
+	ok, _, err := s.completeJob(jobID, epoch, status, output, taskError, callerRunnerID, maxOutputBytes, false)
+	return ok, err
 }
 
 // completeJob is CompleteJob's body. The epoch check, the job's own
@@ -509,12 +510,18 @@ func (s *PGStore) CompleteJob(jobID, epoch int, status, output, taskError string
 // - the remote-run-waits-for-dependents proposal's non-goals). With it off -
 // every port-driven completion - the completion leaves the run's status alone
 // and the service finishes the run itself.
-func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int, finishRun bool) (bool, error) {
+//
+// completed is true when the job was successfully transitioned to a terminal status;
+// false if the job was not found, the epoch mismatched, the job was already terminal,
+// or callerRunnerID did not own the claim.
+// runFinished is true only when finishRun was true and this call moved the owning run
+// to a terminal status.
+func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string, callerRunnerID *int, maxOutputBytes int, finishRun bool) (completed, runFinished bool, err error) {
 	output = storable(output)
 	taskError = storable(taskError)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("begin complete job: %w", err)
+		return false, false, fmt.Errorf("begin complete job: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -525,19 +532,19 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 	err = tx.QueryRow(`SELECT run_id, task_name, claim_epoch, status, runner_id, output FROM remote_jobs WHERE id = $1 FOR UPDATE`, jobID).
 		Scan(&runID, &taskName, &claimEpoch, &jobStatus, &runnerID, &jobOutput)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("select job for completion: %w", err)
+		return false, false, fmt.Errorf("select job for completion: %w", err)
 	}
 	if epoch != claimEpoch || isTerminalJobStatus(jobStatus) || !callerOwnsJob(callerRunnerID, runnerID) {
-		return false, nil
+		return false, false, nil
 	}
 
 	var runStatus, runOutput, taskResultsJSON string
 	if err := tx.QueryRow(`SELECT status, output, task_results FROM runs WHERE id = $1 FOR UPDATE`, runID).
 		Scan(&runStatus, &runOutput, &taskResultsJSON); err != nil {
-		return false, fmt.Errorf("select run for completion: %w", err)
+		return false, false, fmt.Errorf("select run for completion: %w", err)
 	}
 
 	if domain.IsTerminalRunStatus(runStatus) {
@@ -550,14 +557,14 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 		// trace: the run's output already has it), and still append its
 		// trailing output for visibility, but touch nothing else.
 		if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
-			return false, fmt.Errorf("finalize fenced job: %w", err)
+			return false, false, fmt.Errorf("finalize fenced job: %w", err)
 		}
 		if toAppend := boundAppendChunk(runOutput, output, maxOutputBytes); toAppend != "" {
 			if _, err := tx.Exec(`UPDATE runs SET output = output || $1 WHERE id = $2`, toAppend, runID); err != nil {
-				return false, fmt.Errorf("append output for fenced job: %w", err)
+				return false, false, fmt.Errorf("append output for fenced job: %w", err)
 			}
 		}
-		return false, tx.Commit()
+		return false, false, tx.Commit()
 	}
 
 	var results []TaskResult
@@ -580,7 +587,7 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 			`UPDATE runs SET task_results = $1, output = $2 WHERE id = $3`,
 			string(resultsJSON), out, runID,
 		); err != nil {
-			return false, fmt.Errorf("record job completion: %w", err)
+			return false, false, fmt.Errorf("record job completion: %w", err)
 		}
 	} else {
 		newStatus, errMsg := computeRunStatus(results)
@@ -591,11 +598,12 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 				`UPDATE runs SET status = $1, task_results = $2, output = $3, error = $4, finished_at = now() WHERE id = $5`,
 				newStatus, string(resultsJSON), out, errMsg, runID,
 			); err != nil {
-				return false, fmt.Errorf("finish run from job completion: %w", err)
+				return false, false, fmt.Errorf("finish run from job completion: %w", err)
 			}
 			if err := s.pruneRuns(tx); err != nil {
-				return false, err
+				return false, false, err
 			}
+			runFinished = true
 		} else {
 			// A sibling task is still in flight, so the run keeps the status
 			// it has: the same rule FinishRunIfDone follows, so the two
@@ -604,7 +612,7 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 				`UPDATE runs SET task_results = $1, output = $2 WHERE id = $3`,
 				string(resultsJSON), out, runID,
 			); err != nil {
-				return false, fmt.Errorf("update run from job completion: %w", err)
+				return false, false, fmt.Errorf("update run from job completion: %w", err)
 			}
 		}
 	}
@@ -612,13 +620,13 @@ func (s *PGStore) completeJob(jobID, epoch int, status, output, taskError string
 	// The job-row copy of the output has done its job once the task result
 	// carries it (remote-run-ux design.md D1), so a finished job keeps none.
 	if _, err := tx.Exec(`UPDATE remote_jobs SET status = $1, output = '', updated_at = now() WHERE id = $2`, status, jobID); err != nil {
-		return false, fmt.Errorf("finalize completed job: %w", err)
+		return false, false, fmt.Errorf("finalize completed job: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit complete job: %w", err)
+		return false, false, fmt.Errorf("commit complete job: %w", err)
 	}
-	return true, nil
+	return true, runFinished, nil
 }
 
 // PendingOrClaimedJobIDsForRun returns the IDs of runID's non-terminal jobs.
@@ -672,7 +680,11 @@ func (s *PGStore) CancelJobsForRun(runID int) error {
 // per-job action is itself race-safe (CompleteJob's epoch fencing, or an
 // epoch-guarded optimistic UPDATE), so a job a runner claims or completes
 // concurrently is simply not counted here rather than double-processed.
-func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, error) {
+//
+// Returns reclaimed (count returned to pending), finalizedFailed (count failed),
+// and finishedRunIDs (deduplicated IDs of runs that were transitioned to a
+// terminal status during this sweep when failing stale jobs left no active tasks).
+func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, []int, error) {
 	rows, err := s.db.Query(
 		`SELECT rj.id, rj.run_id, rj.task_name, rj.status, rj.claim_epoch, rj.reclaim_count, r.status
 		 FROM remote_jobs rj JOIN runs r ON r.id = rj.run_id
@@ -680,7 +692,7 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 		olderThan, domain.RemoteJobStatusClaimed, domain.RemoteJobStatusRunning, domain.RemoteJobStatusPending,
 	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("select stale jobs: %w", err)
+		return 0, 0, nil, fmt.Errorf("select stale jobs: %w", err)
 	}
 	type staleJob struct {
 		id, runID                int
@@ -693,16 +705,20 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 		var j staleJob
 		if err := rows.Scan(&j.id, &j.runID, &j.taskName, &j.status, &j.claimEpoch, &j.reclaimCount, &j.runStatus); err != nil {
 			rows.Close()
-			return 0, 0, fmt.Errorf("scan stale job: %w", err)
+			return 0, 0, nil, fmt.Errorf("scan stale job: %w", err)
 		}
 		stale = append(stale, j)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	rows.Close()
 
 	reclaimed, failed := 0, 0
+	var finishedRunIDs []int
+	// finishedRunSet guarantees finishedRunIDs contains no duplicates if
+	// multiple stale jobs of the same run are processed in this sweep.
+	finishedRunSet := make(map[int]bool)
 	for _, j := range stale {
 		if domain.IsTerminalRunStatus(j.runStatus) || j.reclaimCount >= maxReclaims {
 			// reason is a short, fixed system string, never runner-controlled
@@ -710,8 +726,13 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 			// A stale job ends the pipeline's useful work, so its completion
 			// finishes the run itself - when nothing is left in flight -
 			// remote-run-waits-for-dependents design.md D1.
-			if _, err := s.completeJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, reason, nil, 0, true); err != nil {
-				return reclaimed, failed, fmt.Errorf("fail stale job %d: %w", j.id, err)
+			_, runFinished, err := s.completeJob(j.id, j.claimEpoch, domain.RemoteJobStatusFailed, reason, reason, nil, 0, true)
+			if err != nil {
+				return reclaimed, failed, finishedRunIDs, fmt.Errorf("fail stale job %d: %w", j.id, err)
+			}
+			if runFinished && !finishedRunSet[j.runID] {
+				finishedRunSet[j.runID] = true
+				finishedRunIDs = append(finishedRunIDs, j.runID)
 			}
 			// CompleteJob finalizes the job row to "failed" whenever the
 			// epoch still matched, whether or not its run was also touched
@@ -734,7 +755,7 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 			domain.RemoteJobStatusPending, epochBump, j.id, j.claimEpoch, j.status,
 		)
 		if err != nil {
-			return reclaimed, failed, fmt.Errorf("reclaim stale job %d: %w", j.id, err)
+			return reclaimed, failed, finishedRunIDs, fmt.Errorf("reclaim stale job %d: %w", j.id, err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			continue
@@ -744,12 +765,12 @@ func (s *PGStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason 
 			// Undo the claim's "running" (design.md D5) so the task reads
 			// pending again while it waits for another runner.
 			if err := s.AppendTaskResult(j.runID, TaskResult{Name: j.taskName, Status: "pending"}); err != nil {
-				return reclaimed, failed, fmt.Errorf("record reclaimed task pending: %w", err)
+				return reclaimed, failed, finishedRunIDs, fmt.Errorf("record reclaimed task pending: %w", err)
 			}
 		}
 	}
 
-	return reclaimed, failed, nil
+	return reclaimed, failed, finishedRunIDs, nil
 }
 
 // OutstandingJobRunIDsForProject returns the distinct IDs of projectName's

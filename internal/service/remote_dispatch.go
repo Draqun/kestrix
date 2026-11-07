@@ -699,14 +699,31 @@ func (s *RunService) recordDispatchFailure(runID int, taskName string, cause err
 // (tasks.md 4.1/4.2): it returns to "pending" every "claimed"/"running" job
 // last updated more than timeout ago, or fails it after maxReclaims
 // attempts, naming reason - see domain.RemoteJobStore.ReclaimStaleJobs for
-// the terminal-run exclusion and epoch-fencing this builds on. A no-op
-// (0, 0, nil) when no remoteJobStore is configured, so a caller can invoke
-// this unconditionally at startup without checking first.
+// the terminal-run exclusion and epoch-fencing this builds on.
+//
+// For every run transitioned to a terminal status as a result of the reclaim,
+// it finalizes the run: acquires the run lock, records Prometheus completion
+// metrics (run total and duration), and broadcasts status and completion
+// events via EventHub.
+//
+// Concurrency limitation: the store commits the run status to terminal
+// before the run lock is acquired here. The per-run lock serializes the
+// post-commit finalization (telemetry and EventHub broadcast), not the
+// database status transition itself.
+//
+// A no-op (0, 0, nil) when no remoteJobStore is configured, so a caller can
+// invoke this unconditionally at startup without checking first.
 func (s *RunService) ReclaimStaleRemoteJobs(timeout time.Duration, maxReclaims int, reason string) (int, int, error) {
 	if s.remoteJobStore == nil {
 		return 0, 0, nil
 	}
-	return s.remoteJobStore.ReclaimStaleJobs(time.Now().Add(-timeout), maxReclaims, reason)
+	reclaimed, failed, finishedRunIDs, err := s.remoteJobStore.ReclaimStaleJobs(time.Now().Add(-timeout), maxReclaims, reason)
+	for _, runID := range finishedRunIDs {
+		unlock := s.runLocks.lock(runID)
+		s.finalizeRemoteRun(runID)
+		unlock()
+	}
+	return reclaimed, failed, err
 }
 
 // DeleteTerminalRemoteSecrets deletes the encrypted values of finished

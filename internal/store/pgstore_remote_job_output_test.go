@@ -141,7 +141,7 @@ func TestPG_CompleteJob_TaskOutput(t *testing.T) {
 				offset += len(chunk)
 			}
 
-			if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, tc.bound, true); err != nil || !ok {
+			if ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, tc.bound, true); err != nil || !ok {
 				t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 			}
 			if got := latestTaskOutput(t, pg, runID, "build"); got != tc.want {
@@ -162,7 +162,7 @@ func TestPG_CompleteJob_AggregateOutputUnchangedByTaskOutput(t *testing.T) {
 	if _, _, err := pg.AppendJobTrace(jobID, job.ClaimEpoch, 0, "abc", 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "def", "", nil, 0, true); err != nil || !ok {
+	if ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "def", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
 	run, err := pg.GetRun(runID)
@@ -190,7 +190,7 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 		t.Fatalf("first claim AppendJobTrace = (%v, %v)", ok, err)
 	}
 	// The first runner goes silent: silent-runner recovery returns the job to pending.
-	if reclaimed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
+	if reclaimed, _, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
 		t.Fatalf("ReclaimStaleJobs reclaimed %d, err %v; want 1", reclaimed, err)
 	}
 
@@ -204,7 +204,7 @@ func TestPG_ReclaimedJob_NewClaimTracesFromItsOwnStart(t *testing.T) {
 			t.Fatalf("second claim AppendJobTrace(offset %d) = (%v, %v)", c.offset, ok, err)
 		}
 	}
-	if ok, err := pg.completeJob(jobID, claim2.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", &second, 0, true); err != nil || !ok {
+	if ok, _, err := pg.completeJob(jobID, claim2.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", &second, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 	}
 	if got := latestTaskOutput(t, pg, runID, "build"); got != "second claim" {
@@ -250,7 +250,7 @@ func TestPG_CompleteJob_ClearsTheJobsOutput(t *testing.T) {
 				}
 			}
 
-			ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true)
+			ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "", "", nil, 0, true)
 			if err != nil || ok == tc.runIsOver {
 				t.Fatalf("CompleteJob = (%v, %v), want ok=%v", ok, err, !tc.runIsOver)
 			}
@@ -315,7 +315,7 @@ func TestPG_MultiByteOutputAtTheBound(t *testing.T) {
 					t.Fatalf("remote_jobs.output = %q, want %q", got, want)
 				}
 			}
-			if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, bound, true); err != nil || !ok {
+			if ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, tc.remainder, "", nil, bound, true); err != nil || !ok {
 				t.Fatalf("CompleteJob = (%v, %v)", ok, err)
 			}
 			if got := latestTaskOutput(t, pg, runID, "build"); got != want {
@@ -404,7 +404,7 @@ func TestPG_CancelJobsForRun_ClearsTheOutputOfAReclaimedJob(t *testing.T) {
 	if _, ok, err := pg.AppendJobTrace(jobID, claim.ClaimEpoch, 0, "partial output", 0, &runner); err != nil || !ok {
 		t.Fatalf("AppendJobTrace = (%v, %v)", ok, err)
 	}
-	if reclaimed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
+	if reclaimed, _, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil || reclaimed != 1 {
 		t.Fatalf("ReclaimStaleJobs reclaimed %d, err %v; want 1", reclaimed, err)
 	}
 
