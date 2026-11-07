@@ -45,7 +45,7 @@ func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, r
 	defer f.mu.Unlock()
 	id := f.nextID
 	f.nextID++
-	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, RerunTask: rerunTask, PipelineDef: snap, Status: "running", StartedBy: startedBy, Sources: initialSources}
+	f.runs[id] = &domain.Run{ID: id, ProjectName: projectName, Changed: changed, RerunTask: rerunTask, PipelineDef: snap, Status: "running", StartedBy: startedBy, Sources: initialSources, StartedAt: time.Now()}
 	return id, nil
 }
 
@@ -120,6 +120,24 @@ func (f *fakeStatefulRunStore) FinishRun(id int, status, output, errMsg string, 
 	}
 	f.mu.Unlock()
 	return f.MockRunStore.FinishRun(id, status, output, errMsg, trs)
+}
+
+func (f *fakeStatefulRunStore) CancelRun(id int, canceledBy string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.MockRunStore.CancelRunErr != nil {
+		return false, f.MockRunStore.CancelRunErr
+	}
+	r, ok := f.runs[id]
+	if !ok {
+		return false, nil
+	}
+	if domain.IsTerminalRunStatus(r.Status) {
+		return false, nil
+	}
+	r.Status = domain.RunStatusCanceled
+	r.CanceledBy = canceledBy
+	return true, nil
 }
 
 // FinishRunIfDone mirrors PGStore's: the run takes the status its results

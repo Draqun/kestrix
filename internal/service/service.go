@@ -711,6 +711,9 @@ func (s *RunService) recordRunFinished(status, project string, startedAt time.Ti
 	if s.Metrics == nil {
 		return
 	}
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
 	s.Metrics.RunFinished(status, project, time.Since(startedAt))
 }
 
