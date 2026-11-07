@@ -131,6 +131,35 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		}
 	})
 
+	t.Run("initial dispatch failure getrun error skips finalize metric", func(t *testing.T) {
+		baseStore := newFakeStatefulRunStore()
+		getRunErrStore := &getRunErrorStore{fakeStatefulRunStore: baseStore, errOnGetRun: errors.New("db error")}
+		remoteJobs := &mocks.MockRemoteJobStore{
+			CreateRemoteJobErr: errors.New("dispatch rejected"),
+		}
+		svc := NewRunService(getRunErrStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: baseStore}
+		svc.SetRemoteJobStore(fakeJobs)
+		recorder := &fakeRecorder{}
+		svc.Metrics = recorder
+
+		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
+		}}
+
+		_, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
+			Mode: "remote", WorkDir: t.TempDir(),
+		})
+		if err == nil {
+			t.Fatal("expected dispatch error")
+		}
+
+		runs := recorder.snapshot()
+		if len(runs) != 0 {
+			t.Fatalf("expected 0 recorded runs when GetRun fails, got %d", len(runs))
+		}
+	})
+
 	t.Run("no triggered nodes records passed metric", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{}
@@ -445,4 +474,16 @@ func TestRemoteRunTelemetry_Interleaving_DispatchFailureAndJobCompletion(t *test
 	if runs[0].status != "failed" || runs[0].project != "proj" {
 		t.Fatalf("unexpected recorded run: %+v", runs[0])
 	}
+}
+
+type getRunErrorStore struct {
+	*fakeStatefulRunStore
+	errOnGetRun error
+}
+
+func (s *getRunErrorStore) GetRun(id int) (*domain.Run, error) {
+	if s.errOnGetRun != nil {
+		return nil, s.errOnGetRun
+	}
+	return s.fakeStatefulRunStore.GetRun(id)
 }

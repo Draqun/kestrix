@@ -385,8 +385,11 @@ func (s *RunService) startRemote(projectName string, proj *model.Project, change
 	if len(dispatchErrs) > 0 {
 		unlock := s.runLocks.lock(runID)
 		defer unlock()
-		runBefore, _ := s.runStore.GetRun(runID)
-		isAlreadyTerminal := runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status)
+		runBefore, err := s.runStore.GetRun(runID)
+		if err != nil {
+			slog.Warn("cannot inspect run terminal status during dispatch abort", "run_id", runID, "error", err)
+		}
+		isAlreadyTerminal := err != nil || (runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status))
 
 		_, newlySkipped, _ := eligibleForDispatch(nodes, latest, opts.IncludeManual)
 		for _, skip := range newlySkipped {
@@ -480,18 +483,13 @@ func (s *RunService) CompleteRemoteJob(jobID, epoch int, status, output, taskErr
 	// failure - so the run takes the status its results imply, and a
 	// dispatch failure travels on top of it -
 	// remote-run-waits-for-dependents design.md D5.
-	runBefore, _ := s.runStore.GetRun(job.RunID)
-	isAlreadyTerminal := runBefore != nil && domain.IsTerminalRunStatus(runBefore.Status)
-
 	if err := s.finishRunWithRetry(job.RunID); err != nil {
 		if resumeErr != nil {
 			return true, errors.Join(fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err), resumeErr)
 		}
 		return true, fmt.Errorf("finish run %d after job %d: %w", job.RunID, jobID, err)
 	}
-	if !isAlreadyTerminal {
-		s.finalizeRemoteRun(job.RunID)
-	}
+	s.finalizeRemoteRun(job.RunID)
 	if resumeErr != nil {
 		return true, fmt.Errorf("resume run %d after job %d: %w", job.RunID, jobID, resumeErr)
 	}
