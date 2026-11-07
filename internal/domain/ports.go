@@ -418,9 +418,11 @@ type RemoteJobStore interface {
 	// claim_epoch, which also moves on every claim) already reached
 	// maxReclaims is finalized "failed" with reason instead of being
 	// returned to "pending" again; a never-claimed job is never touched -
-	// remote-runner-fixes design.md D3. Returns the counts reclaimed and
-	// finalized-failed.
-	ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (reclaimed, finalizedFailed int, err error)
+	// remote-runner-fixes design.md D3. Returns reclaimed (count returned to
+	// "pending"), finalizedFailed (count failed due to exceeding maxReclaims or
+	// terminal run), and finishedRunIDs (unique IDs of runs transitioned to a
+	// terminal status during this sweep).
+	ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (reclaimed, finalizedFailed int, finishedRunIDs []int, err error)
 	// DeleteTerminalRemoteSecrets deletes the encrypted variables and secret
 	// values of every terminal job and run (remote-runner-fixes design.md
 	// D2). One sweep covers every way a job or run can end.

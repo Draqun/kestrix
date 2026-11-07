@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -486,4 +487,276 @@ func (s *getRunErrorStore) GetRun(id int) (*domain.Run, error) {
 		return nil, s.errOnGetRun
 	}
 	return s.fakeStatefulRunStore.GetRun(id)
+}
+
+func assertBothEvents(t *testing.T, ch <-chan RunEvent, wantRunID int, wantStatus string) {
+	t.Helper()
+	receivedStatus, receivedComplete := false, false
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == EventTypeStatus {
+				if payload, ok := ev.Data.(StatusPayload); ok && payload.RunID == wantRunID && payload.Status == wantStatus {
+					receivedStatus = true
+				}
+			} else if ev.Type == EventTypeComplete {
+				if payload, ok := ev.Data.(CompletePayload); ok && payload.RunID == wantRunID && payload.Status == wantStatus {
+					receivedComplete = true
+				}
+			}
+		default:
+		}
+	}
+	if !receivedStatus || !receivedComplete {
+		t.Fatalf("run %d: expected both status and complete events on EventHub, got status=%v complete=%v", wantRunID, receivedStatus, receivedComplete)
+	}
+}
+
+func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
+	t.Run("stale job reclaim finishing run records metric and broadcasts event", func(t *testing.T) {
+		runStore := newFakeStatefulRunStore()
+		runID, err := runStore.CreateRun("proj", nil, "", false, nil, "", nil)
+		if err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		_ = runStore.AppendTaskResult(runID, domain.TaskResult{Name: "task1", Status: "failed", Error: "runner went silent"})
+		_ = runStore.FinishRun(runID, domain.RunStatusFailed, "", "runner went silent", nil)
+
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedCount:  0,
+			ReclaimedFailed: 1,
+			ReclaimedRunIDs: []int{runID},
+		}
+
+		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		hub := NewRunEventHub()
+		ch := hub.Subscribe(runID)
+		defer hub.Unsubscribe(runID, ch)
+		svc.SetEventHub(hub)
+
+		reclaimed, failed, err := svc.ReclaimStaleRemoteJobs(time.Minute, 1, "runner went silent")
+		if err != nil {
+			t.Fatalf("ReclaimStaleRemoteJobs: %v", err)
+		}
+		if reclaimed != 0 || failed != 1 {
+			t.Fatalf("reclaimed=%d failed=%d, want 0, 1", reclaimed, failed)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if count := snap.RunTotal["failed"]["proj"]; count != 1 {
+			t.Fatalf("expected 1 failed run metric recorded, got %d", count)
+		}
+		if snap.DurationCountInf != 1 {
+			t.Fatalf("expected 1 duration recorded, got %d", snap.DurationCountInf)
+		}
+
+		assertBothEvents(t, ch, runID, domain.RunStatusFailed)
+	})
+
+	t.Run("stale job reclaim returning to pending does not record telemetry", func(t *testing.T) {
+		runStore := newFakeStatefulRunStore()
+		runID, err := runStore.CreateRun("proj", nil, "", false, nil, "", nil)
+		if err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		run, _ := runStore.GetRun(runID)
+		run.Status = domain.RunStatusRunning
+
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedCount:  1,
+			ReclaimedFailed: 0,
+			ReclaimedRunIDs: nil,
+		}
+
+		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		hub := NewRunEventHub()
+		ch := hub.Subscribe(runID)
+		defer hub.Unsubscribe(runID, ch)
+		svc.SetEventHub(hub)
+
+		reclaimed, failed, err := svc.ReclaimStaleRemoteJobs(time.Minute, 2, "runner went silent")
+		if err != nil {
+			t.Fatalf("ReclaimStaleRemoteJobs: %v", err)
+		}
+		if reclaimed != 1 || failed != 0 {
+			t.Fatalf("reclaimed=%d failed=%d, want 1, 0", reclaimed, failed)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if count := snap.RunTotal["failed"]["proj"]; count != 0 {
+			t.Fatalf("expected 0 failed run metric recorded, got %d", count)
+		}
+		if snap.DurationCountInf != 0 {
+			t.Fatalf("expected 0 duration recorded, got %d", snap.DurationCountInf)
+		}
+
+		select {
+		case ev := <-ch:
+			t.Fatalf("unexpected event received: %+v", ev)
+		default:
+		}
+	})
+
+	t.Run("multiple finished runs each finalize telemetry and broadcast events", func(t *testing.T) {
+		runStore := newFakeStatefulRunStore()
+		runID1, _ := runStore.CreateRun("proj1", nil, "", false, nil, "", nil)
+		_ = runStore.FinishRun(runID1, domain.RunStatusFailed, "", "", nil)
+
+		runID2, _ := runStore.CreateRun("proj2", nil, "", false, nil, "", nil)
+		_ = runStore.FinishRun(runID2, domain.RunStatusFailed, "", "", nil)
+
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedCount:  0,
+			ReclaimedFailed: 2,
+			ReclaimedRunIDs: []int{runID1, runID2},
+		}
+
+		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		hub := NewRunEventHub()
+		ch1 := hub.Subscribe(runID1)
+		defer hub.Unsubscribe(runID1, ch1)
+		ch2 := hub.Subscribe(runID2)
+		defer hub.Unsubscribe(runID2, ch2)
+		svc.SetEventHub(hub)
+
+		_, _, err := svc.ReclaimStaleRemoteJobs(time.Minute, 1, "runner went silent")
+		if err != nil {
+			t.Fatalf("ReclaimStaleRemoteJobs: %v", err)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if count := snap.RunTotal["failed"]["proj1"]; count != 1 {
+			t.Fatalf("expected 1 failed run for proj1, got %d", count)
+		}
+		if count := snap.RunTotal["failed"]["proj2"]; count != 1 {
+			t.Fatalf("expected 1 failed run for proj2, got %d", count)
+		}
+		if snap.DurationCountInf != 2 {
+			t.Fatalf("expected 2 duration observations, got %d", snap.DurationCountInf)
+		}
+
+		assertBothEvents(t, ch1, runID1, domain.RunStatusFailed)
+		assertBothEvents(t, ch2, runID2, domain.RunStatusFailed)
+	})
+
+	t.Run("partial store error still finalizes completed runs", func(t *testing.T) {
+		runStore := newFakeStatefulRunStore()
+		runID, err := runStore.CreateRun("proj", nil, "", false, nil, "", nil)
+		if err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		_ = runStore.FinishRun(runID, domain.RunStatusFailed, "", "silent", nil)
+
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedCount:  1,
+			ReclaimedFailed: 1,
+			ReclaimedRunIDs: []int{runID},
+			ReclaimErr:      errors.New("store connection lost mid-sweep"),
+		}
+
+		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		hub := NewRunEventHub()
+		ch := hub.Subscribe(runID)
+		defer hub.Unsubscribe(runID, ch)
+		svc.SetEventHub(hub)
+
+		reclaimed, failed, err := svc.ReclaimStaleRemoteJobs(time.Minute, 1, "runner went silent")
+		if err == nil || !strings.Contains(err.Error(), "store connection lost mid-sweep") {
+			t.Fatalf("expected store error, got %v", err)
+		}
+		if reclaimed != 1 || failed != 1 {
+			t.Fatalf("reclaimed=%d failed=%d, want 1, 1", reclaimed, failed)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if count := snap.RunTotal["failed"]["proj"]; count != 1 {
+			t.Fatalf("expected 1 failed run metric recorded, got %d", count)
+		}
+
+		assertBothEvents(t, ch, runID, domain.RunStatusFailed)
+	})
+
+	t.Run("missing run during reclaim finalization is handled safely", func(t *testing.T) {
+		baseStore := newFakeStatefulRunStore()
+		errStore := &getRunErrorStore{
+			fakeStatefulRunStore: baseStore,
+			errOnGetRun:          errors.New("run not found"),
+		}
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedRunIDs: []int{404, 500},
+		}
+
+		svc := NewRunService(errStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		_, _, err := svc.ReclaimStaleRemoteJobs(time.Minute, 1, "runner went silent")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if len(snap.RunTotal) != 0 || snap.DurationCountInf != 0 {
+			t.Fatalf("expected 0 metrics for missing runs, got %+v", snap)
+		}
+	})
+
+	t.Run("run already terminal and canceled skips duplicate metrics and broadcasts", func(t *testing.T) {
+		runStore := newFakeStatefulRunStore()
+		runID, err := runStore.CreateRun("proj", nil, "", false, nil, "", nil)
+		if err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		_ = runStore.FinishRun(runID, domain.RunStatusCanceled, "", "canceled by operator", nil)
+
+		remoteJobs := &mocks.MockRemoteJobStore{
+			ReclaimedRunIDs: []int{runID},
+		}
+
+		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc.SetRemoteJobStore(remoteJobs)
+		reg := metrics.NewRegistry()
+		svc.Metrics = reg
+
+		hub := NewRunEventHub()
+		ch := hub.Subscribe(runID)
+		defer hub.Unsubscribe(runID, ch)
+		svc.SetEventHub(hub)
+
+		_, _, err = svc.ReclaimStaleRemoteJobs(time.Minute, 1, "runner went silent")
+		if err != nil {
+			t.Fatalf("ReclaimStaleRemoteJobs: %v", err)
+		}
+
+		snap := reg.Snapshot(0, 0, 0, "")
+		if count := snap.RunTotal["canceled"]["proj"]; count != 0 {
+			t.Fatalf("expected 0 canceled run metric recorded, got %d", count)
+		}
+		if snap.DurationCountInf != 0 {
+			t.Fatalf("expected 0 duration recorded, got %d", snap.DurationCountInf)
+		}
+
+		select {
+		case ev := <-ch:
+			t.Fatalf("unexpected event for canceled run: %+v", ev)
+		default:
+		}
+	})
 }

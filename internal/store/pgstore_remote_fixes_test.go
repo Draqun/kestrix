@@ -82,7 +82,7 @@ func TestPG_RemoteSecrets_DeletedOnceTerminal(t *testing.T) {
 	}
 	jobID := mustCreateSecretJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-secrets-deleted"))
-	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "done", "", nil, 0, true); err != nil || !ok {
+	if ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusPassed, "done", "", nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = %v, %v", ok, err)
 	}
 	if err := pg.DeleteTerminalRemoteSecrets(); err != nil {
@@ -180,7 +180,7 @@ func TestPG_ReclaimStaleJobs_NoRunnerLeftFailsAtLimit(t *testing.T) {
 	cutoff := time.Now().Add(time.Hour)
 
 	for i, want := range []string{domain.RemoteJobStatusPending, domain.RemoteJobStatusPending, domain.RemoteJobStatusFailed} {
-		if _, _, err := pg.ReclaimStaleJobs(cutoff, 2, "abandoned by unresponsive runners"); err != nil {
+		if _, _, _, err := pg.ReclaimStaleJobs(cutoff, 2, "abandoned by unresponsive runners"); err != nil {
 			t.Fatal(err)
 		}
 		job, _ := pg.GetRemoteJob(jobID)
@@ -203,7 +203,7 @@ func TestPG_ReclaimStaleJobs_NeverClaimedPendingLeftAlone(t *testing.T) {
 	mustUpsert(t, pg, "proj-never-claimed", "")
 	runID := mustCreateRun(t, pg, "proj-never-claimed", nil)
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
-	reclaimed, failed, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 0, "silent")
+	reclaimed, failed, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 0, "silent")
 	if err != nil || reclaimed != 0 || failed != 0 {
 		t.Fatalf("reclaimed=%d failed=%d err=%v, want the never-claimed job untouched", reclaimed, failed, err)
 	}
@@ -226,7 +226,7 @@ func TestPG_ClaimNextJob_RecordsTaskRunning(t *testing.T) {
 	if got := latest(); got != "running" {
 		t.Fatalf("after claim: latest task status = %q, want running", got)
 	}
-	if _, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil {
+	if _, _, _, err := pg.ReclaimStaleJobs(time.Now().Add(time.Hour), 3, "silent"); err != nil {
 		t.Fatal(err)
 	}
 	if got := latest(); got != "pending" {
@@ -241,7 +241,7 @@ func TestPG_CompleteJob_StoresTaskError(t *testing.T) {
 	runID := mustCreateRun(t, pg, "proj-task-error", nil)
 	jobID := mustCreateRemoteJob(t, pg, runID, "build")
 	job, _ := pg.ClaimNextJob(mustCreateRunner(t, pg, "r-task-error"))
-	if ok, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "", `exec: "bash": executable file not found in $PATH`, nil, 0, true); err != nil || !ok {
+	if ok, _, err := pg.completeJob(jobID, job.ClaimEpoch, domain.RemoteJobStatusFailed, "", `exec: "bash": executable file not found in $PATH`, nil, 0, true); err != nil || !ok {
 		t.Fatalf("CompleteJob = %v, %v", ok, err)
 	}
 	run, _ := pg.GetRun(runID)

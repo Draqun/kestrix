@@ -631,6 +631,7 @@ type MockRemoteJobStore struct {
 	CancelJobsForRunCalls      []int
 	ReclaimedCount             int
 	ReclaimedFailed            int
+	ReclaimedRunIDs            []int
 	ReclaimErr                 error
 	reclaimCalls               int
 	OutstandingJobRunIDsResult []int
@@ -754,11 +755,11 @@ func (m *MockRemoteJobStore) CancelJobsForRun(runID int) error {
 	return m.CancelJobsForRunErr
 }
 
-func (m *MockRemoteJobStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, error) {
+func (m *MockRemoteJobStore) ReclaimStaleJobs(olderThan time.Time, maxReclaims int, reason string) (int, int, []int, error) {
 	m.mu.Lock()
 	m.reclaimCalls++
 	m.mu.Unlock()
-	return m.ReclaimedCount, m.ReclaimedFailed, m.ReclaimErr
+	return m.ReclaimedCount, m.ReclaimedFailed, m.ReclaimedRunIDs, m.ReclaimErr
 }
 
 func (m *MockRemoteJobStore) DeleteTerminalRemoteSecrets() error {
