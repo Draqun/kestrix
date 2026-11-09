@@ -7,7 +7,7 @@ In pipelines where a subset of tasks is triggered (e.g., path filtering, webhook
 ## What Changes
 
 - Modify `ApproveManualTask` to resolve dependencies against the latest successful task results across the project's historical runs when a dependency is absent from the current run record.
-- Update UI helper `isManualWaiting` in `DAGViewer.jsx` and `Pipelines.jsx` to recognize dependencies satisfied in parent/prior runs.
+- Update UI helper `isManualWaiting` in `ui/src/lib/status.js` (with tests in `status.test.js`) to be optimistic for absent dependencies while backend enforces historical resolution.
 - Reject approval only if an upstream dependency is known to have failed or is actively pending/running elsewhere.
 
 ## Capabilities
@@ -28,4 +28,4 @@ None.
 ## Impact
 
 - Modifies dependency evaluation in `internal/service/service.go` (`ApproveManualTask`).
-- Updates `ui/src/components/DAGViewer.jsx` and `Pipelines.jsx`.
+- Updates `ui/src/lib/status.js` (tests in `ui/src/lib/status.test.js`) and `Pipelines.jsx`.

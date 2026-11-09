@@ -234,6 +234,16 @@ type MockRunStore struct {
 	FindActiveCalls           []findActiveCall
 	FindActiveRunsByRefResult []int
 	FindActiveRunsByRefErr    error
+	FindLatestCalls           []findLatestCall
+	FindLatestResult          domain.TaskStatus
+	FindLatestSHA             string
+	FindLatestErr             error
+}
+
+type findLatestCall struct {
+	ProjectName string
+	Ref         string
+	TaskName    string
 }
 
 type findActiveCall struct {
@@ -450,6 +460,13 @@ func (m *MockRunStore) FindActiveRunsByRef(projectName, ref string) ([]int, erro
 	defer m.mu.Unlock()
 	m.FindActiveCalls = append(m.FindActiveCalls, findActiveCall{projectName, ref})
 	return m.FindActiveRunsByRefResult, m.FindActiveRunsByRefErr
+}
+
+func (m *MockRunStore) FindLatestTaskStatus(projectName, ref, taskName string) (domain.TaskStatus, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.FindLatestCalls = append(m.FindLatestCalls, findLatestCall{ProjectName: projectName, Ref: ref, TaskName: taskName})
+	return m.FindLatestResult, m.FindLatestSHA, m.FindLatestErr
 }
 
 // MockPipelineRunner returns configurable task results.

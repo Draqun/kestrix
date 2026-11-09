@@ -1827,3 +1827,132 @@ func TestPG_FindActiveRunsByRef(t *testing.T) {
 		t.Fatalf("active runs for proj-cip main (secondary): got %v, want empty", active4)
 	}
 }
+
+func TestPG_FindLatestTaskStatus(t *testing.T) {
+	pg := testPG(t)
+	mustUpsert(t, pg, "proj-latest", "")
+	mustUpsert(t, pg, "proj-other", "")
+
+	// 1. Initially nothing exists
+	status, sha, err := pg.FindLatestTaskStatus("proj-latest", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus empty: %v", err)
+	}
+	if status != "" || sha != "" {
+		t.Fatalf("expected empty result, got status=%q sha=%q", status, sha)
+	}
+
+	// 2. Run 1 on main at sha1 has build passed
+	id1 := mustCreateRun(t, pg, "proj-latest", nil)
+	if err := pg.UpdateRunSources(id1, []domain.AcquiredSource{{
+		RepoName:         "proj-latest",
+		RequestedRef:     "main",
+		ResolvedRevision: "sha1",
+		Primary:          true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id1: %v", err)
+	}
+	if err := pg.AppendTaskResult(id1, domain.TaskResult{Name: "build", Status: domain.TaskStatusPending}); err != nil {
+		t.Fatalf("AppendTaskResult id1 pending: %v", err)
+	}
+	if err := pg.AppendTaskResult(id1, domain.TaskResult{Name: "build", Status: domain.TaskStatusPassed}); err != nil {
+		t.Fatalf("AppendTaskResult id1 passed: %v", err)
+	}
+
+	status, sha, err = pg.FindLatestTaskStatus("proj-latest", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus after id1: %v", err)
+	}
+	if status != "passed" || sha != "sha1" {
+		t.Fatalf("expected status=passed sha=sha1, got status=%q sha=%q", status, sha)
+	}
+
+	// 3. Run 2 on a feature branch at sha2 has build failed
+	id2 := mustCreateRun(t, pg, "proj-latest", nil)
+	if err := pg.UpdateRunSources(id2, []domain.AcquiredSource{{
+		RepoName:         "proj-latest",
+		RequestedRef:     "feat/branch",
+		ResolvedRevision: "sha2",
+		Primary:          true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id2: %v", err)
+	}
+	if err := pg.AppendTaskResult(id2, domain.TaskResult{Name: "build", Status: domain.TaskStatusFailed}); err != nil {
+		t.Fatalf("AppendTaskResult id2 failed: %v", err)
+	}
+
+	// For main, build is still passed at sha1
+	status, sha, err = pg.FindLatestTaskStatus("proj-latest", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus main after id2: %v", err)
+	}
+	if status != "passed" || sha != "sha1" {
+		t.Fatalf("expected status=passed sha=sha1 on main, got status=%q sha=%q", status, sha)
+	}
+
+	// For feat/branch, build is failed at sha2
+	status, sha, err = pg.FindLatestTaskStatus("proj-latest", "feat/branch", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus feat/branch after id2: %v", err)
+	}
+	if status != "failed" || sha != "sha2" {
+		t.Fatalf("expected status=failed sha=sha2 on feat/branch, got status=%q sha=%q", status, sha)
+	}
+
+	// 4. Run 3 on main at sha3 executes only lint (not build)
+	id3 := mustCreateRun(t, pg, "proj-latest", nil)
+	if err := pg.UpdateRunSources(id3, []domain.AcquiredSource{{
+		RepoName:         "proj-latest",
+		RequestedRef:     "main",
+		ResolvedRevision: "sha3",
+		Primary:          true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id3: %v", err)
+	}
+	if err := pg.AppendTaskResult(id3, domain.TaskResult{Name: "lint", Status: domain.TaskStatusPassed}); err != nil {
+		t.Fatalf("AppendTaskResult id3 lint: %v", err)
+	}
+
+	// build on main still finds Run 1 (passed at sha1) because Run 3 did not evaluate build
+	status, sha, err = pg.FindLatestTaskStatus("proj-latest", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus main after id3: %v", err)
+	}
+	if status != "passed" || sha != "sha1" {
+		t.Fatalf("expected status=passed sha=sha1 on main, got status=%q sha=%q", status, sha)
+	}
+
+	// 5. Run 4 on main at sha4 runs build and fails
+	id4 := mustCreateRun(t, pg, "proj-latest", nil)
+	if err := pg.UpdateRunSources(id4, []domain.AcquiredSource{{
+		RepoName:         "proj-latest",
+		RequestedRef:     "main",
+		ResolvedRevision: "sha4",
+		Primary:          true,
+	}}); err != nil {
+		t.Fatalf("UpdateRunSources id4: %v", err)
+	}
+	if err := pg.AppendTaskResult(id4, domain.TaskResult{Name: "build", Status: domain.TaskStatusRunning}); err != nil {
+		t.Fatalf("AppendTaskResult id4 running: %v", err)
+	}
+	if err := pg.AppendTaskResult(id4, domain.TaskResult{Name: "build", Status: domain.TaskStatusFailed}); err != nil {
+		t.Fatalf("AppendTaskResult id4 failed: %v", err)
+	}
+
+	status, sha, err = pg.FindLatestTaskStatus("proj-latest", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus main after id4: %v", err)
+	}
+	if status != "failed" || sha != "sha4" {
+		t.Fatalf("expected status=failed sha=sha4 on main, got status=%q sha=%q", status, sha)
+	}
+
+	// 6. Another project has no impact
+	status, sha, err = pg.FindLatestTaskStatus("proj-other", "main", "build")
+	if err != nil {
+		t.Fatalf("FindLatestTaskStatus other proj: %v", err)
+	}
+	if status != "" || sha != "" {
+		t.Fatalf("expected empty for other project, got status=%q sha=%q", status, sha)
+	}
+}

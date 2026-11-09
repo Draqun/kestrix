@@ -243,6 +243,10 @@ type RunStore interface {
 	// FindActiveRunsByRef returns IDs of all non-terminal runs ("running", "queued")
 	// for the given project whose primary acquired source matches ref.
 	FindActiveRunsByRef(projectName, ref string) ([]int, error)
+	// FindLatestTaskStatus returns the latest status and resolved commit SHA
+	// recorded for taskName in projectName on ref across all historical runs.
+	// When absent, status is empty.
+	FindLatestTaskStatus(projectName, ref, taskName string) (TaskStatus, string, error)
 }
 
 // Remote job and job-task statuses; see remote-runner-execution spec.md.

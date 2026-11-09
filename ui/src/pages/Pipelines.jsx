@@ -30,7 +30,7 @@ import CopyButton from '../components/CopyButton';
 import SkipReasonPanel from '../components/SkipReasonPanel';
 import { getSkipSummary } from '../lib/skipReason';
 import { layoutFromProject, applyTaskResultsToDagNodes } from '../lib/dagLayout';
-import { formatStatus, isWaitingForManualApproval } from '../lib/status.js';
+import { formatStatus, isManualWaiting } from '../lib/status.js';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
@@ -44,17 +44,6 @@ import useRunEvents from '../hooks/useRunEvents.js';
 function actorLabel(actor) {
   if (!actor) return 'unknown';
   return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
-}
-
-function isManualWaiting(job, pipelineDef, allJobs) {
-  const t = pipelineDef?.tasks?.find(x => (x.name || x.Name) === job?.name);
-  if (!t || !isWaitingForManualApproval(job, t)) return false;
-  // All dependencies must have passed.
-  const deps = t.depends_on || t.DependsOn || [];
-  if (deps.length === 0) return true;
-  const statusMap = {};
-  (allJobs || []).forEach(j => { statusMap[j.name] = j.status; });
-  return deps.every(d => statusMap[d] === 'passed');
 }
 
 const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];

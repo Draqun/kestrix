@@ -191,6 +191,9 @@ const (
 	RunStatusCanceled = "canceled"
 )
 
+// TaskStatus is a type alias for string representing task execution status.
+type TaskStatus = string
+
 // Task status constants: the values the task_results.status column/field takes.
 const (
 	TaskStatusPending  = "pending"

@@ -798,3 +798,73 @@ func (s *PGStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
 	}
 	return ids, nil
 }
+
+// FindLatestTaskStatus finds the most recent task result status and primary checkout
+// commit SHA for taskName in projectName on the given ref across all historical runs.
+// If the task was never executed on ref, it returns ("", "", nil).
+func (s *PGStore) FindLatestTaskStatus(projectName, ref, taskName string) (TaskStatus, string, error) {
+	if ref == "" {
+		return "", "", nil
+	}
+	var taskResultsJSON, sourcesJSON string
+	err := s.db.QueryRow(
+		`SELECT task_results, sources
+		FROM runs
+		WHERE project_name = $1
+		  AND jsonb_typeof(sources) = 'array'
+		  AND jsonb_typeof(task_results) = 'array'
+		  AND EXISTS (
+		    SELECT 1 FROM jsonb_array_elements(sources) AS src
+		    WHERE (src->>'primary' = 'true' OR jsonb_array_length(sources) = 1)
+		      AND src->>'requested_ref' = $2
+		  )
+		  AND EXISTS (
+		    SELECT 1 FROM jsonb_array_elements(task_results) AS tr
+		    WHERE tr->>'name' = $3
+		  )
+		ORDER BY id DESC
+		LIMIT 1`,
+		projectName, ref, taskName,
+	).Scan(&taskResultsJSON, &sourcesJSON)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("find latest task status: %w", err)
+	}
+
+	var taskResults []TaskResult
+	if err := json.Unmarshal([]byte(taskResultsJSON), &taskResults); err != nil {
+		return "", "", fmt.Errorf("unmarshal task results: %w", err)
+	}
+
+	var sources []domain.AcquiredSource
+	if err := json.Unmarshal([]byte(sourcesJSON), &sources); err != nil {
+		return "", "", fmt.Errorf("unmarshal sources: %w", err)
+	}
+
+	var lastStatus TaskStatus
+	for _, tr := range taskResults {
+		if tr.Name == taskName {
+			lastStatus = tr.Status
+		}
+	}
+
+	var commitSHA string
+	for _, src := range sources {
+		if src.Primary && (ref == "" || src.RequestedRef == ref) {
+			commitSHA = src.ResolvedRevision
+			break
+		}
+	}
+	if commitSHA == "" {
+		for _, src := range sources {
+			if ref == "" || src.RequestedRef == ref {
+				commitSHA = src.ResolvedRevision
+				break
+			}
+		}
+	}
+
+	return lastStatus, commitSHA, nil
+}
