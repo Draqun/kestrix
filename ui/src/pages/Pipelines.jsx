@@ -30,7 +30,7 @@ import CopyButton from '../components/CopyButton';
 import SkipReasonPanel from '../components/SkipReasonPanel';
 import { getSkipSummary } from '../lib/skipReason';
 import { layoutFromProject, applyTaskResultsToDagNodes } from '../lib/dagLayout';
-import { formatStatus, isWaitingForManualApproval, isManualWaiting } from '../lib/status.js';
+import { formatStatus, isManualWaiting } from '../lib/status.js';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
@@ -45,8 +45,6 @@ function actorLabel(actor) {
   if (!actor) return 'unknown';
   return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
 }
-
-
 
 const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];
 
