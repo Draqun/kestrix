@@ -7,7 +7,7 @@
 
 ## 2. Frontend Gate State Calculation
 
-- [x] 2.1 In `ui/src/components/DAGViewer.jsx`, update `isManualWaiting` to allow approval when parent nodes have passed in previous executions; verify component test passes.
+- [x] 2.1 In `ui/src/lib/status.js`, maintain `isManualWaiting` to optimistically allow approval when dependencies are absent from the current run (backend enforces historical status); verify unit tests in `status.test.js` pass.
 - [x] 2.2 Run full test suite `make test` and UI tests `make ui-test` to ensure no regressions.
 
 ## Workflow follow-up
