@@ -865,9 +865,6 @@ func (s *PGStore) FindLatestTaskStatus(projectName, ref, taskName string) (TaskS
 			}
 		}
 	}
-	if commitSHA == "" && len(sources) > 0 {
-		commitSHA = sources[0].ResolvedRevision
-	}
 
 	return lastStatus, commitSHA, nil
 }
