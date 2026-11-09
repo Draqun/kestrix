@@ -6,40 +6,6 @@ import {
 import 'reactflow/dist/style.css';
 import { Box, Typography } from '@mui/material';
 import { formatSkipCategory } from '../lib/skipReason.js';
-import { isWaitingForManualApproval } from '../lib/status.js';
-
-// isManualWaiting reports whether a manual task is currently eligible for manual
-// approval. When parent dependencies were absent from the current run (e.g. in
-// partial, webhook, or single-task executions), the UI is optimistic and enables
-// the action, leaving the final validation to the backend service.
-export function isManualWaiting(job, pipelineDef, allJobs) {
-  const jobName = job?.name || (job?.id?.startsWith('task:') ? job.id.replace('task:', '') : job?.id);
-  const jobStatus = job?.status !== undefined ? job.status : job?.data?.runStatus;
-  const jobNormalized = {
-    name: jobName,
-    status: jobStatus,
-    skip_reason: job?.skip_reason ?? (job?.data?.skipCategory ? { category: job.data.skipCategory } : undefined),
-  };
-
-  const tasks = pipelineDef?.tasks || pipelineDef?.Tasks || [];
-  const t = tasks.find(x => (x.name || x.Name) === jobName);
-  if (!t || !isWaitingForManualApproval(jobNormalized, t)) return false;
-
-  const deps = t.depends_on || t.DependsOn || [];
-  if (deps.length === 0) return true;
-
-  const statusMap = {};
-  (allJobs || []).forEach(j => {
-    const name = j.name || (j.id?.startsWith('task:') ? j.id.replace('task:', '') : j.id);
-    const status = j.status !== undefined ? j.status : j.data?.runStatus;
-    if (name) statusMap[name] = status;
-  });
-
-  return deps.every(d => {
-    const status = statusMap[d];
-    return status === 'passed' || status === undefined;
-  });
-}
 
 // ReactFlow custom DAG node styling. Hex colors are used directly on the SVG canvas:
 // green for passed, red for failed, orange for running/canceled, grey for pending/skipped,

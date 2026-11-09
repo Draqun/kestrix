@@ -25,13 +25,12 @@ import {
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import DAGViewer, { isManualWaiting } from '../components/DAGViewer';
-export { isManualWaiting };
+import DAGViewer from '../components/DAGViewer';
 import CopyButton from '../components/CopyButton';
 import SkipReasonPanel from '../components/SkipReasonPanel';
 import { getSkipSummary } from '../lib/skipReason';
 import { layoutFromProject, applyTaskResultsToDagNodes } from '../lib/dagLayout';
-import { formatStatus, isWaitingForManualApproval } from '../lib/status.js';
+import { formatStatus, isWaitingForManualApproval, isManualWaiting } from '../lib/status.js';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
