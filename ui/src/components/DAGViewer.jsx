@@ -10,9 +10,9 @@ import { isWaitingForManualApproval } from '../lib/status.js';
 
 // isManualWaiting reports whether a manual task is currently eligible for manual
 // approval. When parent dependencies were absent from the current run (e.g. in
-// partial, webhook, or single-task executions), approval is permitted when dependencies
-// passed in preceding executions, and only rejected if a parent failed or is active.
-export function isManualWaiting(job, pipelineDef, allJobs, previousJobs = []) {
+// partial, webhook, or single-task executions), the UI is optimistic and enables
+// the action, leaving the final validation to the backend service.
+export function isManualWaiting(job, pipelineDef, allJobs) {
   const jobName = job?.name || (job?.id?.startsWith('task:') ? job.id.replace('task:', '') : job?.id);
   const jobStatus = job?.status !== undefined ? job.status : job?.data?.runStatus;
   const jobNormalized = {
@@ -33,14 +33,6 @@ export function isManualWaiting(job, pipelineDef, allJobs, previousJobs = []) {
     const name = j.name || (j.id?.startsWith('task:') ? j.id.replace('task:', '') : j.id);
     const status = j.status !== undefined ? j.status : j.data?.runStatus;
     if (name) statusMap[name] = status;
-  });
-
-  (previousJobs || []).forEach(j => {
-    const name = j.name || (j.id?.startsWith('task:') ? j.id.replace('task:', '') : j.id);
-    const status = j.status !== undefined ? j.status : j.data?.runStatus;
-    if (name && statusMap[name] === undefined) {
-      statusMap[name] = status;
-    }
   });
 
   return deps.every(d => {

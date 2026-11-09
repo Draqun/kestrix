@@ -93,19 +93,7 @@ test('isManualWaiting returns true when dependency was satisfied in previous exe
   assert.equal(isManualWaiting(deployJob, pipelineDef, [deployJob]), true);
 });
 
-test('isManualWaiting handles previousJobs explicitly passed', () => {
-  const deployJob = { name: 'deploy', status: 'manual' };
-  const pipelineDef = {
-    tasks: [
-      { name: 'build' },
-      { name: 'deploy', manual: true, depends_on: ['build'] },
-    ],
-  };
-  // previousJobs with passed build
-  assert.equal(isManualWaiting(deployJob, pipelineDef, [deployJob], [{ name: 'build', status: 'passed' }]), true);
-  // previousJobs with failed build
-  assert.equal(isManualWaiting(deployJob, pipelineDef, [deployJob], [{ name: 'build', status: 'failed' }]), false);
-});
+
 
 test('isManualWaiting handles DAG custom nodes as input', () => {
   const deployNode = { id: 'task:deploy', data: { label: '⚙️ deploy', runStatus: 'manual' } };
