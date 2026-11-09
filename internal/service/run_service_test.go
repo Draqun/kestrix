@@ -786,6 +786,264 @@ func TestRunService_ApproveManualTask_Happy(t *testing.T) {
 	}
 }
 
+func TestRunService_ApproveManualTask_PriorRunDependency_Happy(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "sha-123",
+					Primary:          true,
+				},
+			},
+			// build is absent from the current run
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "passed",
+		FindLatestSHA:    "sha-123",
+	}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed", Output: "deployed"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	tr, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.Status != "passed" || tr.Output != "deployed" {
+		t.Fatalf("unexpected task result: %+v", tr)
+	}
+	if len(mockRun.FindLatestCalls) != 1 {
+		t.Fatalf("expected 1 FindLatestTaskStatus call, got %d", len(mockRun.FindLatestCalls))
+	}
+	call := mockRun.FindLatestCalls[0]
+	if call.ProjectName != "proj" || call.Ref != "main" || call.TaskName != "build" {
+		t.Fatalf("unexpected FindLatest call: %+v", call)
+	}
+}
+
+func TestRunService_ApproveManualTask_PriorRunDependency_MismatchSHA(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "sha-new",
+					Primary:          true,
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "passed",
+		FindLatestSHA:    "sha-old",
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), `dependency "build" has not passed`) {
+		t.Fatalf("expected dependency has not passed error, got: %v", err)
+	}
+}
+
+func TestRunService_ApproveManualTask_PriorRunDependency_Failed(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "sha-123",
+					Primary:          true,
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "failed",
+		FindLatestSHA:    "sha-123",
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), `dependency "build" has not passed`) {
+		t.Fatalf("expected dependency has not passed error, got: %v", err)
+	}
+}
+
+func TestRunService_ApproveManualTask_PriorRunDependency_LookupError(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestErr: errors.New("db error"),
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), "lookup historical dependency") {
+		t.Fatalf("expected lookup error, got: %v", err)
+	}
+}
+
+func TestRunService_ApproveManualTask_CurrentRunDependency_Failed(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          9,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "build", Status: "failed"},
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 9, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), `dependency "build" has not passed`) {
+		t.Fatalf("expected dependency has not passed error, got: %v", err)
+	}
+}
+
+func TestRunService_ApproveManualTask_NonPrimarySourcesFallback(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          10,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "sha-nonprimary",
+					Primary:          false,
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "passed",
+		FindLatestSHA:    "sha-nonprimary",
+	}
+	mockRunner := &mocks.MockPipelineRunner{
+		TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed", Output: "ok"}},
+	}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	tr, err := svc.ApproveManualTask(context.Background(), 10, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tr.Status != "passed" {
+		t.Fatalf("unexpected status: %s", tr.Status)
+	}
+}
+
 func TestProjectService_Update_GetError(t *testing.T) {
 	svc := NewProjectService(&mocks.MockProjectStore{GetErr: errors.New("boom")})
 	if err := svc.Update("demo", &domain.ProjectConfig{}); err == nil {
@@ -1831,6 +2089,9 @@ func (s *seqRunStore) FailInterruptedRuns(string) (int, error)           { retur
 func (s *seqRunStore) SetRunQueued(int) error                            { return nil }
 func (s *seqRunStore) StartQueuedRun(int) (bool, error)                  { return true, nil }
 func (s *seqRunStore) FindActiveRunsByRef(string, string) ([]int, error) { return nil, nil }
+func (s *seqRunStore) FindLatestTaskStatus(string, string, string) (domain.TaskStatus, string, error) {
+	return "", "", nil
+}
 
 // twoSlotBlockRunner blocks each Run call on its own release channel so a
 // test can complete one run while the other stays active. started is

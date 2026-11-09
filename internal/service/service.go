@@ -1369,9 +1369,34 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 	if !manualOK {
 		return domain.TaskResult{}, fmt.Errorf("task is not manual")
 	}
+
+	var currentRef, currentSHA string
+	for _, src := range run.Sources {
+		if src.Primary {
+			currentRef = src.RequestedRef
+			currentSHA = src.ResolvedRevision
+			break
+		}
+	}
+	if currentRef == "" && len(run.Sources) > 0 {
+		currentRef = run.Sources[0].RequestedRef
+		currentSHA = run.Sources[0].ResolvedRevision
+	}
+
 	for _, dep := range dependsOn {
 		d, exists := latest[dep]
-		if !exists || d.Status != "passed" {
+		if exists {
+			if d.Status != "passed" {
+				return domain.TaskResult{}, fmt.Errorf("dependency %q has not passed", dep)
+			}
+			continue
+		}
+
+		status, sha, err := s.runStore.FindLatestTaskStatus(projectName, currentRef, dep)
+		if err != nil {
+			return domain.TaskResult{}, fmt.Errorf("lookup historical dependency %q: %w", dep, err)
+		}
+		if status != "passed" || (currentSHA != "" && sha != currentSHA) {
 			return domain.TaskResult{}, fmt.Errorf("dependency %q has not passed", dep)
 		}
 	}

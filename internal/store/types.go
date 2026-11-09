@@ -12,6 +12,9 @@ import (
 // across runner, store, and service layers.
 type TaskResult = domain.TaskResult
 
+// TaskStatus is an alias for domain.TaskStatus.
+type TaskStatus = domain.TaskStatus
+
 // Run is an alias for domain.Run.
 type Run = domain.Run
 

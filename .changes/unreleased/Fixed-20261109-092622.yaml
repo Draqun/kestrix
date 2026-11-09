@@ -1,0 +1,3 @@
+kind: Fixed
+body: Support cross-run manual gate approval when dependencies passed in prior executions on the same branch
+time: 2026-11-09T09:26:22.661597543+01:00

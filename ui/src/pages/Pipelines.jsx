@@ -25,7 +25,8 @@ import {
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
-import DAGViewer from '../components/DAGViewer';
+import DAGViewer, { isManualWaiting } from '../components/DAGViewer';
+export { isManualWaiting };
 import CopyButton from '../components/CopyButton';
 import SkipReasonPanel from '../components/SkipReasonPanel';
 import { getSkipSummary } from '../lib/skipReason';
@@ -46,16 +47,7 @@ function actorLabel(actor) {
   return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
 }
 
-function isManualWaiting(job, pipelineDef, allJobs) {
-  const t = pipelineDef?.tasks?.find(x => (x.name || x.Name) === job?.name);
-  if (!t || !isWaitingForManualApproval(job, t)) return false;
-  // All dependencies must have passed.
-  const deps = t.depends_on || t.DependsOn || [];
-  if (deps.length === 0) return true;
-  const statusMap = {};
-  (allJobs || []).forEach(j => { statusMap[j.name] = j.status; });
-  return deps.every(d => statusMap[d] === 'passed');
-}
+
 
 const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];
 
