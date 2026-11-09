@@ -1392,11 +1392,15 @@ func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectNa
 			continue
 		}
 
+		if currentRef == "" || currentSHA == "" {
+			return domain.TaskResult{}, fmt.Errorf("dependency %q has not passed", dep)
+		}
+
 		status, sha, err := s.runStore.FindLatestTaskStatus(projectName, currentRef, dep)
 		if err != nil {
 			return domain.TaskResult{}, fmt.Errorf("lookup historical dependency %q: %w", dep, err)
 		}
-		if status != "passed" || (currentSHA != "" && sha != currentSHA) {
+		if status != "passed" || sha != currentSHA {
 			return domain.TaskResult{}, fmt.Errorf("dependency %q has not passed", dep)
 		}
 	}

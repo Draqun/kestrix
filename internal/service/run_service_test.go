@@ -941,6 +941,14 @@ func TestRunService_ApproveManualTask_PriorRunDependency_LookupError(t *testing.
 					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
 				},
 			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "sha-123",
+					Primary:          true,
+				},
+			},
 			TaskResults: []domain.TaskResult{
 				{Name: "deploy", Status: "manual"},
 			},
@@ -959,6 +967,91 @@ func TestRunService_ApproveManualTask_PriorRunDependency_LookupError(t *testing.
 	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
 	if err == nil || !strings.Contains(err.Error(), "lookup historical dependency") {
 		t.Fatalf("expected lookup error, got: %v", err)
+	}
+}
+
+func TestRunService_ApproveManualTask_SourcelessRun_FailsClosed(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: nil,
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "passed",
+		FindLatestSHA:    "any-sha",
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), `dependency "build" has not passed`) {
+		t.Fatalf("expected dependency has not passed, got: %v", err)
+	}
+	if len(mockRun.FindLatestCalls) != 0 {
+		t.Fatalf("expected 0 FindLatestTaskStatus calls for sourceless run, got %d", len(mockRun.FindLatestCalls))
+	}
+}
+
+func TestRunService_ApproveManualTask_EmptyRevisionRun_FailsClosed(t *testing.T) {
+	mockRun := &mocks.MockRunStore{
+		GetRunResult: &domain.Run{
+			ID:          8,
+			ProjectName: "proj",
+			Status:      "running",
+			PipelineDef: &model.Project{
+				Name: "proj",
+				Tasks: []model.Task{
+					{Name: "build"},
+					{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+				},
+			},
+			Sources: []domain.AcquiredSource{
+				{
+					RepoName:         "proj",
+					RequestedRef:     "main",
+					ResolvedRevision: "",
+					Primary:          true,
+				},
+			},
+			TaskResults: []domain.TaskResult{
+				{Name: "deploy", Status: "manual"},
+			},
+		},
+		FindLatestResult: "passed",
+		FindLatestSHA:    "",
+	}
+	mockRunner := &mocks.MockPipelineRunner{}
+	svc := NewRunService(mockRun, mockRunner, mockRunner)
+
+	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
+		Name: "proj",
+		Tasks: []model.Task{
+			{Name: "build"},
+			{Name: "deploy", Manual: true, DependsOn: []string{"build"}},
+		},
+	}, "deploy", domain.RunnerOptions{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), `dependency "build" has not passed`) {
+		t.Fatalf("expected dependency has not passed, got: %v", err)
+	}
+	if len(mockRun.FindLatestCalls) != 0 {
+		t.Fatalf("expected 0 FindLatestTaskStatus calls for empty revision run, got %d", len(mockRun.FindLatestCalls))
 	}
 }
 

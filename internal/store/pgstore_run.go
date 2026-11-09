@@ -803,6 +803,9 @@ func (s *PGStore) FindActiveRunsByRef(projectName, ref string) ([]int, error) {
 // commit SHA for taskName in projectName on the given ref across all historical runs.
 // If the task was never executed on ref, it returns ("", "", nil).
 func (s *PGStore) FindLatestTaskStatus(projectName, ref, taskName string) (TaskStatus, string, error) {
+	if ref == "" {
+		return "", "", nil
+	}
 	var taskResultsJSON, sourcesJSON string
 	err := s.db.QueryRow(
 		`SELECT task_results, sources
@@ -813,7 +816,7 @@ func (s *PGStore) FindLatestTaskStatus(projectName, ref, taskName string) (TaskS
 		  AND EXISTS (
 		    SELECT 1 FROM jsonb_array_elements(sources) AS src
 		    WHERE (src->>'primary' = 'true' OR jsonb_array_length(sources) = 1)
-		      AND ($2 = '' OR src->>'requested_ref' = $2)
+		      AND src->>'requested_ref' = $2
 		  )
 		  AND EXISTS (
 		    SELECT 1 FROM jsonb_array_elements(task_results) AS tr
