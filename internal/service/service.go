@@ -1145,6 +1145,9 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 	if proj == nil {
 		return domain.TaskResult{}, false, fmt.Errorf("project not loaded")
 	}
+	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
+		return domain.TaskResult{}, false, err
+	}
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		return s.dispatchSingleTask(runID, proj, taskName, opts)
 	}
