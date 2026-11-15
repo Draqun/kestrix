@@ -883,6 +883,7 @@ func deleteGuardServer(t *testing.T, runID int, runProject string, runner *delet
 		GetRunResult: &domain.Run{ID: runID, ProjectName: runProject},
 	}
 	runSvc := service.NewRunService(runStore, runner, runner)
+	runSvc.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   projectStore,
@@ -1104,6 +1105,7 @@ func TestHandleDeleteProject_MultipleActiveRuns_ConflictListsSortedIDs(t *testin
 	runStore := &seqIDRunStore{MockRunStore: &mocks.MockRunStore{}, next: 10}
 	runner := &twoRunBlockRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
 	runSvc := service.NewRunService(runStore, runner, runner)
+	runSvc.SetLocalExecutionPolicy(true, "local")
 	srv := &Server{
 		cfg:            Config{ListenAddr: ":0"},
 		projectStore:   projectStore,

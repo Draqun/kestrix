@@ -6,7 +6,9 @@ executes: which environment a task may observe, what isolation a containerized
 task is guaranteed, and what a cancellation terminates. Pipeline definitions
 are untrusted input, trusted only as far as the least trusted committer of the
 repository they are read from.
+
 ## Requirements
+
 ### Requirement: Task environment is an explicit allowlist
 
 A task process in every runner mode SHALL receive only: a fixed base set of
@@ -213,4 +215,11 @@ When a task declares an execution timeout, the executor SHALL enforce that deadl
 - **THEN** the runner SHALL terminate the task execution process
 - **AND** report completion with status `failed` and error reason naming the elapsed timeout
 
+### Requirement: Service-level local runner execution gate
+The execution service layer (`RunService`) SHALL reject execution of any project or task resolving to `local` runner mode unless `runner.allow_local` is explicitly configured to `true`.
 
+#### Scenario: Service rejects local run when allow_local is false
+- **WHEN** `RunService.Start` is called on a project configured with runner mode `local`
+- **AND** `runner.allow_local` is `false`
+- **THEN** execution terminates immediately with `ErrLocalExecutionDisabled`
+- **AND** no source repositories are acquired or cloned

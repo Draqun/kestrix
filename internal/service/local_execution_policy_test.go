@@ -1,6 +1,14 @@
 package service
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"kestrix/internal/domain"
+	"kestrix/internal/mocks"
+	"kestrix/internal/model"
+)
 
 // TestRunService_CheckLocalAllowed pins safe-production-execution
 // spec.md "Stored local project does not execute": a run resolving to
@@ -38,4 +46,137 @@ func TestRunService_CheckLocalAllowed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunService_ServiceLevelLocalRunnerGuard(t *testing.T) {
+	proj := &model.Project{
+		Name:  "test-proj",
+		Tasks: []model.Task{{Name: "test-task"}},
+	}
+
+	t.Run("Start returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {
+		mockStore := &mocks.MockRunStore{}
+		pipelineRunner := &mocks.MockPipelineRunner{}
+		s := NewRunService(mockStore, pipelineRunner, pipelineRunner)
+		s.SetLocalExecutionPolicy(false, "local")
+
+		sourcesAcquired := false
+		opts := domain.RunnerOptions{
+			Mode: "local",
+			OnSourcesAcquired: func([]domain.AcquiredSource) error {
+				sourcesAcquired = true
+				return nil
+			},
+		}
+
+		runID, err := s.Start(context.Background(), "test-proj", proj, nil, opts)
+		if !errors.Is(err, ErrLocalExecutionDisabled) {
+			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
+		}
+		if runID != 0 {
+			t.Fatalf("expected runID 0, got: %d", runID)
+		}
+		if len(mockStore.CreateRunCalls) != 0 {
+			t.Fatalf("expected no CreateRun calls, got: %d", len(mockStore.CreateRunCalls))
+		}
+		if sourcesAcquired {
+			t.Fatal("expected no sources to be acquired")
+		}
+		if len(pipelineRunner.RunCalls) != 0 {
+			t.Fatalf("expected no pipeline runner calls, got: %d", len(pipelineRunner.RunCalls))
+		}
+	})
+
+	t.Run("StartTask returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {
+		mockStore := &mocks.MockRunStore{}
+		taskRunner := &mocks.MockPipelineRunner{}
+		s := NewRunService(mockStore, taskRunner, taskRunner)
+		s.SetLocalExecutionPolicy(false, "local")
+
+		sourcesAcquired := false
+		opts := domain.RunnerOptions{
+			Mode: "local",
+			OnSourcesAcquired: func([]domain.AcquiredSource) error {
+				sourcesAcquired = true
+				return nil
+			},
+		}
+
+		queued, err := s.StartTask(context.Background(), 1, "test-proj", proj, "test-task", opts)
+		if !errors.Is(err, ErrLocalExecutionDisabled) {
+			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
+		}
+		if queued {
+			t.Fatal("expected queued to be false")
+		}
+		if sourcesAcquired {
+			t.Fatal("expected no sources to be acquired")
+		}
+		if len(taskRunner.TaskRunCalls) != 0 {
+			t.Fatalf("expected no task runner calls, got: %d", len(taskRunner.TaskRunCalls))
+		}
+	})
+
+	t.Run("ApproveManualTask returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {
+		mockStore := &mocks.MockRunStore{}
+		taskRunner := &mocks.MockPipelineRunner{}
+		s := NewRunService(mockStore, taskRunner, taskRunner)
+		s.SetLocalExecutionPolicy(false, "local")
+
+		sourcesAcquired := false
+		opts := domain.RunnerOptions{
+			Mode: "local",
+			OnSourcesAcquired: func([]domain.AcquiredSource) error {
+				sourcesAcquired = true
+				return nil
+			},
+		}
+
+		tr, err := s.ApproveManualTask(context.Background(), 1, "test-proj", proj, "test-task", opts)
+		if !errors.Is(err, ErrLocalExecutionDisabled) {
+			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
+		}
+		if tr.Status != "" {
+			t.Fatalf("expected empty task result, got: %+v", tr)
+		}
+		if sourcesAcquired {
+			t.Fatal("expected no sources to be acquired")
+		}
+		if len(taskRunner.TaskRunCalls) != 0 {
+			t.Fatalf("expected no task runner calls, got: %d", len(taskRunner.TaskRunCalls))
+		}
+	})
+
+	t.Run("RunTask returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {
+		mockStore := &mocks.MockRunStore{}
+		taskRunner := &mocks.MockPipelineRunner{}
+		s := NewRunService(mockStore, taskRunner, taskRunner)
+		s.SetLocalExecutionPolicy(false, "local")
+
+		sourcesAcquired := false
+		opts := domain.RunnerOptions{
+			Mode: "local",
+			OnSourcesAcquired: func([]domain.AcquiredSource) error {
+				sourcesAcquired = true
+				return nil
+			},
+		}
+
+		tr, dispatched, err := s.RunTask(context.Background(), 1, "test-proj", proj, "test-task", opts)
+		if !errors.Is(err, ErrLocalExecutionDisabled) {
+			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
+		}
+		if dispatched {
+			t.Fatal("expected dispatched to be false")
+		}
+		if tr.Status != "" {
+			t.Fatalf("expected empty task result, got: %+v", tr)
+		}
+		if sourcesAcquired {
+			t.Fatal("expected no sources to be acquired")
+		}
+		if len(taskRunner.TaskRunCalls) != 0 {
+			t.Fatalf("expected no task runner calls, got: %d", len(taskRunner.TaskRunCalls))
+		}
+	})
 }

@@ -16,7 +16,7 @@ import (
 // measure occupancy against.
 func TestRunService_Counts_UnlimitedConcurrencyReportsZeroRunning(t *testing.T) {
 	store := &mocks.MockRunStore{CountByStatusResult: map[string]int{"queued": 3}}
-	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 
 	running, queued := svc.Counts()
 	if running != 0 {
@@ -33,7 +33,7 @@ func TestRunService_Counts_UnlimitedConcurrencyReportsZeroRunning(t *testing.T) 
 func TestRunService_Counts_ReflectsOccupiedSlotsAndDrainsToZero(t *testing.T) {
 	blocker := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	store := &mocks.MockRunStore{}
-	svc := NewRunService(store, blocker, blocker)
+	svc := newTestRunService(store, blocker, blocker)
 	svc.SetMaxConcurrentRuns(1)
 
 	if running, queued := svc.Counts(); running != 0 || queued != 0 {
@@ -80,7 +80,7 @@ func TestRunService_Counts_ReflectsOccupiedSlotsAndDrainsToZero(t *testing.T) {
 // value.
 func TestRunService_Counts_RunStoreErrorReportsZeroQueued(t *testing.T) {
 	store := &mocks.MockRunStore{CountByStatusErr: errors.New("count failed")}
-	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 
 	if _, queued := svc.Counts(); queued != 0 {
 		t.Errorf("queued = %d, want 0 on a CountRunsByStatus error", queued)
@@ -90,7 +90,7 @@ func TestRunService_Counts_RunStoreErrorReportsZeroQueued(t *testing.T) {
 // TestRunService_Counts_NilRunStoreReportsZeroQueued covers the
 // runStore-nil guard.
 func TestRunService_Counts_NilRunStoreReportsZeroQueued(t *testing.T) {
-	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	if _, queued := svc.Counts(); queued != 0 {
 		t.Errorf("queued = %d, want 0 with no run store", queued)
 	}

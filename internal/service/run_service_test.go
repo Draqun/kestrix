@@ -103,7 +103,7 @@ func TestRunService_Start_Happy(t *testing.T) {
 			{Name: "build", Status: "passed"},
 		},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	runID, err := svc.Start(context.Background(), "myproject", &model.Project{
 		Name:  "myproject",
@@ -140,7 +140,7 @@ func TestRunService_Start_SeedsAndFinishesWithSkippedTasks(t *testing.T) {
 			{Name: "build_app", Status: "passed"},
 		},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	proj := &model.Project{
 		Name: "multi-repo-project",
@@ -203,7 +203,7 @@ func TestRunService_Start_RecordsAndLogsActor(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "build", Status: "passed"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 
@@ -264,7 +264,7 @@ func TestRunServicePersistsPinsAndRetainsSourcesForManualWork(t *testing.T) {
 	}
 	manager := &sourceSessionTracker{}
 	primary := domain.AcquiredSource{RepoName: "app", URL: "https://git.test/app.git", RequestedRef: "main", ResolvedRevision: "app-sha", Primary: true}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 	_, err := svc.Start(context.Background(), "app", &model.Project{Name: "app", Tasks: []model.Task{{Name: "deploy", Manual: true}}}, nil, domain.RunnerOptions{
@@ -298,7 +298,7 @@ func TestRunServiceReleasesSourcesWhenRunIsTerminal(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 52, FinishRunCh: make(chan struct{})}
 	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "build", Status: "passed"}}}
 	manager := &sourceSessionTracker{releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	_, err := svc.Start(context.Background(), "app", &model.Project{Name: "app", Tasks: []model.Task{{Name: "build"}}}, nil, domain.RunnerOptions{SourceSessions: manager})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestRunServicePanicReleasesSourcePins(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 53, FinishRunCh: make(chan struct{})}
 	runner := &mocks.MockPipelineRunner{PanicMsg: "panic"}
 	manager := &sourceSessionTracker{releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	if _, err := svc.Start(context.Background(), "app", &model.Project{Name: "app"}, nil, domain.RunnerOptions{SourceSessions: manager}); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestRunService_Start_TaskFailed(t *testing.T) {
 			{Name: "test", Status: "failed", Error: "exit 1"},
 		},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
@@ -404,7 +404,7 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	mockRunner := &mocks.MockPipelineRunner{PanicMsg: "boom"}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 
@@ -450,7 +450,7 @@ func TestRunService_Start_PanicRecovered(t *testing.T) {
 func TestRunService_Start_CreateRunFails(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunErr: fmt.Errorf("db error")}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
@@ -465,7 +465,7 @@ func TestRunService_Start_RunnerError(t *testing.T) {
 	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	mockRunner := &mocks.MockPipelineRunner{RunErr: fmt.Errorf("exec failed")}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name:  "proj",
@@ -492,7 +492,7 @@ func TestRunService_Start_RunnerError(t *testing.T) {
 }
 
 func TestRunService_Start_RejectsNilPipeline(t *testing.T) {
-	svc := NewRunService(nil, nil, nil)
+	svc := newTestRunService(nil, nil, nil)
 	_, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj"}, nil, domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error for nil pipeline runner")
@@ -500,7 +500,7 @@ func TestRunService_Start_RejectsNilPipeline(t *testing.T) {
 }
 
 func TestRunService_Start_RejectsNilProject(t *testing.T) {
-	svc := NewRunService(nil, &emptyTaskRunner{}, &emptyTaskRunner{})
+	svc := newTestRunService(nil, &emptyTaskRunner{}, &emptyTaskRunner{})
 	_, err := svc.Start(context.Background(), "proj", nil, nil, domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error for nil project")
@@ -508,7 +508,7 @@ func TestRunService_Start_RejectsNilProject(t *testing.T) {
 }
 
 func TestRunService_RunTask_RejectsNilTaskRunner(t *testing.T) {
-	svc := NewRunService(nil, &emptyTaskRunner{}, nil)
+	svc := newTestRunService(nil, &emptyTaskRunner{}, nil)
 	_, _, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
 	if err == nil {
 		t.Fatal("expected error for nil task runner")
@@ -531,7 +531,7 @@ func TestRunService_RunTask_Success(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
 	if err != nil {
@@ -547,7 +547,7 @@ func TestRunService_RunTask_Success(t *testing.T) {
 
 func TestRunService_RunTask_ErrorWithoutStatus(t *testing.T) {
 	mockRun := &mocks.MockRunStore{}
-	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
+	svc := newTestRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
 
 	tr, _, err := svc.RunTask(context.Background(), 0, "proj", &model.Project{Name: "proj"}, "manual", domain.RunnerOptions{})
 	if err == nil {
@@ -569,7 +569,7 @@ func TestRunService_RunTask_TruncatesOversizedTaskOutput(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "t", Status: "passed", Output: bigOutput}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 	svc.MaxOutputBytes = 10
 
 	tr, _, err := svc.RunTask(context.Background(), 1, "proj", &model.Project{Name: "proj"}, "t", domain.RunnerOptions{})
@@ -594,7 +594,7 @@ func TestRunService_RunTask_StampsApproverOnTerminalEntry(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	before := time.Now()
 	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{Actor: "user:alice"})
@@ -625,7 +625,7 @@ func TestRunService_RunTask_EmptyActorLeavesApprovalUnset(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual", domain.RunnerOptions{})
 	if err != nil {
@@ -659,7 +659,7 @@ func TestRunService_ApproveManualTask_LogsActorOnSuccess(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	if _, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
 		Name: "proj",
@@ -692,7 +692,7 @@ func TestRunService_ApproveManualTask_RefusalLogsNothingAndSkipsApply(t *testing
 			TaskResults: []domain.TaskResult{{Name: "manual", Status: "passed"}},
 		},
 	}
-	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
+	svc := newTestRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
 
 	_, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
 		Name:  "proj",
@@ -730,7 +730,7 @@ func TestRunService_ApproveManualTask_TriggerSkippedRefused(t *testing.T) {
 			},
 		},
 	}
-	svc := NewRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
+	svc := newTestRunService(mockRun, &emptyTaskRunner{}, &emptyTaskRunner{})
 
 	_, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
 		Name:  "proj",
@@ -766,7 +766,7 @@ func TestRunService_ApproveManualTask_Happy(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, err := svc.ApproveManualTask(context.Background(), 7, "proj", &model.Project{
 		Name: "proj",
@@ -818,7 +818,7 @@ func TestRunService_ApproveManualTask_PriorRunDependency_Happy(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed", Output: "deployed"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -871,7 +871,7 @@ func TestRunService_ApproveManualTask_PriorRunDependency_MismatchSHA(t *testing.
 		FindLatestSHA:    "sha-old",
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -914,7 +914,7 @@ func TestRunService_ApproveManualTask_PriorRunDependency_Failed(t *testing.T) {
 		FindLatestSHA:    "sha-123",
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -956,7 +956,7 @@ func TestRunService_ApproveManualTask_PriorRunDependency_LookupError(t *testing.
 		FindLatestErr: errors.New("db error"),
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -992,7 +992,7 @@ func TestRunService_ApproveManualTask_SourcelessRun_FailsClosed(t *testing.T) {
 		FindLatestSHA:    "any-sha",
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -1038,7 +1038,7 @@ func TestRunService_ApproveManualTask_EmptyRevisionRun_FailsClosed(t *testing.T)
 		FindLatestSHA:    "",
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 8, "proj", &model.Project{
 		Name: "proj",
@@ -1075,7 +1075,7 @@ func TestRunService_ApproveManualTask_CurrentRunDependency_Failed(t *testing.T) 
 		},
 	}
 	mockRunner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.ApproveManualTask(context.Background(), 9, "proj", &model.Project{
 		Name: "proj",
@@ -1120,7 +1120,7 @@ func TestRunService_ApproveManualTask_NonPrimarySourcesFallback(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "deploy", Status: "passed", Output: "ok"}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, err := svc.ApproveManualTask(context.Background(), 10, "proj", &model.Project{
 		Name: "proj",
@@ -1167,7 +1167,7 @@ func TestProjectServiceValidatedSourceFailuresDoNotPersist(t *testing.T) {
 }
 
 func TestRunService_createRun_NoStore(t *testing.T) {
-	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	runID, _, err := svc.createRun("proj", nil, false, &model.Project{Name: "proj"}, "", nil)
 	if err == nil || err.Error() != "run store is not configured" {
 		t.Fatalf("error = %v, want missing run store error", err)
@@ -1179,7 +1179,7 @@ func TestRunService_createRun_NoStore(t *testing.T) {
 
 func TestRunService_createRun_ResolveError(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunID: 10}
-	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	proj := &model.Project{
 		Name:  "bad-proj",
 		Repos: []model.Repo{{Name: "r1"}},
@@ -1207,7 +1207,7 @@ func TestRunService_createRun_ResolveError(t *testing.T) {
 
 func TestRunService_Start_ResolveError(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunID: 10}
-	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	proj := &model.Project{
 		Name:  "cyclic-proj",
 		Repos: []model.Repo{{Name: "r1"}},
@@ -1230,7 +1230,7 @@ func TestRunService_Start_ResolveError(t *testing.T) {
 
 func TestRunService_prepareRunExecution_InvokesCallbacks(t *testing.T) {
 	mockRun := &mocks.MockRunStore{}
-	svc := NewRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(mockRun, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	out := &bytes.Buffer{}
 	opts := domain.RunnerOptions{}
 	redactor := svc.prepareRunExecution(9, out, &opts)
@@ -1256,11 +1256,11 @@ func TestRunService_prepareRunExecution_InvokesCallbacks(t *testing.T) {
 	}
 	opts.OnSourcesAcquired([]domain.AcquiredSource{{RepoName: "repo"}})
 	withSources := &runSourceMock{MockRunStore: &mocks.MockRunStore{}}
-	NewRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &domain.RunnerOptions{})
+	newTestRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &domain.RunnerOptions{})
 	// The callback is installed by prepareRunExecution and reaches the optional
 	// run-source persistence port.
 	var sourceOpts domain.RunnerOptions
-	NewRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &sourceOpts)
+	newTestRunService(withSources, nil, nil).prepareRunExecution(10, &bytes.Buffer{}, &sourceOpts)
 	sourceOpts.OnSourcesAcquired([]domain.AcquiredSource{{RepoName: "repo"}})
 	if withSources.sourceCalls != 1 {
 		t.Fatalf("source calls=%d", withSources.sourceCalls)
@@ -1270,14 +1270,14 @@ func TestRunService_prepareRunExecution_InvokesCallbacks(t *testing.T) {
 func TestRunServicePrepareRunExecutionSourceCallbackFailures(t *testing.T) {
 	persistStore := &runSourceMock{MockRunStore: &mocks.MockRunStore{}, sourceErr: errors.New("persist failed")}
 	var persistOpts domain.RunnerOptions
-	NewRunService(persistStore, nil, nil).prepareRunExecution(1, &bytes.Buffer{}, &persistOpts)
+	newTestRunService(persistStore, nil, nil).prepareRunExecution(1, &bytes.Buffer{}, &persistOpts)
 	if err := persistOpts.OnSourcesAcquired(nil); err == nil || !strings.Contains(err.Error(), "persist run sources") {
 		t.Fatalf("persist error = %v", err)
 	}
 
 	manager := &sourceSessionTracker{pinErr: errors.New("pin failed")}
 	var pinOpts = domain.RunnerOptions{SourceSessions: manager}
-	NewRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(2, &bytes.Buffer{}, &pinOpts)
+	newTestRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(2, &bytes.Buffer{}, &pinOpts)
 	if err := pinOpts.OnSourcesAcquired(nil); err == nil || !strings.Contains(err.Error(), "pin run sources") {
 		t.Fatalf("pin error = %v", err)
 	}
@@ -1287,7 +1287,7 @@ func TestRunServicePrepareRunExecutionSourceCallbackFailures(t *testing.T) {
 
 	previousErr := errors.New("previous callback failed")
 	previousOpts := domain.RunnerOptions{OnSourcesAcquired: func([]domain.AcquiredSource) error { return previousErr }}
-	NewRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(3, &bytes.Buffer{}, &previousOpts)
+	newTestRunService(&mocks.MockRunStore{}, nil, nil).prepareRunExecution(3, &bytes.Buffer{}, &previousOpts)
 	if err := previousOpts.OnSourcesAcquired(nil); !errors.Is(err, previousErr) {
 		t.Fatalf("previous callback error = %v", err)
 	}
@@ -1308,7 +1308,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("workspace cleanup", func(t *testing.T) {
 		cleaned := 0
 		runner := &mocks.MockPipelineRunner{}
-		_, _, err := NewRunService(nil, runner, runner).RunTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := newTestRunService(nil, runner, runner).RunTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			SourcesPrepared: true, WorkspaceCleanup: func() { cleaned++ },
 		})
 		if err != nil || cleaned != 1 {
@@ -1319,7 +1319,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("persist source failure", func(t *testing.T) {
 		store := &runSourceMock{MockRunStore: &mocks.MockRunStore{}, sourceErr: errors.New("persist failed")}
 		runner := &mocks.MockPipelineRunner{}
-		_, _, err := NewRunService(store, runner, runner).RunTask(context.Background(), 2, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{})
+		_, _, err := newTestRunService(store, runner, runner).RunTask(context.Background(), 2, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{})
 		if err == nil || !strings.Contains(err.Error(), "persist run sources") {
 			t.Fatalf("error = %v", err)
 		}
@@ -1328,7 +1328,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("pin failure rolls back", func(t *testing.T) {
 		manager := &sourceSessionTracker{pinErr: errors.New("pin failed")}
 		runner := &mocks.MockPipelineRunner{}
-		_, _, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 3, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{SourceSessions: manager})
+		_, _, err := newTestRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 3, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{SourceSessions: manager})
 		if err == nil || !strings.Contains(err.Error(), "pin run sources") || len(manager.releases) != 1 {
 			t.Fatalf("error=%v releases=%v", err, manager.releases)
 		}
@@ -1337,7 +1337,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 	t.Run("previous callback failure", func(t *testing.T) {
 		previousErr := errors.New("callback failed")
 		runner := &mocks.MockPipelineRunner{}
-		_, _, err := NewRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 4, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := newTestRunService(&mocks.MockRunStore{}, runner, runner).RunTask(context.Background(), 4, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			OnSourcesAcquired: func([]domain.AcquiredSource) error { return previousErr },
 		})
 		if err == nil || !strings.Contains(err.Error(), previousErr.Error()) {
@@ -1349,7 +1349,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 		store := &mocks.MockRunStore{GetRunResult: &domain.Run{TaskResults: []domain.TaskResult{{Name: "task", Status: "passed"}}}}
 		manager := &sourceSessionTracker{}
 		runner := &mocks.MockPipelineRunner{}
-		_, _, err := NewRunService(store, runner, runner).RunTask(context.Background(), 5, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
+		_, _, err := newTestRunService(store, runner, runner).RunTask(context.Background(), 5, "demo", &model.Project{Name: "demo"}, "task", domain.RunnerOptions{
 			SourcesPrepared: true, SourceSessions: manager,
 		})
 		if err != nil || len(manager.releases) != 1 || manager.releases[0] != 5 {
@@ -1359,7 +1359,7 @@ func TestRunServiceRunTaskSourceLifecycleBranches(t *testing.T) {
 }
 
 func TestRunService_RunTask_NilProject(t *testing.T) {
-	svc := NewRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(nil, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	if _, _, err := svc.RunTask(context.Background(), 0, "proj", nil, "manual", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -1392,13 +1392,13 @@ func TestApproveManualTask_ErrorBranches(t *testing.T) {
 		proj *model.Project
 		err  string
 	}{
-		{name: "no store", svc: NewRunService(nil, nil, nil), err: "runs not supported"},
-		{name: "get run error", svc: NewRunService(&mocks.MockRunStore{GetRunErr: errors.New("boom")}, nil, nil), err: "get run"},
-		{name: "run not found", svc: NewRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "other"}}, nil, nil), err: "run not found"},
-		{name: "task not in run", svc: NewRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "build", Status: "passed"}}}}, nil, nil), err: "task not in run"},
-		{name: "not waiting", svc: NewRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "passed"}}}}, nil, nil), err: "not waiting"},
-		{name: "not manual", svc: NewRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "manual"}}, PipelineDef: &model.Project{Tasks: []model.Task{{Name: "manual"}}}}}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{}), proj: &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, err: "task is not manual"},
-		{name: "dependency missing", svc: NewRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "manual"}}, PipelineDef: &model.Project{Tasks: []model.Task{{Name: "manual", Manual: true, DependsOn: []string{"build"}}}}}}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{}), proj: proj, err: "dependency \"build\" has not passed"},
+		{name: "no store", svc: newTestRunService(nil, nil, nil), err: "runs not supported"},
+		{name: "get run error", svc: newTestRunService(&mocks.MockRunStore{GetRunErr: errors.New("boom")}, nil, nil), err: "get run"},
+		{name: "run not found", svc: newTestRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "other"}}, nil, nil), err: "run not found"},
+		{name: "task not in run", svc: newTestRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "build", Status: "passed"}}}}, nil, nil), err: "task not in run"},
+		{name: "not waiting", svc: newTestRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "passed"}}}}, nil, nil), err: "not waiting"},
+		{name: "not manual", svc: newTestRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "manual"}}, PipelineDef: &model.Project{Tasks: []model.Task{{Name: "manual"}}}}}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{}), proj: &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, err: "task is not manual"},
+		{name: "dependency missing", svc: newTestRunService(&mocks.MockRunStore{GetRunResult: &domain.Run{ProjectName: "proj", TaskResults: []domain.TaskResult{{Name: "manual", Status: "manual"}}, PipelineDef: &model.Project{Tasks: []model.Task{{Name: "manual", Manual: true, DependsOn: []string{"build"}}}}}}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{}), proj: proj, err: "dependency \"build\" has not passed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1501,7 +1501,7 @@ func waitActiveAbsent(t *testing.T, svc *RunService, runID int) {
 func TestRunService_RunTask_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
 	store := &mocks.MockRunStore{}
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	const runID = 71
 	retCh := make(chan error, 1)
@@ -1570,7 +1570,7 @@ func TestRunService_ApproveManualTask_RegistersActiveRunAndRemovesItOnCompletion
 	const runID = 72
 	store, proj := manualApprovalFixture(runID)
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	retCh := make(chan error, 1)
 	go func() {
@@ -1609,7 +1609,7 @@ func TestRunService_ApproveManualTask_RejectsNilProjectAfterApproval(t *testing.
 	const runID = 74
 	store, _ := manualApprovalFixture(runID)
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	if _, err := svc.ApproveManualTask(context.Background(), runID, "proj", nil, "manual", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil project")
@@ -1619,7 +1619,7 @@ func TestRunService_ApproveManualTask_RejectsNilProjectAfterApproval(t *testing.
 func TestRunService_ApproveManualTask_RejectsNilTaskRunner(t *testing.T) {
 	const runID = 75
 	store, proj := manualApprovalFixture(runID)
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 
 	if _, err := svc.ApproveManualTask(context.Background(), runID, "proj", proj, "manual", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil task runner")
@@ -1628,7 +1628,7 @@ func TestRunService_ApproveManualTask_RejectsNilTaskRunner(t *testing.T) {
 
 func TestRunService_TrackActive_ConcurrentCallsDoNotClobber(t *testing.T) {
 	store := &mocks.MockRunStore{}
-	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 
 	const runID = 76
 	_, cleanupA := svc.trackActive(context.Background(), runID, "proj")
@@ -1681,7 +1681,7 @@ func TestRunService_Cancel_TerminatesActiveRunTask(t *testing.T) {
 		releaseCh:  make(chan struct{}),
 		returnedCh: make(chan struct{}),
 	}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runTaskErrCh := make(chan error, 1)
 	go func() {
@@ -1746,7 +1746,7 @@ func TestRunService_Cancel_PersistsCanceledByWhenRunTaskLosesTheRace(t *testing.
 		releaseCh:  make(chan struct{}),
 		returnedCh: make(chan struct{}),
 	}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runTaskErrCh := make(chan error, 1)
 	go func() {
@@ -1790,7 +1790,7 @@ func TestRunService_Cancel_PersistsCanceledByWhenRunTaskLosesTheRace(t *testing.
 func TestRunService_Start_RegistersActiveRunAndRemovesItOnCompletion(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 7}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
@@ -1831,7 +1831,7 @@ func TestRunService_Start_RegistersActiveRunAndRemovesItOnCompletion(t *testing.
 func TestRunService_Cancel_ActiveRunTerminatesInTime(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 8}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
@@ -1863,7 +1863,7 @@ func TestRunService_Cancel_PersistsCanceledByForMultiTaskRun(t *testing.T) {
 		releaseCh: make(chan struct{}),
 		result:    []domain.TaskResult{{Name: "t", Status: "canceled", Error: "canceled"}},
 	}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
@@ -1892,7 +1892,7 @@ func TestRunService_Start_CanceledTaskWithNoKnownActorSkipsSetCanceledBy(t *test
 	runner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "t", Status: "canceled", Error: "canceled"}},
 	}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
@@ -1921,7 +1921,7 @@ func TestRunService_Cancel_DoneChBranch_SkipsMetricWhenAlreadyTerminal(t *testin
 		CancelRunNoChange: true,
 	}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 
@@ -1955,7 +1955,7 @@ func TestRunService_Cancel_DoneChBranch_RecordsMetricForQueuedRun(t *testing.T) 
 		GetRunResult: &domain.Run{ProjectName: "proj", Status: "queued"},
 	}
 	store := &seqIDMockRunStore{MockRunStore: inner}
-	svc := NewRunService(store, blocker, blocker)
+	svc := newTestRunService(store, blocker, blocker)
 	svc.SetMaxConcurrentRuns(1)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
@@ -1993,7 +1993,7 @@ func TestRunService_Cancel_ActiveRunStoreErrorReturnedUnchanged(t *testing.T) {
 	wantErr := errors.New("store exploded")
 	store := &mocks.MockRunStore{CreateRunID: 9, CancelRunErr: wantErr}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
@@ -2014,7 +2014,7 @@ func TestRunService_Cancel_TimesOutWhenRunDoesNotTerminate(t *testing.T) {
 
 	store := &mocks.MockRunStore{CreateRunID: 9}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), ignoreCtx: true}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = time.Millisecond
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
@@ -2038,7 +2038,7 @@ func TestRunService_Cancel_NoActiveEntryCancelsInStoreDirectly(t *testing.T) {
 	store := &mocks.MockRunStore{
 		GetRunResult: &domain.Run{ID: 123, ProjectName: "proj", Status: "queued", StartedAt: started},
 	}
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 
@@ -2065,7 +2065,7 @@ func TestRunService_Cancel_NoActiveEntryCancelsInStoreDirectly(t *testing.T) {
 // than guessing; see recordCanceledMetric.
 func TestRunService_Cancel_NoActiveEntryGetRunFailsStillCancels(t *testing.T) {
 	store := &mocks.MockRunStore{GetRunErr: errors.New("lookup failed")}
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 
@@ -2083,7 +2083,7 @@ func TestRunService_Cancel_NoActiveEntryGetRunFailsStillCancels(t *testing.T) {
 func TestRunService_Cancel_StoreErrorReturnedUnchanged(t *testing.T) {
 	wantErr := errors.New("store exploded")
 	store := &mocks.MockRunStore{CancelRunErr: wantErr}
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 
 	err := svc.Cancel(context.Background(), 123, "user:alice")
 	if !errors.Is(err, wantErr) {
@@ -2098,7 +2098,7 @@ func TestRunService_Cancel_CallerContextCancelledWhileWaiting(t *testing.T) {
 
 	store := &mocks.MockRunStore{CreateRunID: 10}
 	runner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), ignoreCtx: true}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = time.Minute
 
 	runID, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
@@ -2124,7 +2124,7 @@ func TestRunService_Cancel_CallerContextCancelledWhileWaiting(t *testing.T) {
 }
 
 func TestRunService_Cancel_NoActiveEntryAndNoStore(t *testing.T) {
-	svc := NewRunService(nil, nil, nil)
+	svc := newTestRunService(nil, nil, nil)
 	if err := svc.Cancel(context.Background(), 1, ""); err == nil {
 		t.Fatal("expected an error when runs are not supported")
 	}
@@ -2239,7 +2239,7 @@ func TestRunService_ActiveRunIDsForProject_TracksConcurrentRuns(t *testing.T) {
 		release1: make(chan struct{}),
 		release2: make(chan struct{}),
 	}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
 
 	id1, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{})
@@ -2308,7 +2308,7 @@ func TestRunService_ActiveRunIDsForProject_TracksSingleTaskRun(t *testing.T) {
 		startedCh: make(chan struct{}),
 		releaseCh: make(chan struct{}),
 	}
-	svc := NewRunService(&mocks.MockRunStore{}, runner, runner)
+	svc := newTestRunService(&mocks.MockRunStore{}, runner, runner)
 
 	doneCh := make(chan struct{})
 	go func() {
@@ -2388,7 +2388,7 @@ func (r *concurrencyBlockRunner) RunTask(context.Context, domain.Project, string
 func TestRunService_Start_ConcurrencyLimit_QueuesBeyondCapacity(t *testing.T) {
 	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: true}}
 	runner := &concurrencyBlockRunner{started: make(chan struct{}, 3), release: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.SetMaxConcurrentRuns(2)
 
 	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
@@ -2436,7 +2436,7 @@ func TestRunService_Start_ConcurrencyLimit_QueuesBeyondCapacity(t *testing.T) {
 func TestRunService_Cancel_QueuedRun_PromotesNextWaiter(t *testing.T) {
 	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: true}}
 	runner := &concurrencyBlockRunner{started: make(chan struct{}, 3), release: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.SetMaxConcurrentRuns(1)
 	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
 
@@ -2495,7 +2495,7 @@ func TestRunService_RunTask_WaitsForConcurrencySlot(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: true}
 	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc := newTestRunService(store, pipelineRunner, taskRunner)
 	svc.SetMaxConcurrentRuns(1)
 
 	_, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
@@ -2536,7 +2536,7 @@ func TestRunService_RunTask_WaitsForConcurrencySlot(t *testing.T) {
 }
 
 func TestRunService_SetMaxConcurrentRuns_ZeroRestoresUnlimited(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	svc.SetMaxConcurrentRuns(1)
 	if !svc.tryAcquireSlot() {
 		t.Fatal("expected the single slot to be free")
@@ -2551,7 +2551,7 @@ func TestRunService_SetMaxConcurrentRuns_ZeroRestoresUnlimited(t *testing.T) {
 }
 
 func TestRunService_MaxConcurrentRuns_ReportsConfiguredCapacity(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	if got := svc.MaxConcurrentRuns(); got != 0 {
 		t.Errorf("MaxConcurrentRuns() = %d, want 0 (unlimited) before any SetMaxConcurrentRuns call", got)
 	}
@@ -2566,7 +2566,7 @@ func TestRunService_MaxConcurrentRuns_ReportsConfiguredCapacity(t *testing.T) {
 }
 
 func TestRunService_WaitForSlot_UnlimitedAlwaysSucceedsImmediately(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	if !svc.waitForSlot(context.Background()) {
 		t.Fatal("waitForSlot on an unlimited service should always succeed")
 	}
@@ -2579,7 +2579,7 @@ func TestRunService_WaitForSlot_UnlimitedAlwaysSucceedsImmediately(t *testing.T)
 // proving the token-received branch releases it back rather than letting the
 // caller proceed on a dead context.
 func TestRunService_WaitForSlot_NeverSucceedsWithAlreadyDoneContext(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for i := 0; i < 200; i++ {
@@ -2594,7 +2594,7 @@ func TestRunService_WaitForSlot_NeverSucceedsWithAlreadyDoneContext(t *testing.T
 }
 
 func TestRunService_ReleaseSlot_UnexpectedOverflowIsNoop(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	svc.SetMaxConcurrentRuns(1)
 	// The single token is already in the channel (never acquired); releasing
 	// again must not block or panic.
@@ -2608,7 +2608,7 @@ func TestRunService_RunTask_CanceledWhileQueued(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: true}
 	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc := newTestRunService(store, pipelineRunner, taskRunner)
 	svc.SetMaxConcurrentRuns(1)
 
 	if _, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
@@ -2654,7 +2654,7 @@ func TestRunService_ApproveManualTask_CanceledWhileQueued(t *testing.T) {
 	store, proj := manualApprovalFixture(runID)
 	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc := newTestRunService(store, pipelineRunner, taskRunner)
 	svc.SetMaxConcurrentRuns(1)
 
 	if _, err := svc.Start(context.Background(), "other", &model.Project{Name: "other", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
@@ -2696,7 +2696,7 @@ func TestRunService_RunTask_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: false}
 	pipelineRunner := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	taskRunner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, pipelineRunner, taskRunner)
+	svc := newTestRunService(store, pipelineRunner, taskRunner)
 	svc.SetMaxConcurrentRuns(1)
 
 	if _, err := svc.Start(context.Background(), "p", &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{}); err != nil {
@@ -2749,7 +2749,7 @@ func TestRunService_RunTask_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
 func TestRunService_Start_LosesQueuedRaceAfterSlotFrees(t *testing.T) {
 	store := &seqIDMockRunStore{MockRunStore: &mocks.MockRunStore{StartQueuedRunResult: false}}
 	runner := &concurrencyBlockRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.SetMaxConcurrentRuns(1)
 	proj := &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
 

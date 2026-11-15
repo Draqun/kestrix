@@ -16,7 +16,7 @@ func TestRunService_EventHub_TaskAndTraceEmissions(t *testing.T) {
 	hub := NewRunEventHub()
 	runStore := &mocks.MockRunStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetEventHub(hub)
 	if svc.EventHub() != hub {
 		t.Fatal("EventHub() mismatch")
@@ -133,7 +133,7 @@ func TestRunService_EventHub_TraceRedactsSecretsBeforeBroadcast(t *testing.T) {
 	hub := NewRunEventHub()
 	runStore := &mocks.MockRunStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetEventHub(hub)
 
 	runID := 11
@@ -182,7 +182,7 @@ func TestRunService_EventHub_TraceRedactsSecretsBeforeBroadcast(t *testing.T) {
 func TestRunService_EventHub_CancelEmission(t *testing.T) {
 	hub := NewRunEventHub()
 	runStore := &mocks.MockRunStore{}
-	svc := NewRunService(runStore, nil, nil)
+	svc := newTestRunService(runStore, nil, nil)
 	svc.SetEventHub(hub)
 
 	runID := 99
@@ -235,7 +235,7 @@ func TestRunService_AppendRemoteJobTrace_DedupRetries(t *testing.T) {
 			1: {ID: 1, RunID: 42, TaskName: "build"},
 		},
 	}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 	svc.SetEventHub(hub)
 
@@ -312,7 +312,7 @@ func TestRunService_ClaimNextJob_EmitsTaskRunningEvent(t *testing.T) {
 			Status:   domain.RemoteJobStatusClaimed,
 		},
 	}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 	svc.SetEventHub(hub)
 
@@ -345,7 +345,7 @@ func TestRunService_ClaimNextJob_Errors(t *testing.T) {
 	pipeline := &mocks.MockPipelineRunner{}
 
 	// Store nil
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	if _, err := svc.ClaimNextJob(1); err == nil {
 		t.Fatal("expected error when remoteJobStore is nil")
 	}
@@ -364,7 +364,7 @@ func TestRunService_AppendRemoteJobTrace_Errors(t *testing.T) {
 	pipeline := &mocks.MockPipelineRunner{}
 
 	// Store nil
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	if _, err := svc.AppendRemoteJobTrace(1, 1, 0, "x", nil); err == nil {
 		t.Fatal("expected error when remoteJobStore is nil")
 	}

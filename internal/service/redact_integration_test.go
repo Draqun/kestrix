@@ -43,7 +43,7 @@ func TestRunService_RedactsSecretFromOutputAndTaskResult(t *testing.T) {
 	runner := &echoingPipelineRunner{taskName: "deploy", output: "deploying with " + secret + filler}
 	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name: "proj", Tasks: []model.Task{{Name: "deploy"}},
@@ -116,7 +116,7 @@ func TestRunService_RunTask_RedactsApplyTaskResultOutputExtra(t *testing.T) {
 	mockRunner := &mocks.MockPipelineRunner{
 		TaskResultList: []domain.TaskResult{{Name: "manual", Status: "passed", Output: "deploying with " + secret}},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual",
 		domain.RunnerOptions{ResolvedSecretValues: []string{secret}})
@@ -155,7 +155,7 @@ func TestRunService_FlushRedactsSecretAtVeryEndOfOutput(t *testing.T) {
 	runner := &echoingPipelineRunner{taskName: "deploy", output: "deploying with " + secret}
 	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	_, err := svc.Start(context.Background(), "proj", &model.Project{
 		Name: "proj", Tasks: []model.Task{{Name: "deploy"}},
