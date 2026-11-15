@@ -122,7 +122,7 @@ func TestResumeRemoteRun_CarriesAncestorsArtifacts(t *testing.T) {
 	}
 
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 
 	// Persist snapshot so resumeRemoteRun does not think it's a single-task re-run
@@ -173,7 +173,7 @@ func TestResumeRemoteRun_ListArtifactsErrorSurfaces(t *testing.T) {
 	}
 
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 
 	if err := remoteJobs.SetRemoteRunSnapshot(1, []byte("source-archive"), nil, nil); err != nil {

@@ -551,6 +551,10 @@ func (s *RunService) SetLocalExecutionPolicy(allowLocal bool, defaultMode string
 	s.defaultMode = defaultMode
 }
 
+// ErrLocalExecutionDisabled identifies an execution attempt rejected because
+// runner.allow_local is false and the resolved execution mode is local.
+var ErrLocalExecutionDisabled = errors.New(domain.LocalExecutionDisabledMessage())
+
 // CheckLocalAllowed fails a run before any source is acquired when it would
 // execute in `local` mode while runner.allow_local is false - see
 // safe-production-execution spec.md "Stored local project does not
@@ -565,7 +569,7 @@ func (s *RunService) CheckLocalAllowed(mode string) error {
 	if domain.ResolveMode(mode, s.defaultMode) != "local" {
 		return nil
 	}
-	return fmt.Errorf("%s", domain.LocalExecutionDisabledMessage())
+	return ErrLocalExecutionDisabled
 }
 
 // NewRunService creates a RunService.
@@ -644,6 +648,9 @@ func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
 func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
+		return 0, err
+	}
 	s.cancelSupersededRuns(ctx, projectName, proj, opts)
 
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
@@ -1164,6 +1171,9 @@ func (s *RunService) StartTask(ctx context.Context, runID int, projectName strin
 	if proj == nil {
 		return false, fmt.Errorf("project not loaded")
 	}
+	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
+		return false, err
+	}
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		// Dispatched synchronously, like Start's own remote branch
 		// (design.md D10): no active/done entry, no concurrency slot, no
@@ -1345,6 +1355,9 @@ func manualTaskContext(run *domain.Run, proj *model.Project, taskName string) (b
 
 // ApproveManualTask validates a waiting manual task and executes it.
 func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
+		return domain.TaskResult{}, err
+	}
 	if s.runStore == nil {
 		return domain.TaskResult{}, fmt.Errorf("runs not supported")
 	}

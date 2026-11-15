@@ -316,6 +316,7 @@ func TestHandleCancelRun_Timeout(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 99, GetRunResult: &domain.Run{ID: 99, ProjectName: "demo"}}
 	runner := &blockingCancelRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
 	svc := service.NewRunService(store, runner, runner)
+	svc.SetLocalExecutionPolicy(true, "local")
 	svc.CancelGrace = time.Millisecond
 	oldBuffer := service.CancelWaitBuffer
 	service.CancelWaitBuffer = 50 * time.Millisecond

@@ -246,6 +246,7 @@ func TestPG_BinarySafe_ServiceRunStart(t *testing.T) {
 	expected := "caf\ufffd" // adjacent invalid 0xe9 and NUL collapse into one U+FFFD
 	runner := &binaryOutputPipelineRunner{output: badText}
 	svc := service.NewRunService(pg, runner, runner)
+	svc.SetLocalExecutionPolicy(true, "local")
 
 	proj := &model.Project{
 		Name:  "proj-bin-svc",

@@ -18,7 +18,7 @@ func TestRemoteRunTelemetry_LastJobCompletion(t *testing.T) {
 	t.Run("passed completion increments passed counter and observes duration", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
 		svc.SetRemoteJobStore(fakeJobs)
 		reg := metrics.NewRegistry()
@@ -68,7 +68,7 @@ func TestRemoteRunTelemetry_LastJobCompletion(t *testing.T) {
 	t.Run("failed completion increments failed counter and observes duration", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
 		svc.SetRemoteJobStore(fakeJobs)
 		reg := metrics.NewRegistry()
@@ -106,7 +106,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		remoteJobs := &mocks.MockRemoteJobStore{
 			CreateRemoteJobErr: errors.New("dispatch rejected"),
 		}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
 		svc.SetRemoteJobStore(fakeJobs)
 		recorder := &fakeRecorder{}
@@ -138,7 +138,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		remoteJobs := &mocks.MockRemoteJobStore{
 			CreateRemoteJobErr: errors.New("dispatch rejected"),
 		}
-		svc := NewRunService(getRunErrStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(getRunErrStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: baseStore}
 		svc.SetRemoteJobStore(fakeJobs)
 		recorder := &fakeRecorder{}
@@ -164,7 +164,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 	t.Run("no triggered nodes records passed metric", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
@@ -192,7 +192,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 	t.Run("workdir archive error records failed metric", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
@@ -222,7 +222,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		remoteJobs := &mocks.MockRemoteJobStore{
 			SetRemoteRunSnapshotErr: errors.New("snapshot write failed"),
 		}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
@@ -254,7 +254,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 			FinishRunCalls: nil,
 		}
 		remoteJobs := &mocks.MockRemoteJobStore{}
-		svc := NewRunService(mockStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(mockStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
@@ -285,7 +285,7 @@ func TestRemoteRunTelemetry_Cancellation(t *testing.T) {
 	t.Run("cancellation records canceled metric exactly once", func(t *testing.T) {
 		runStore := newFakeStatefulRunStore()
 		remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
 		svc.SetRemoteJobStore(fakeJobs)
 		reg := metrics.NewRegistry()
@@ -344,7 +344,7 @@ func TestRemoteRunTelemetry_FinalizeRemoteRun_Coverage(t *testing.T) {
 	// 2. GetRun error
 	rec2 := &fakeRecorder{}
 	mockStoreErr := &mocks.MockRunStore{GetRunErr: errors.New("db error")}
-	svcErr := NewRunService(mockStoreErr, nil, nil)
+	svcErr := newTestRunService(mockStoreErr, nil, nil)
 	svcErr.Metrics = rec2
 	svcErr.finalizeRemoteRun(1)
 	if runs := rec2.snapshot(); len(runs) != 0 {
@@ -354,7 +354,7 @@ func TestRemoteRunTelemetry_FinalizeRemoteRun_Coverage(t *testing.T) {
 	// 3. GetRun returns nil
 	rec3 := &fakeRecorder{}
 	mockStoreNilRun := &mocks.MockRunStore{GetRunResult: nil}
-	svcNilRun := NewRunService(mockStoreNilRun, nil, nil)
+	svcNilRun := newTestRunService(mockStoreNilRun, nil, nil)
 	svcNilRun.Metrics = rec3
 	svcNilRun.finalizeRemoteRun(1)
 	if runs := rec3.snapshot(); len(runs) != 0 {
@@ -364,7 +364,7 @@ func TestRemoteRunTelemetry_FinalizeRemoteRun_Coverage(t *testing.T) {
 	// 4. Non-terminal run status ("running")
 	rec4 := &fakeRecorder{}
 	mockStoreRunning := &mocks.MockRunStore{GetRunResult: &domain.Run{Status: "running"}}
-	svcRunning := NewRunService(mockStoreRunning, nil, nil)
+	svcRunning := newTestRunService(mockStoreRunning, nil, nil)
 	svcRunning.Metrics = rec4
 	svcRunning.finalizeRemoteRun(1)
 	if runs := rec4.snapshot(); len(runs) != 0 {
@@ -377,7 +377,7 @@ func TestRemoteRunTelemetry_FinalizeRemoteRun_Coverage(t *testing.T) {
 	ch := hub.Subscribe(1)
 	defer hub.Unsubscribe(1, ch)
 	mockStoreCanceled := &mocks.MockRunStore{GetRunResult: &domain.Run{Status: "canceled"}}
-	svcCanceled := NewRunService(mockStoreCanceled, nil, nil)
+	svcCanceled := newTestRunService(mockStoreCanceled, nil, nil)
 	svcCanceled.SetEventHub(hub)
 	svcCanceled.Metrics = rec5
 	svcCanceled.finalizeRemoteRun(1)
@@ -404,7 +404,7 @@ func TestRemoteRunTelemetry_FinalizeRemoteRun_Coverage(t *testing.T) {
 			StartedAt:   time.Time{},
 		},
 	}
-	svcZeroTime := NewRunService(mockStoreZeroTime, nil, nil)
+	svcZeroTime := newTestRunService(mockStoreZeroTime, nil, nil)
 	svcZeroTime.Metrics = rec
 	svcZeroTime.finalizeRemoteRun(99)
 
@@ -449,7 +449,7 @@ func TestRemoteRunTelemetry_Interleaving_DispatchFailureAndJobCompletion(t *test
 			}
 		},
 	}
-	svc = NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc = newTestRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: statefulStore}
 	svc.SetRemoteJobStore(fakeJobs)
 	recorder := &fakeRecorder{}
@@ -528,7 +528,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimedRunIDs: []int{runID},
 		}
 
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
@@ -572,7 +572,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimedRunIDs: nil,
 		}
 
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
@@ -619,7 +619,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimedRunIDs: []int{runID1, runID2},
 		}
 
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
@@ -666,7 +666,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimErr:      errors.New("store connection lost mid-sweep"),
 		}
 
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
@@ -702,7 +702,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimedRunIDs: []int{404, 500},
 		}
 
-		svc := NewRunService(errStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(errStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
@@ -730,7 +730,7 @@ func TestRemoteRunTelemetry_ReclaimStaleJobs(t *testing.T) {
 			ReclaimedRunIDs: []int{runID},
 		}
 
-		svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 		svc.SetRemoteJobStore(remoteJobs)
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg

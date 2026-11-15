@@ -1,0 +1,3 @@
+kind: Security
+body: Reject local runner execution at the service layer when runner.allow_local is false
+time: 2026-11-15T20:23:21.894904947+01:00

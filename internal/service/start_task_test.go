@@ -30,14 +30,14 @@ func waitFinish(t *testing.T, ch chan struct{}) {
 }
 
 func TestRunService_StartTask_RejectsNilProject(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, &emptyTaskRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, &emptyTaskRunner{})
 	if _, err := svc.StartTask(context.Background(), 1, "p", nil, "t", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil project")
 	}
 }
 
 func TestRunService_StartTask_RejectsNilTaskRunner(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, nil, nil)
+	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
 	if _, err := svc.StartTask(context.Background(), 1, "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil task runner")
 	}
@@ -46,7 +46,7 @@ func TestRunService_StartTask_RejectsNilTaskRunner(t *testing.T) {
 func TestRunService_StartTask_ReturnsBeforeTaskExecutes(t *testing.T) {
 	store := &mocks.MockRunStore{FinishRunCh: make(chan struct{})}
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 
 	queued, err := svc.StartTask(context.Background(), 5, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestRunService_StartTask_ReturnsBeforeTaskExecutes(t *testing.T) {
 func TestRunService_StartTask_QueuedWhenEverySlotIsBusy(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: true, FinishRunCh: make(chan struct{})}
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 	svc.SetMaxConcurrentRuns(1)
 	if !svc.tryAcquireSlot() {
 		t.Fatal("expected the single slot to be free")
@@ -108,7 +108,7 @@ func TestRunService_StartTask_QueuedWhenEverySlotIsBusy(t *testing.T) {
 func TestRunService_ExecuteStartedTask_Passed(t *testing.T) {
 	store := &mocks.MockRunStore{}
 	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "t", Status: "passed", Output: "ok"}}}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 	untracked := false
 
 	svc.executeStartedTask(context.Background(), func() { untracked = true }, true, 3, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
@@ -131,7 +131,7 @@ func TestRunService_ExecuteStartedTask_Passed(t *testing.T) {
 func TestRunService_ExecuteStartedTask_Failed(t *testing.T) {
 	store := &mocks.MockRunStore{}
 	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "t", Status: "failed", Error: "exit 1"}}}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 
 	svc.executeStartedTask(context.Background(), func() {}, true, 3, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 
@@ -147,7 +147,7 @@ func TestRunService_ExecuteStartedTask_Failed(t *testing.T) {
 // terminal, even though no HTTP handler is left to observe it.
 func TestRunService_ExecuteStartedTask_TaskRunnerErrorLeavesRunTerminal(t *testing.T) {
 	store := &mocks.MockRunStore{}
-	svc := NewRunService(store, nil, &emptyTaskRunner{})
+	svc := newTestRunService(store, nil, &emptyTaskRunner{})
 
 	svc.executeStartedTask(context.Background(), func() {}, true, 4, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 
@@ -163,7 +163,7 @@ func TestRunService_ExecuteStartedTask_TaskRunnerErrorLeavesRunTerminal(t *testi
 func TestRunService_ExecuteStartedTask_CanceledWhileQueued(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: true}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 	svc.SetMaxConcurrentRuns(1)
 	if !svc.tryAcquireSlot() {
 		t.Fatal("expected the single slot to be free")
@@ -199,7 +199,7 @@ func TestRunService_ExecuteStartedTask_CanceledWhileQueued(t *testing.T) {
 func TestRunService_StartTask_CancelWhileQueuedRecordsCanceled(t *testing.T) {
 	store := &mocks.MockRunStore{StartQueuedRunResult: true, GetRunResult: &domain.Run{ID: 12, ProjectName: "p", Status: "canceled"}}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 	rec := &fakeRecorder{}
 	svc.Metrics = rec
 	svc.SetMaxConcurrentRuns(1)
@@ -232,7 +232,7 @@ func TestRunService_StartTask_CancelWhileQueuedRecordsCanceled(t *testing.T) {
 func TestRunService_ExecuteStartedTask_KeepsCanceledRun(t *testing.T) {
 	store := &mocks.MockRunStore{GetRunResult: &domain.Run{ID: 9, Status: "canceled"}}
 	runner := &mocks.MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "t", Status: "failed", Error: "killed"}}}
-	svc := NewRunService(store, nil, runner)
+	svc := newTestRunService(store, nil, runner)
 
 	svc.executeStartedTask(context.Background(), func() {}, true, 9, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 
@@ -245,7 +245,7 @@ func TestRunService_ExecuteStartedTask_KeepsCanceledRun(t *testing.T) {
 // canceled, the same derivation finishRun uses, not passed.
 func TestRunService_FinishStartedTask_CanceledTaskFinishesRunCanceled(t *testing.T) {
 	store := &mocks.MockRunStore{}
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 
 	svc.finishStartedTask(2, domain.TaskResult{Name: "t", Status: "canceled"}, nil, nil)
 
@@ -260,7 +260,7 @@ func TestRunService_FinishStartedTask_CanceledTaskFinishesRunCanceled(t *testing
 func TestRunService_FinishStartedTask_LogsFinishRunError(t *testing.T) {
 	logBuf := captureLog(t)
 	store := &mocks.MockRunStore{FinishRunErr: errors.New("db down: hunter2-long-secret")}
-	svc := NewRunService(store, nil, nil)
+	svc := newTestRunService(store, nil, nil)
 
 	svc.finishStartedTask(2, domain.TaskResult{Name: "t", Status: "passed"}, nil, []string{"hunter2-long-secret"})
 
@@ -274,6 +274,6 @@ func TestRunService_FinishStartedTask_LogsFinishRunError(t *testing.T) {
 }
 
 func TestRunService_FinishStartedTask_NilRunStoreIsNoop(t *testing.T) {
-	svc := NewRunService(nil, nil, nil)
+	svc := newTestRunService(nil, nil, nil)
 	svc.finishStartedTask(2, domain.TaskResult{Name: "t", Status: "passed"}, nil, nil)
 }

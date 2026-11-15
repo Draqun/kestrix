@@ -232,7 +232,7 @@ func TestRunService_Start_RemoteMode_DispatchesEligibleTasksNoInProcessCall(t *t
 	runStore := &mocks.MockRunStore{CreateRunID: 42}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 	cleanedUp := false
 
@@ -272,7 +272,7 @@ func TestRunService_Start_RemoteMode_DependentTaskNotDispatchedYet(t *testing.T)
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 
 	if _, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -295,7 +295,7 @@ func TestRunService_Start_RemoteMode_BypassesConcurrencySlots(t *testing.T) {
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 9}
 	remoteJobs := &mocks.MockRemoteJobStore{}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	svc.SetMaxConcurrentRuns(1)
 	if !svc.tryAcquireSlot() {
@@ -329,7 +329,7 @@ func TestRunService_RunTask_RemoteMode_DispatchesJobReturnsDispatchedTrue(t *tes
 	runStore := &mocks.MockRunStore{}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 	cleanedUp := false
 
@@ -367,7 +367,7 @@ func TestRunService_RunTask_RemoteMode_LocalNonRemoteStillReturnsDispatchedFalse
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
 	runStore := &mocks.MockRunStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 
 	tr, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{})
@@ -385,7 +385,7 @@ func TestRunService_RunTask_RemoteMode_LocalNonRemoteStillReturnsDispatchedFalse
 
 func TestRunService_RunTask_RemoteMode_UnknownTaskErrors(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "missing", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()})
 	if err == nil {
@@ -398,7 +398,7 @@ func TestRunService_RunTask_RemoteMode_UnknownTaskErrors(t *testing.T) {
 
 func TestRunService_RunTask_RemoteMode_ArchiveErrorPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{
 		Mode: "remote", WorkDir: filepath.Join(t.TempDir(), "does-not-exist"),
@@ -413,7 +413,7 @@ func TestRunService_RunTask_RemoteMode_ArchiveErrorPropagates(t *testing.T) {
 
 func TestRunService_RunTask_RemoteMode_CreateRemoteJobErrorPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()})
 	if err == nil {
@@ -428,7 +428,7 @@ func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *te
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
 	runStore := &mocks.MockRunStore{}
 	remoteJobs := &mocks.MockRemoteJobStore{}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
 	queued, err := svc.StartTask(context.Background(), 4, "proj", proj, "t", domain.RunnerOptions{
@@ -450,7 +450,7 @@ func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *te
 
 func TestRunService_StartTask_RemoteMode_DispatchErrorPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
 	if _, err := svc.StartTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()}); err == nil {
 		t.Fatal("expected the dispatch error to propagate")
@@ -465,7 +465,7 @@ func TestRunService_ApproveManualTask_RemoteMode_DispatchesInsteadOfExecuting(t 
 	runStore := &mocks.MockRunStore{GetRunResult: run}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 
 	tr, err := svc.ApproveManualTask(context.Background(), 5, "proj", proj, "deploy", domain.RunnerOptions{
@@ -491,7 +491,7 @@ func TestRunService_ApproveManualTask_RemoteMode_DispatchesInsteadOfExecuting(t 
 // ── ActiveRunIDsForProject remote-job union (tasks.md 2.4) ─────────
 
 func TestRunService_ActiveRunIDsForProject_UnionsRemoteJobs(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{OutstandingJobRunIDsResult: []int{11, 12}})
 	ids, err := svc.ActiveRunIDsForProject("proj")
 	if err != nil {
@@ -503,7 +503,7 @@ func TestRunService_ActiveRunIDsForProject_UnionsRemoteJobs(t *testing.T) {
 }
 
 func TestRunService_ActiveRunIDsForProject_RemoteJobStoreErrorFailsClosed(t *testing.T) {
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{OutstandingJobRunIDsErr: context.DeadlineExceeded})
 	ids, err := svc.ActiveRunIDsForProject("proj")
 	if err == nil {
@@ -519,7 +519,7 @@ func TestRunService_ActiveRunIDsForProject_NoDuplicateWhenBothSourcesAgree(t *te
 	runStore := &mocks.MockRunStore{CreateRunID: 20}
 	remoteJobs := &mocks.MockRemoteJobStore{OutstandingJobRunIDsResult: []int{20}}
 	pipeline := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	svc.SetRemoteJobStore(remoteJobs)
 	if _, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -540,7 +540,7 @@ func TestRunService_Start_RemoteMode_RegistersNoActiveEntry(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	remoteJobs := &mocks.MockRemoteJobStore{}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
 	runID, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()})
@@ -557,7 +557,7 @@ func TestRunService_Start_RemoteMode_InvalidTriggerExpressionErrors(t *testing.T
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{
 		{Name: "a", Trigger: "repo.(unclosed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
-	svc := NewRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	if _, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{Mode: "remote"}); err == nil {
 		t.Fatal("expected an error for an unparseable trigger expression")
@@ -566,7 +566,7 @@ func TestRunService_Start_RemoteMode_InvalidTriggerExpressionErrors(t *testing.T
 
 func TestRunService_Start_RemoteMode_CreateRunErrorPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
-	svc := NewRunService(&mocks.MockRunStore{CreateRunErr: context.DeadlineExceeded}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(&mocks.MockRunStore{CreateRunErr: context.DeadlineExceeded}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	if _, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{Mode: "remote"}); err == nil {
 		t.Fatal("expected CreateRun's error to propagate")
@@ -579,7 +579,7 @@ func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesAndFinishesRunFailed(
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 7}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: filepath.Join(t.TempDir(), "does-not-exist-"+secret),
@@ -614,7 +614,7 @@ func TestRunService_Start_RemoteMode_NothingTriggeredFinishRunFails(t *testing.T
 	}}
 	expectedErr := errors.New("finish error")
 	runStore := &mocks.MockRunStore{CreateRunID: 10, FinishRunErr: expectedErr}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
@@ -633,7 +633,7 @@ func TestRunService_Start_RemoteMode_AppendSkippedTaskFailsMarksRunFailed(t *tes
 		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 11, AppendTaskErr: fmt.Errorf("db disk full %s", secret)}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
@@ -678,7 +678,7 @@ func TestRunService_Start_RemoteMode_AppendSkippedTaskFails_FinishRunErrorLogged
 		AppendTaskErr: errors.New("append failed"),
 		FinishRunErr:  errors.New("db down"),
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
@@ -703,7 +703,7 @@ func TestRunService_Start_RemoteMode_ResolveError(t *testing.T) {
 		},
 	}
 	runStore := &mocks.MockRunStore{CreateRunID: 20}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "bad-proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
@@ -731,7 +731,7 @@ func TestRunService_Start_RemoteMode_AllTasksTriggerSkippedSuccess(t *testing.T)
 		},
 	}
 	runStore := &mocks.MockRunStore{CreateRunID: 25}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(),
@@ -775,7 +775,7 @@ func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotFailsRun(t *testing.T) 
 	runStore := &mocks.MockRunStore{CreateRunID: 15}
 	snapshotErr := errors.New("snapshot db error: " + secret)
 	remoteJobs := &mocks.MockRemoteJobStore{SetRemoteRunSnapshotErr: snapshotErr}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -811,7 +811,7 @@ func TestRunService_Start_RemoteMode_CreateRemoteJobFailsFirstJobGivesFailedRunA
 	}}
 	runStore := newFakeStatefulRunStore()
 	remoteJobs := &mocks.MockRemoteJobStore{CreateRemoteJobErr: errors.New("job queue down: " + secret)}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -860,7 +860,7 @@ func TestRunService_Start_RemoteMode_CreateRemoteJobFailsSecondJobWhileFirstPend
 		CompleteJobOK:         true,
 		CreateRemoteJobErrFor: map[string]error{"b": errors.New("b failed to dispatch")},
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	fakeJobs := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
 	svc.SetRemoteJobStore(fakeJobs)
 
@@ -894,7 +894,7 @@ func TestRunService_Start_RemoteMode_NoRemoteJobStoreFallsThroughToInProcess(t *
 	finishCh := make(chan struct{})
 	runStore := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	pipeline := &mocks.MockPipelineRunner{}
-	svc := NewRunService(runStore, pipeline, pipeline)
+	svc := newTestRunService(runStore, pipeline, pipeline)
 	// No SetRemoteJobStore call: Mode="remote" must not panic or silently
 	// no-op - it falls through to the ordinary in-process path, which will
 	// itself execute (and, since PipelineExecutor has no idea what "remote"
@@ -1124,7 +1124,7 @@ func TestRunService_RemoteMode_SecretValuesReachEveryJob(t *testing.T) {
 	secrets := []string{"S3cr3t-Remote-Value"}
 	runStore := &mocks.MockRunStore{CreateRunID: 42}
 	remoteJobs := &mocks.MockRemoteJobStore{}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
 	if _, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -1571,7 +1571,7 @@ func TestRunService_StartRemote_GateAppendedBeforeFirstCreateRemoteJob(t *testin
 		events:             &events,
 	}
 
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(jobStore)
 
 	runID, err := svc.Start(context.Background(), "test-order-proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -1619,7 +1619,7 @@ func TestRunService_StartRemote_PersistsInitialSourcesAtCreation(t *testing.T) {
 	store := &mocks.MockRunStore{CreateRunID: 200}
 	jobStore := &mocks.MockRemoteJobStore{}
 
-	svc := NewRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(store, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(jobStore)
 
 	initialSources := []domain.AcquiredSource{{RepoName: "app", URL: "https://example.com"}}
@@ -1667,7 +1667,7 @@ func TestResumeRemoteRun_RecordsUnrecordedGate(t *testing.T) {
 	jobStore := &mocks.MockRemoteJobStore{}
 	_ = jobStore.SetRemoteRunSnapshot(456, []byte("tar-bytes"), nil, nil)
 
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(jobStore)
 
 	decided, err := svc.resumeRemoteRun(456)

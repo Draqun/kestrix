@@ -172,7 +172,7 @@ func (s *cipStatefulRunStore) GetRun(id int) (*domain.Run, error) {
 func TestRunService_Start_CancelInProgress_CancelsInFlightRunOnSameBranch(t *testing.T) {
 	store := newCipStatefulRunStore()
 	runner := newCipBlockRunner()
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
 	proj := &model.Project{
@@ -236,7 +236,7 @@ func TestRunService_Start_CancelInProgress_CancelsInFlightRunOnSameBranch(t *tes
 func TestRunService_Start_CancelInProgress_CancelsQueuedRunOnSameBranch(t *testing.T) {
 	store := newCipStatefulRunStore()
 	runner := newCipBlockRunner()
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.SetMaxConcurrentRuns(1)
 	svc.CancelGrace = 50 * time.Millisecond
 
@@ -314,7 +314,7 @@ func TestRunService_Start_CancelInProgress_CancelsQueuedRunOnSameBranch(t *testi
 func TestRunService_Start_CancelInProgress_LeavesDifferentBranchesUntouched(t *testing.T) {
 	store := newCipStatefulRunStore()
 	runner := newCipBlockRunner()
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
 	proj := &model.Project{
@@ -361,7 +361,7 @@ func TestRunService_Start_CancelInProgress_LeavesDifferentBranchesUntouched(t *t
 func TestRunService_Start_CancelInProgress_DisabledLeavesEarlierRunsRunning(t *testing.T) {
 	store := newCipStatefulRunStore()
 	runner := newCipBlockRunner()
-	svc := NewRunService(store, runner, runner)
+	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
 	proj := &model.Project{
@@ -411,7 +411,7 @@ func TestRunService_Start_CancelInProgress_RemoteMode(t *testing.T) {
 	// Simulate an active run 40 for project on "feat/remote"
 	mockRun.FindActiveRunsByRefResult = []int{40}
 
-	svc := NewRunService(mockRun, nil, nil)
+	svc := newTestRunService(mockRun, nil, nil)
 	svc.remoteJobStore = &mockRun.MockRemoteJobStore
 
 	proj := &model.Project{
@@ -467,7 +467,7 @@ func TestRunService_Start_CancelInProgress_FindActiveRunsErrorLogged(t *testing.
 		FindActiveRunsByRefErr: fmt.Errorf("db connection down"),
 	}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	proj := &model.Project{
 		Name:             "demo",
@@ -497,7 +497,7 @@ func TestRunService_Start_CancelInProgress_CancelErrorLogged(t *testing.T) {
 		CancelRunErr:              fmt.Errorf("cannot cancel"),
 	}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	proj := &model.Project{
 		Name:             "demo",
@@ -527,7 +527,7 @@ func TestRunService_Start_PersistsInitialSourcesAtCreation(t *testing.T) {
 		FinishRunCh: finishCh,
 	}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	proj := &model.Project{
 		Name:             "demo",
@@ -563,7 +563,7 @@ func TestRunService_Start_CancelInProgress_NoPrimarySourceRefIsNoop(t *testing.T
 	finishCh := make(chan struct{})
 	mockRun := &mocks.MockRunStore{CreateRunID: 58, FinishRunCh: finishCh}
 	runner := &mocks.MockPipelineRunner{}
-	svc := NewRunService(mockRun, runner, runner)
+	svc := newTestRunService(mockRun, runner, runner)
 
 	proj := &model.Project{
 		Name:             "demo",

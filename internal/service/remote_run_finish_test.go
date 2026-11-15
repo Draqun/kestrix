@@ -27,7 +27,7 @@ func buildThenDeploy() *model.Project {
 func TestRunService_CompleteRemoteJob_RunFinishesOnlyAfterItsDependentsAreDone(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 
 	runID, err := svc.Start(context.Background(), "proj", buildThenDeploy(), []string{"app"}, domain.RunnerOptions{
@@ -74,7 +74,7 @@ func TestRunService_CompleteRemoteJob_SkipDoesNotFinishTheRunBeforeTheDueTaskIsD
 	}}
 	runStore := newFakeStatefulRunStore()
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 
 	runID, err := svc.Start(context.Background(), "proj", proj, []string{"app"}, domain.RunnerOptions{
@@ -143,7 +143,7 @@ func TestResumeRemoteRun_CanceledRunDispatchesNothing(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
 	remoteJobs := &mocks.MockRemoteJobStore{Jobs: map[int]*domain.RemoteJob{}, CompleteJobOK: true}
 	fake := &fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(fake)
 
 	runID, err := svc.Start(context.Background(), "proj", buildThenDeploy(), []string{"app"}, domain.RunnerOptions{
@@ -183,7 +183,7 @@ func TestResumeRemoteRun_DispatchFailureFailsTheTaskAndTheRun(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	remoteJobs.CreateRemoteJobErr = fmt.Errorf("disk full")
@@ -242,7 +242,7 @@ func TestResumeRemoteRun_DispatchFailureKeepsTheRestOfTheBatch(t *testing.T) {
 		CompleteJobOK:         true,
 		CreateRemoteJobErrFor: map[string]error{"deploy": fmt.Errorf("disk full")},
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 
@@ -299,7 +299,7 @@ func TestResumeRemoteRun_PendingRecordFailureFailsTheTask(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	runStore.appendErrForStatus = "pending"
@@ -341,7 +341,7 @@ func TestResumeRemoteRun_PendingAndFailedRecordErrorsReportBoth(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	runStore.MockRunStore.AppendTaskErr = fmt.Errorf("write failed")
@@ -373,7 +373,7 @@ func TestResumeRemoteRun_BlockedDependentRecordFailureIsReported(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	remoteJobs.CreateRemoteJobErr = fmt.Errorf("disk full")
@@ -399,7 +399,7 @@ func TestResumeRemoteRun_DispatchFailureAndFinishFailureReportBoth(t *testing.T)
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	remoteJobs.CreateRemoteJobErr = fmt.Errorf("disk full")
@@ -426,7 +426,7 @@ func TestResumeRemoteRun_DispatchFailureAndFailedRecordReportBoth(t *testing.T) 
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	remoteJobs.CreateRemoteJobErr = fmt.Errorf("disk full")
@@ -458,7 +458,7 @@ func TestResumeRemoteRun_SnapshotErrorLeavesTheRunRunning(t *testing.T) {
 		CompleteJobOK:           true,
 		GetRemoteRunSnapshotErr: fmt.Errorf("read failed"),
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 
 	if _, err := svc.CompleteRemoteJob(1, 1, "passed", "", "", nil); err == nil {
@@ -477,7 +477,7 @@ func TestRunService_CompleteRemoteJob_FinishRunIfDoneErrorPropagates(t *testing.
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: 9, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 	runStore.MockRunStore.FinishRunIfDoneErr = fmt.Errorf("connection reset")
 
@@ -504,7 +504,7 @@ func TestRunService_CompleteRemoteJob_FinishingIsRetried(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	runStore.MockRunStore.FinishRunIfDoneErr = fmt.Errorf("connection reset")
 	runStore.finishTransient = true
@@ -535,7 +535,7 @@ func TestResumeRemoteRun_AnAlreadyDispatchedTaskIsNotFailed(t *testing.T) {
 		Jobs:          map[int]*domain.RemoteJob{1: {ID: 1, RunID: runID, TaskName: "build"}},
 		CompleteJobOK: true,
 	}
-	svc := NewRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&fakeRemoteJobStore{MockRemoteJobStore: remoteJobs, runStore: runStore})
 	seedSnapshot(t, remoteJobs, runID)
 	remoteJobs.CreateRemoteJobErrFor = map[string]error{"deploy": domain.ErrRemoteJobExists}

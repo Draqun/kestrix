@@ -30,7 +30,7 @@ func TestRunService_FinishRun_LogsFailedWriteAndReleasesSlot(t *testing.T) {
 			{Name: "build", Status: "passed"},
 		},
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 	svc.SetMaxConcurrentRuns(1)
 
 	runID, err := svc.Start(context.Background(), "test-proj", &model.Project{
@@ -105,7 +105,7 @@ func TestRunService_OnTaskComplete_LogsFailedAppendTaskResult(t *testing.T) {
 		taskName: "build",
 		output:   "build log",
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.Start(context.Background(), "test-proj", &model.Project{
 		Name:  "test-proj",
@@ -154,7 +154,7 @@ func TestRunService_OnTaskComplete_LogsFailedFlushRunOutput(t *testing.T) {
 		taskName: "build",
 		output:   "build log",
 	}
-	svc := NewRunService(mockRun, mockRunner, mockRunner)
+	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
 	_, err := svc.Start(context.Background(), "test-proj", &model.Project{
 		Name:  "test-proj",
