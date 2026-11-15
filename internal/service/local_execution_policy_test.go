@@ -146,4 +146,37 @@ func TestRunService_ServiceLevelLocalRunnerGuard(t *testing.T) {
 			t.Fatalf("expected no task runner calls, got: %d", len(taskRunner.TaskRunCalls))
 		}
 	})
+
+	t.Run("RunTask returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {
+		mockStore := &mocks.MockRunStore{}
+		taskRunner := &mocks.MockPipelineRunner{}
+		s := NewRunService(mockStore, taskRunner, taskRunner)
+		s.SetLocalExecutionPolicy(false, "local")
+
+		sourcesAcquired := false
+		opts := domain.RunnerOptions{
+			Mode: "local",
+			OnSourcesAcquired: func([]domain.AcquiredSource) error {
+				sourcesAcquired = true
+				return nil
+			},
+		}
+
+		tr, dispatched, err := s.RunTask(context.Background(), 1, "test-proj", proj, "test-task", opts)
+		if !errors.Is(err, ErrLocalExecutionDisabled) {
+			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
+		}
+		if dispatched {
+			t.Fatal("expected dispatched to be false")
+		}
+		if tr.Status != "" {
+			t.Fatalf("expected empty task result, got: %+v", tr)
+		}
+		if sourcesAcquired {
+			t.Fatal("expected no sources to be acquired")
+		}
+		if len(taskRunner.TaskRunCalls) != 0 {
+			t.Fatalf("expected no task runner calls, got: %d", len(taskRunner.TaskRunCalls))
+		}
+	})
 }
