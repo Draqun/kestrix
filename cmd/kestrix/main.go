@@ -212,6 +212,7 @@ func buildServeConfig(cfg *config.Config, env *config.Environment, staticDir, me
 			Enabled: cfg.Metrics.Enabled,
 			Token:   cfg.Metrics.Token,
 		},
+		CORSAllowedOrigins: cfg.HTTP.CORSAllowedOrigins,
 	}
 }
 

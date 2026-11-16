@@ -1558,3 +1558,55 @@ func TestRunnerConfigValidateAllowLocal(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyEnvironmentHTTPCORSAllowedOrigins(t *testing.T) {
+	t.Run("omitted in file, filled by env", func(t *testing.T) {
+		cfg := DefaultConfig()
+		env := LoadEnvironment([]string{
+			"KESTRIX_HTTP_CORS_ALLOWED_ORIGINS=https://app.kestrix.io,https://admin.kestrix.io",
+		})
+		if err := cfg.ApplyEnvironment(env); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"https://app.kestrix.io", "https://admin.kestrix.io"}
+		if !reflect.DeepEqual(cfg.HTTP.CORSAllowedOrigins, want) {
+			t.Fatalf("CORSAllowedOrigins = %#v, want %#v", cfg.HTTP.CORSAllowedOrigins, want)
+		}
+		for _, line := range cfg.SourceReport() {
+			if strings.HasPrefix(line, KeyHTTPCORSAllowedOrigins) {
+				if line != KeyHTTPCORSAllowedOrigins+" source=env" {
+					t.Fatalf("got %q, want source=env", line)
+				}
+			}
+		}
+	})
+
+	t.Run("explicit in file wins over env", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		yamlContent := "http:\n  cors_allowed_origins:\n    - https://file.example.test\n"
+		if err := os.WriteFile(path, []byte(yamlContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := LoadEnvironment([]string{
+			"KESTRIX_HTTP_CORS_ALLOWED_ORIGINS=https://env.example.test",
+		})
+		if err := cfg.ApplyEnvironment(env); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"https://file.example.test"}
+		if !reflect.DeepEqual(cfg.HTTP.CORSAllowedOrigins, want) {
+			t.Fatalf("CORSAllowedOrigins = %#v, want %#v", cfg.HTTP.CORSAllowedOrigins, want)
+		}
+		for _, line := range cfg.SourceReport() {
+			if strings.HasPrefix(line, KeyHTTPCORSAllowedOrigins) {
+				if line != KeyHTTPCORSAllowedOrigins+" source=file" {
+					t.Fatalf("got %q, want source=file", line)
+				}
+			}
+		}
+	})
+}

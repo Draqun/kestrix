@@ -105,6 +105,9 @@ type Config struct {
 	// zero means the default (50 MiB). See remote-task-artifacts design D3.
 	RunnerArtifactMaxBytes int64
 	Metrics                MetricsConfig
+	// CORSAllowedOrigins specifies origins allowed to make cross-origin
+	// requests to /api/* routes. Empty means CORS is disabled.
+	CORSAllowedOrigins []string
 }
 
 // MetricsConfig controls the GET /metrics endpoint; see observability
@@ -597,6 +600,7 @@ func (s *Server) buildRouter() chi.Router {
 	// required on API routes": a route added to neither is unreachable,
 	// never accidentally open.
 	r.Route("/api", func(r chi.Router) {
+		r.Use(corsMiddleware(s.cfg.CORSAllowedOrigins))
 		r.Use(maxBody(s.maxBodyBytes()))
 		r.Group(func(r chi.Router) {
 			r.Get("/health", s.handleHealth)

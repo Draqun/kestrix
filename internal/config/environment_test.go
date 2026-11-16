@@ -707,3 +707,21 @@ func TestLoadEnvironmentRunnerJobMaxReclaims(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadEnvironmentCORSAllowedOrigins(t *testing.T) {
+	t.Run("default empty", func(t *testing.T) {
+		env := LoadEnvironment(nil)
+		if len(env.CORSAllowedOrigins) != 0 {
+			t.Fatalf("default = %#v, want empty", env.CORSAllowedOrigins)
+		}
+	})
+	t.Run("single and multiple with whitespace", func(t *testing.T) {
+		env := LoadEnvironment([]string{
+			"KESTRIX_HTTP_CORS_ALLOWED_ORIGINS= https://app.kestrix.io , http://localhost:3000, ,  ",
+		})
+		want := []string{"https://app.kestrix.io", "http://localhost:3000"}
+		if !reflect.DeepEqual(env.CORSAllowedOrigins, want) {
+			t.Fatalf("CORSAllowedOrigins = %#v, want %#v", env.CORSAllowedOrigins, want)
+		}
+	})
+}

@@ -221,6 +221,15 @@ func precedenceSettings() []precedenceSetting {
 			wantFile: "file-scrape-token", wantEnv: "env-scrape-token", wantFlag: "file-scrape-token",
 			get: func(c web.Config) string { return c.Metrics.Token },
 		},
+		{
+			name: config.KeyHTTPCORSAllowedOrigins, fileYAML: "http:\n  cors_allowed_origins:\n    - https://file.example.test\n",
+			envKV:    "KESTRIX_HTTP_CORS_ALLOWED_ORIGINS=https://env.example.test",
+			flag:     nil,
+			wantFile: "https://file.example.test", wantEnv: "https://env.example.test", wantFlag: "https://file.example.test",
+			get: func(c web.Config) string {
+				return strings.Join(c.CORSAllowedOrigins, ",")
+			},
+		},
 	}
 }
 
@@ -428,6 +437,7 @@ func TestPrecedenceCompleteness(t *testing.T) {
 		"RunnerMaxOutputBytes": config.KeyRunnerMaxOutputBytes,
 		"RunnerExecutionMode":  config.KeyRunnerMode, "RunnerAllowLocal": config.KeyRunnerAllowLocal,
 		"MetricsEnabled": config.KeyMetricsEnabled, "MetricsToken": config.KeyMetricsToken,
+		"CORSAllowedOrigins": config.KeyHTTPCORSAllowedOrigins,
 	}
 
 	var missing []string
