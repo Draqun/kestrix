@@ -1,0 +1,3 @@
+kind: Added
+body: Add configurable CORS support for API routes via KESTRIX_HTTP_CORS_ALLOWED_ORIGINS
+time: 2026-11-16T19:52:11.538183769+01:00

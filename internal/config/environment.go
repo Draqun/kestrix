@@ -149,6 +149,9 @@ type Environment struct {
 	MetricsToken   string
 	LogLevel       string
 
+	// CORSAllowedOrigins backs HTTP.CORSAllowedOrigins (KESTRIX_HTTP_CORS_ALLOWED_ORIGINS)
+	CORSAllowedOrigins []string
+
 	values        map[string]string
 	originalEnvs  []string
 	validationErr error
@@ -543,6 +546,16 @@ func LoadEnvironment(environ []string) *Environment {
 		logLevel = raw
 	}
 
+	var corsAllowedOrigins []string
+	if raw := values[Prefix+"HTTP_CORS_ALLOWED_ORIGINS"]; raw != "" {
+		for _, origin := range strings.Split(raw, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin != "" {
+				corsAllowedOrigins = append(corsAllowedOrigins, origin)
+			}
+		}
+	}
+
 	return &Environment{
 		ListenAddr:            values[Prefix+"ADDR"],
 		PipelineDir:           values[Prefix+"DIR"],
@@ -597,6 +610,7 @@ func LoadEnvironment(environ []string) *Environment {
 		MetricsEnabled:              metricsEnabled,
 		MetricsToken:                values[Prefix+"METRICS_TOKEN"],
 		LogLevel:                    logLevel,
+		CORSAllowedOrigins:          corsAllowedOrigins,
 		values:                      values,
 		originalEnvs:                normalized,
 		validationErr:               validationErr,

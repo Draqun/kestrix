@@ -41,6 +41,7 @@ type Config struct {
 	SourceCache SourceCacheConfig `yaml:"source_cache"`
 	Metrics     MetricsConfig     `yaml:"metrics"`
 	Logging     LoggingConfig     `yaml:"logging"`
+	HTTP        HTTPConfig        `yaml:"http"`
 
 	// presence records which multi-form settings (multiFormSettingKeys) the
 	// config file explicitly set, even to an empty/zero value. Only Load
@@ -95,6 +96,7 @@ const (
 	KeyMetricsEnabled          = "metrics.enabled"
 	KeyMetricsToken            = "metrics.token"
 	KeyLoggingLevel            = "logging.level"
+	KeyHTTPCORSAllowedOrigins  = "http.cors_allowed_origins"
 )
 
 // multiFormSettingKeys lists every setting with more than one configuration
@@ -110,6 +112,7 @@ var multiFormSettingKeys = []string{
 	KeyRunnerMaxConcurrentRuns, KeyRunHistoryLimit, KeyRunnerMaxOutputBytes,
 	KeyRunnerMode, KeyRunnerAllowLocal,
 	KeyMetricsEnabled, KeyMetricsToken, KeyLoggingLevel,
+	KeyHTTPCORSAllowedOrigins,
 }
 
 // SourceReport names which source won for each multi-form setting without
@@ -274,6 +277,11 @@ type MetricsConfig struct {
 // spec.md. Level must be one of debug, info, warn, error.
 type LoggingConfig struct {
 	Level string `yaml:"level"`
+}
+
+// HTTPConfig controls HTTP server settings such as CORS.
+type HTTPConfig struct {
+	CORSAllowedOrigins []string `yaml:"cors_allowed_origins"`
 }
 
 // DefaultLogLevel is the logging.level applied when neither the config file
@@ -472,6 +480,9 @@ func Load(path string) (*Config, error) {
 		Logging *struct {
 			Level *string `yaml:"level"`
 		} `yaml:"logging"`
+		HTTP *struct {
+			CORSAllowedOrigins *[]string `yaml:"cors_allowed_origins"`
+		} `yaml:"http"`
 	}
 	// Presence tracks only multi-form keys; other known keys (enabled,
 	// mode, default_branch siblings) are ignored here, so this decode
@@ -526,6 +537,9 @@ func Load(path string) (*Config, error) {
 	}
 	if explicit.Logging != nil {
 		markFile(KeyLoggingLevel, explicit.Logging.Level != nil)
+	}
+	if explicit.HTTP != nil {
+		markFile(KeyHTTPCORSAllowedOrigins, explicit.HTTP.CORSAllowedOrigins != nil)
 	}
 	cfg.normalizeWebhookHistoryLimit()
 
@@ -687,6 +701,10 @@ func (c *Config) ApplyEnvironment(env *Environment) error {
 	if !c.isSet(KeyLoggingLevel) {
 		c.Logging.Level = env.LogLevel
 		c.setSource(KeyLoggingLevel, "env")
+	}
+	if !c.isSet(KeyHTTPCORSAllowedOrigins) && len(env.CORSAllowedOrigins) > 0 {
+		c.HTTP.CORSAllowedOrigins = env.CORSAllowedOrigins
+		c.setSource(KeyHTTPCORSAllowedOrigins, "env")
 	}
 	c.normalizeWebhookHistoryLimit()
 	if err := c.validateRunnerBounds(); err != nil {
