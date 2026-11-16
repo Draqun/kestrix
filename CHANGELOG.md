@@ -3,6 +3,12 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.9.2] - 2026-11-16
+### Fixed
+- Support cross-run manual gate approval when dependencies passed in prior executions on the same branch
+### Security
+- Reject local runner execution at the service layer when runner.allow_local is false
+
 ## [v0.9.1] - 2026-11-07
 ### Fixed
 - Fix missing Prometheus run completion telemetry (kestrix_runs_total and kestrix_run_duration_seconds) for remote runs and early dispatch aborts (excluding background stale job reclaim).
