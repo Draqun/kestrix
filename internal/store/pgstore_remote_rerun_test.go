@@ -25,12 +25,12 @@ func TestPG_SingleTaskRerun_CompletionDispatchesNothingElse(t *testing.T) {
 		{Name: "deploy", Trigger: "!repo.docs.changed", DependsOn: []string{"build"}, Execute: spec},
 	}}
 	mustUpsert(t, pg, "rerun-proj", "")
-	runID := mustCreateRun(t, pg, "rerun-proj", proj)
 	svc := service.NewRunService(pg, nil, nil)
 	svc.SetRemoteJobStore(pg)
 
 	opts := domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()}
-	if _, err := svc.StartTask(context.Background(), runID, "rerun-proj", proj, "build", opts); err != nil {
+	runID, _, err := svc.StartTask(context.Background(), "rerun-proj", proj, "build", opts)
+	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	runnerID := mustCreateRunner(t, pg, "rerun-runner")

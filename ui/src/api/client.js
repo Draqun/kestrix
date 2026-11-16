@@ -274,15 +274,18 @@ export async function runProject(name, changed = [], includeManual = false) {
   return data;
 }
 
-export async function runTask(name, task) {
+export async function runTask(name, task, fromRunID) {
+  const query = fromRunID ? `?from_run_id=${encodeURIComponent(fromRunID)}` : '';
   const res = await apiFetch(
-    `${API_BASE}/api/projects/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/run`,
+    `${API_BASE}/api/projects/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/run${query}`,
     { method: 'POST' },
   );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Re-run failed: ${res.statusText}`);
   return data;
 }
+
+export const rerunTask = runTask;
 
 export async function getRun(name, runID) {
   const res = await apiFetch(`${API_BASE}/api/projects/${encodeURIComponent(name)}/runs/${runID}`);

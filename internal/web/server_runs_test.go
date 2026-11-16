@@ -734,7 +734,7 @@ func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
 	srv.runService.SetMaxConcurrentRuns(1)
 
 	// Occupy the only slot with another run whose task blocks.
-	if _, err := srv.runService.StartTask(context.Background(), 1, "demo", &model.Project{Name: "demo"}, "test", domain.RunnerOptions{SourcesPrepared: true}); err != nil {
+	if _, _, err := srv.runService.StartTask(context.Background(), "demo", &model.Project{Name: "demo"}, "test", domain.RunnerOptions{SourcesPrepared: true}); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	select {
@@ -859,6 +859,261 @@ func TestHandleRunTask_SecretResolutionError(t *testing.T) {
 	if len(runs) != 1 || runs[0].status != "failed" || runs[0].project != "demo" {
 		t.Fatalf("recorded runs = %+v, want exactly one failed/demo entry", runs)
 	}
+}
+
+func TestHandleRunTask_FromRunID_Validation(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	_ = os.MkdirAll(pipelineDir, 0o755)
+	_ = os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo ok"
+    }
+  }
+}`), 0o644)
+
+	store := &mocks.MockProjectStore{
+		Projects: map[string]*domain.ProjectConfig{
+			"demo": {Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main", PipelineDir: "ci", PipelineFile: "pipeline.tf"},
+		},
+	}
+	mock := &mocks.MockRunStore{CreateRunID: 1}
+	srv := setupRunServer(t, store, mock)
+	srv.sourceSessions = &testSourceSessions{}
+	srv.runService = service.NewRunService(mock, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	srv.runService.SetLocalExecutionPolicy(true, "local")
+
+	// Invalid query strings
+	for _, badQuery := range []string{"abc", "0", "-5"} {
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id="+badQuery, nil), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("bad query %q: status = %d, want 400", badQuery, w.Code)
+		}
+	}
+
+	// Invalid JSON bodies
+	for _, badBody := range []string{`{"from_run_id": 0}`, `{"from_run_id": -2}`} {
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(badBody)), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("bad body %q: status = %d, want 400", badBody, w.Code)
+		}
+	}
+
+	// Malformed JSON bodies
+	for _, malformed := range []string{`{"from_run_id": "abc"}`, `{"from_run_id":`, `{invalid`} {
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(malformed)), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("malformed %q: status = %d, want 400", malformed, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "invalid request body") {
+			t.Fatalf("malformed %q: body = %s, want invalid request body", malformed, w.Body.String())
+		}
+	}
+
+	// Malformed with application/json header
+	{
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader("not json"))
+		req.Header.Set("Content-Type", "application/json")
+		r := runCtx(req, "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("content-type json with non-json: status = %d, want 400", w.Code)
+		}
+	}
+}
+
+func TestHandleRunTask_FromRunID_LookupErrors(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	_ = os.MkdirAll(pipelineDir, 0o755)
+	_ = os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo ok"
+    }
+  }
+}`), 0o644)
+
+	store := &mocks.MockProjectStore{
+		Projects: map[string]*domain.ProjectConfig{
+			"demo": {Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main", PipelineDir: "ci", PipelineFile: "pipeline.tf"},
+		},
+	}
+	mock := &mocks.MockRunStore{CreateRunID: 1}
+	srv := setupRunServer(t, store, mock)
+	srv.sourceSessions = &testSourceSessions{}
+	srv.runService = service.NewRunService(mock, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	srv.runService.SetLocalExecutionPolicy(true, "local")
+
+	// Nil runStore
+	srvNoStore := setupRunServer(t, store, nil)
+	srvNoStore.runStore = nil
+	srvNoStore.runService = srv.runService
+	w := httptest.NewRecorder()
+	r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=10", nil), "name", "demo", "task", "test")
+	srvNoStore.handleRunTask(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("nil runStore: status = %d, want 500", w.Code)
+	}
+
+	// Run not found
+	w = httptest.NewRecorder()
+	r = runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=999", nil), "name", "demo", "task", "test")
+	srv.handleRunTask(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("not found: status = %d, want 404", w.Code)
+	}
+
+	// Project mismatch
+	mock.GetRunResult = &domain.Run{ID: 10, ProjectName: "other"}
+	w = httptest.NewRecorder()
+	r = runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=10", nil), "name", "demo", "task", "test")
+	srv.handleRunTask(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("project mismatch: status = %d, want 404", w.Code)
+	}
+
+	// Empty sources
+	mock.GetRunResult = &domain.Run{ID: 10, ProjectName: "demo", Sources: nil}
+	w = httptest.NewRecorder()
+	r = runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=10", nil), "name", "demo", "task", "test")
+	srv.handleRunTask(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty sources: status = %d, want 400", w.Code)
+	}
+
+	// Sources with empty ResolvedRevision
+	mock.GetRunResult = &domain.Run{
+		ID:          10,
+		ProjectName: "demo",
+		Sources: []domain.AcquiredSource{
+			{RepoName: "main", Primary: true, ResolvedRevision: ""},
+			{RepoName: "secondary", Primary: false, ResolvedRevision: ""},
+		},
+	}
+	w = httptest.NewRecorder()
+	r = runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=10", nil), "name", "demo", "task", "test")
+	srv.handleRunTask(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty resolved revision: status = %d, want 400", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "run has no recorded source revisions") {
+		t.Fatalf("body = %s, want 'run has no recorded source revisions'", w.Body.String())
+	}
+}
+
+func TestHandleRunTask_FromRunID_HappyPath(t *testing.T) {
+	tempDir := t.TempDir()
+	pipelineDir := filepath.Join(tempDir, "ci")
+	_ = os.MkdirAll(pipelineDir, 0o755)
+	_ = os.WriteFile(filepath.Join(pipelineDir, "pipeline.tf"), []byte(`project "demo" {
+  ci_repo "main" {
+    path = "."
+  }
+  ci_task "test" {
+    trigger = "repo.main.changed"
+    execute {
+      repo = "main"
+      script = "echo ok"
+    }
+  }
+}`), 0o644)
+
+	store := &mocks.MockProjectStore{
+		Projects: map[string]*domain.ProjectConfig{
+			"demo": {Name: "demo", RepoURL: "file://" + tempDir, RepoRef: "main", PipelineDir: "ci", PipelineFile: "pipeline.tf"},
+		},
+	}
+
+	t.Run("query_param", func(t *testing.T) {
+		sources := []domain.AcquiredSource{
+			{RepoName: "demo", URL: "file://" + tempDir, RequestedRef: "main", ResolvedRevision: "abc1234", Primary: true},
+		}
+		mock := &mocks.MockRunStore{
+			CreateRunID:  42,
+			GetRunResult: &domain.Run{ID: 10, ProjectName: "demo", Sources: sources},
+			FinishRunCh:  make(chan struct{}),
+		}
+		sourceSessions := &testSourceSessions{}
+		srv := setupRunServer(t, store, mock)
+		srv.sourceSessions = sourceSessions
+		srv.runService = service.NewRunService(mock, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		srv.runService.SetLocalExecutionPolicy(true, "local")
+
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run?from_run_id=10", nil), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+		if len(sourceSessions.requests) == 0 || sourceSessions.requests[len(sourceSessions.requests)-1].Revision != "abc1234" {
+			t.Fatalf("source session revision = %+v, want abc1234", sourceSessions.requests)
+		}
+		if len(mock.CreateRunCalls) != 1 {
+			t.Fatalf("CreateRunCalls = %d, want 1", len(mock.CreateRunCalls))
+		}
+		call := mock.CreateRunCalls[0]
+		if len(call.InitialSources) != 1 || call.InitialSources[0].ResolvedRevision != "abc1234" {
+			t.Fatalf("CreateRun InitialSources = %+v, want abc1234", call.InitialSources)
+		}
+
+		select {
+		case <-mock.FinishRunCh:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for background run to finish")
+		}
+	})
+
+	t.Run("json_body", func(t *testing.T) {
+		sources := []domain.AcquiredSource{
+			{RepoName: "demo", URL: "file://" + tempDir, RequestedRef: "main", Primary: false, ResolvedRevision: "fallback999"},
+		}
+		mock := &mocks.MockRunStore{
+			CreateRunID:  43,
+			GetRunResult: &domain.Run{ID: 11, ProjectName: "demo", Sources: sources},
+			FinishRunCh:  make(chan struct{}),
+		}
+		sourceSessions := &testSourceSessions{}
+		srv := setupRunServer(t, store, mock)
+		srv.sourceSessions = sourceSessions
+		srv.runService = service.NewRunService(mock, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+		srv.runService.SetLocalExecutionPolicy(true, "local")
+
+		w := httptest.NewRecorder()
+		r := runCtx(httptest.NewRequest("POST", "/api/projects/demo/tasks/test/run", strings.NewReader(`{"from_run_id": 11}`)), "name", "demo", "task", "test")
+		srv.handleRunTask(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+		}
+		if sourceSessions.requests[len(sourceSessions.requests)-1].Revision != "fallback999" {
+			t.Fatalf("source session revision = %q, want fallback999", sourceSessions.requests[len(sourceSessions.requests)-1].Revision)
+		}
+
+		select {
+		case <-mock.FinishRunCh:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for background run to finish")
+		}
+	})
 }
 
 // ── handleApproveManualTask ──────────────────────────────────────

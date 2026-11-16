@@ -31,26 +31,103 @@ func waitFinish(t *testing.T, ch chan struct{}) {
 
 func TestRunService_StartTask_RejectsNilProject(t *testing.T) {
 	svc := newTestRunService(&mocks.MockRunStore{}, nil, &emptyTaskRunner{})
-	if _, err := svc.StartTask(context.Background(), 1, "p", nil, "t", domain.RunnerOptions{}); err == nil {
+	if _, _, err := svc.StartTask(context.Background(), "p", nil, "t", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil project")
 	}
 }
 
 func TestRunService_StartTask_RejectsNilTaskRunner(t *testing.T) {
-	svc := newTestRunService(&mocks.MockRunStore{}, nil, nil)
-	if _, err := svc.StartTask(context.Background(), 1, "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
+	store := &mocks.MockRunStore{CreateRunID: 1}
+	svc := newTestRunService(store, nil, nil)
+	if _, _, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
+		t.Fatal("expected error for nil task runner")
+	}
+	if len(store.FinishRunCalls) != 1 || store.FinishRunCalls[0].Status != "failed" {
+		t.Fatalf("FinishRunCalls = %+v, want run failed", store.FinishRunCalls)
+	}
+
+	// Also verify warning logged when FinishRun fails
+	store2 := &mocks.MockRunStore{CreateRunID: 2, FinishRunErr: errors.New("db down")}
+	svc2 := newTestRunService(store2, nil, nil)
+	if _, _, err := svc2.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
 		t.Fatal("expected error for nil task runner")
 	}
 }
 
-func TestRunService_StartTask_ReturnsBeforeTaskExecutes(t *testing.T) {
-	store := &mocks.MockRunStore{FinishRunCh: make(chan struct{})}
+func TestRunService_StartTask_RejectsNilRunStore(t *testing.T) {
+	svc := newTestRunService(nil, nil, &emptyTaskRunner{})
+	if _, _, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
+		t.Fatal("expected error for nil run store")
+	}
+}
+
+func TestRunService_StartTask_CreateRunError(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunErr: errors.New("db error")}
+	svc := newTestRunService(store, nil, &emptyTaskRunner{})
+	if _, _, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{}); err == nil {
+		t.Fatal("expected error for CreateRun failure")
+	}
+}
+
+func TestRunService_StartTask_PinsRepositoryRevisions(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 10, FinishRunCh: make(chan struct{})}
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
 	svc := newTestRunService(store, nil, runner)
 
-	queued, err := svc.StartTask(context.Background(), 5, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
+	proj := &model.Project{
+		Name: "p",
+		Repos: []model.Repo{
+			{Name: "app", Ref: "main"},
+			{Name: "sub", Ref: "v1.0"},
+		},
+		Tasks: []model.Task{{Name: "t"}},
+	}
+	initialSources := []domain.AcquiredSource{
+		{RepoName: "sub", ResolvedRevision: "sub-sha-123"},
+	}
+
+	runID, queued, err := svc.StartTask(context.Background(), "p", proj, "t", domain.RunnerOptions{
+		Actor:           "user:alice",
+		InitialSources:  initialSources,
+		SourcesPrepared: true,
+	})
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
+	}
+	if runID != 10 || queued {
+		t.Fatalf("runID = %d, queued = %v", runID, queued)
+	}
+
+	if len(store.CreateRunCalls) != 1 {
+		t.Fatalf("CreateRunCalls = %d, want 1", len(store.CreateRunCalls))
+	}
+	call := store.CreateRunCalls[0]
+	if call.RerunTask != "t" || call.StartedBy != "user:alice" {
+		t.Fatalf("call = %+v, want rerunTask=t, actor=user:alice", call)
+	}
+	if len(call.Snap.Repos) != 2 || call.Snap.Repos[1].Ref != "sub-sha-123" {
+		t.Fatalf("pinned repos = %+v, want sub pinned to sub-sha-123", call.Snap.Repos)
+	}
+	// Original project repos must remain unmutated
+	if proj.Repos[1].Ref != "v1.0" {
+		t.Fatalf("original project repo ref modified: %s", proj.Repos[1].Ref)
+	}
+
+	close(runner.releaseCh)
+	waitFinish(t, store.FinishRunCh)
+}
+
+func TestRunService_StartTask_ReturnsBeforeTaskExecutes(t *testing.T) {
+	store := &mocks.MockRunStore{CreateRunID: 5, FinishRunCh: make(chan struct{})}
+	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
+	svc := newTestRunService(store, nil, runner)
+
+	runID, queued, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if runID != 5 {
+		t.Fatalf("runID = %d, want 5", runID)
 	}
 	if queued {
 		t.Fatal("queued = true, want false with a free slot")
@@ -71,7 +148,7 @@ func TestRunService_StartTask_ReturnsBeforeTaskExecutes(t *testing.T) {
 }
 
 func TestRunService_StartTask_QueuedWhenEverySlotIsBusy(t *testing.T) {
-	store := &mocks.MockRunStore{StartQueuedRunResult: true, FinishRunCh: make(chan struct{})}
+	store := &mocks.MockRunStore{CreateRunID: 6, StartQueuedRunResult: true, FinishRunCh: make(chan struct{})}
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
 	svc := newTestRunService(store, nil, runner)
 	svc.SetMaxConcurrentRuns(1)
@@ -79,9 +156,12 @@ func TestRunService_StartTask_QueuedWhenEverySlotIsBusy(t *testing.T) {
 		t.Fatal("expected the single slot to be free")
 	}
 
-	queued, err := svc.StartTask(context.Background(), 6, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
+	runID, queued, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
+	}
+	if runID != 6 {
+		t.Fatalf("runID = %d, want 6", runID)
 	}
 	if !queued {
 		t.Fatal("queued = false, want true with every slot busy")
@@ -197,7 +277,7 @@ func TestRunService_ExecuteStartedTask_CanceledWhileQueued(t *testing.T) {
 // Canceling a queued StartTask run records it canceled, with
 // the actor and the canceled metric, rather than failed.
 func TestRunService_StartTask_CancelWhileQueuedRecordsCanceled(t *testing.T) {
-	store := &mocks.MockRunStore{StartQueuedRunResult: true, GetRunResult: &domain.Run{ID: 12, ProjectName: "p", Status: "canceled"}}
+	store := &mocks.MockRunStore{CreateRunID: 12, StartQueuedRunResult: true, GetRunResult: &domain.Run{ID: 12, ProjectName: "p", Status: "canceled"}}
 	runner := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(store, nil, runner)
 	rec := &fakeRecorder{}
@@ -207,9 +287,12 @@ func TestRunService_StartTask_CancelWhileQueuedRecordsCanceled(t *testing.T) {
 		t.Fatal("expected the single slot to be free")
 	}
 
-	queued, err := svc.StartTask(context.Background(), 12, "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
+	runID, queued, err := svc.StartTask(context.Background(), "p", startTaskProject(), "t", domain.RunnerOptions{SourcesPrepared: true})
 	if err != nil || !queued {
 		t.Fatalf("StartTask = (%v, %v), want queued", queued, err)
+	}
+	if runID != 12 {
+		t.Fatalf("runID = %d, want 12", runID)
 	}
 	if err := svc.Cancel(context.Background(), 12, "user:alice"); err != nil {
 		t.Fatalf("Cancel: %v", err)
