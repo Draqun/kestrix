@@ -272,7 +272,7 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
     setRerunning(taskName);
     setRerunErr(null);
     try {
-      const result = await runTask(projectName, taskName);
+      const result = await runTask(projectName, taskName, runId);
       if (routedRunIdRef.current !== startedOn) return;
       if (!result.run_id) {
         setRerunErr('Re-run started but no run_id returned');

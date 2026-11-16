@@ -426,16 +426,19 @@ func TestRunService_RunTask_RemoteMode_CreateRemoteJobErrorPropagates(t *testing
 
 func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
-	runStore := &mocks.MockRunStore{}
+	runStore := &mocks.MockRunStore{CreateRunID: 4}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(remoteJobs)
 
-	queued, err := svc.StartTask(context.Background(), 4, "proj", proj, "t", domain.RunnerOptions{
+	runID, queued, err := svc.StartTask(context.Background(), "proj", proj, "t", domain.RunnerOptions{
 		Mode: "remote", WorkDir: t.TempDir(), Variables: variables.New(),
 	})
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
+	}
+	if runID != 4 {
+		t.Fatalf("runID = %d, want 4", runID)
 	}
 	if queued {
 		t.Fatal("expected queued=false: remote dispatch is immediate, never queued")
@@ -450,9 +453,21 @@ func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *te
 
 func TestRunService_StartTask_RemoteMode_DispatchErrorPropagates(t *testing.T) {
 	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
-	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	runStore := &mocks.MockRunStore{CreateRunID: 1}
+	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
-	if _, err := svc.StartTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()}); err == nil {
+	if _, _, err := svc.StartTask(context.Background(), "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()}); err == nil {
+		t.Fatal("expected the dispatch error to propagate")
+	}
+	if len(runStore.FinishRunCalls) != 1 || runStore.FinishRunCalls[0].Status != "failed" {
+		t.Fatalf("FinishRunCalls = %+v, want run failed", runStore.FinishRunCalls)
+	}
+
+	// Also verify when FinishRun returns error
+	runStore2 := &mocks.MockRunStore{CreateRunID: 2, FinishRunErr: errors.New("db down")}
+	svc2 := newTestRunService(runStore2, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
+	svc2.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
+	if _, _, err := svc2.StartTask(context.Background(), "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()}); err == nil {
 		t.Fatal("expected the dispatch error to propagate")
 	}
 }

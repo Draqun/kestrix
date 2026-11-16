@@ -54,5 +54,5 @@ test('an accepted re-run navigates to the new run under an encoded project name'
 
   await waitFor(() => assert.equal(window.location.pathname, '/pipelines/runs/my%20demo/9'), { timeout: 10000 });
   assert.ok(await screen.findByText('Run #9', {}, { timeout: 10000 }));
-  assert.ok(calls.some(c => c.method === 'POST' && c.url === '/api/projects/my%20demo/tasks/build/run'));
+  assert.ok(calls.some(c => c.method === 'POST' && c.url === '/api/projects/my%20demo/tasks/build/run?from_run_id=5'));
 });

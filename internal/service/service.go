@@ -1165,32 +1165,75 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 }
 
 // StartTask is RunTask's asynchronous counterpart, used by the single-task
-// re-run route: it tracks runID, decides queued-vs-running synchronously
-// through markQueuedIfBusy - the same accepting half Start uses - and
-// returns before the task executes, leaving the rest to executeStartedTask
-// in a goroutine. It reports whether the run was recorded as queued; see
-// ui-single-task-rerun design.md D1.
-func (s *RunService) StartTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (queued bool, err error) {
+// re-run route: it creates the run record (persisting any pinned initial sources),
+// tracks runID, decides queued-vs-running synchronously through markQueuedIfBusy -
+// the same accepting half Start uses - and returns before the task executes,
+// leaving the rest to executeStartedTask in a goroutine. It reports whether the
+// run was recorded as queued; see ui-single-task-rerun design.md D1 and
+// task-rerun-original-revision D2.
+func (s *RunService) StartTask(ctx context.Context, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (runID int, queued bool, err error) {
 	if proj == nil {
-		return false, fmt.Errorf("project not loaded")
+		return 0, false, fmt.Errorf("project not loaded")
 	}
 	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
-		return false, err
+		return 0, false, err
 	}
+	if s.runStore == nil {
+		return 0, false, fmt.Errorf("run store is not configured")
+	}
+
+	// Pin repository refs to the exact revisions recorded in InitialSources if present.
+	if len(opts.InitialSources) > 0 {
+		revByRepo := make(map[string]string, len(opts.InitialSources))
+		for _, src := range opts.InitialSources {
+			if src.ResolvedRevision != "" {
+				revByRepo[src.RepoName] = src.ResolvedRevision
+			}
+		}
+		if len(revByRepo) > 0 {
+			pCopy := *proj
+			pCopy.Repos = make([]model.Repo, len(proj.Repos))
+			copy(pCopy.Repos, proj.Repos)
+			for i := range pCopy.Repos {
+				if rev, ok := revByRepo[pCopy.Repos[i].Name]; ok {
+					pCopy.Repos[i].Ref = rev
+				}
+			}
+			proj = &pCopy
+		}
+	}
+
+	runID, err = s.runStore.CreateRun(projectName, nil, taskName, false, proj, opts.Actor, opts.InitialSources)
+	if err != nil {
+		return 0, false, fmt.Errorf("create run: %w", err)
+	}
+
+	if (opts.Mode != "remote" || s.remoteJobStore == nil) && s.taskRunner == nil {
+		taskRunnerErr := fmt.Errorf("task runner not configured")
+		if finishErr := s.runStore.FinishRun(runID, "failed", "", taskRunnerErr.Error(), nil); finishErr != nil {
+			slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(finishErr, opts.ResolvedSecretValues))
+		}
+		return runID, false, taskRunnerErr
+	}
+
 	if opts.Mode == "remote" && s.remoteJobStore != nil {
 		// Dispatched synchronously, like Start's own remote branch
 		// (design.md D10): no active/done entry, no concurrency slot, no
 		// goroutine - there is nothing here for executeStartedTask to do.
 		_, _, err := s.dispatchSingleTask(runID, proj, taskName, opts)
-		return false, err
+		if err != nil {
+			if finishErr := s.runStore.FinishRun(runID, "failed", "", err.Error(), nil); finishErr != nil {
+				slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(finishErr, opts.ResolvedSecretValues))
+			}
+			return runID, false, err
+		}
+		return runID, false, nil
 	}
-	if s.taskRunner == nil {
-		return false, fmt.Errorf("task runner not configured")
-	}
+
 	runCtx, untrack := s.trackActive(ctx, runID, projectName)
 	acquired := s.markQueuedIfBusy(runID)
 	go s.executeStartedTask(runCtx, untrack, acquired, runID, projectName, proj, taskName, opts)
-	return !acquired, nil
+	return runID, !acquired, nil
 }
 
 // executeStartedTask is StartTask's background half: it waits for a slot

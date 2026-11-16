@@ -739,6 +739,12 @@ const docTemplate = `{
                         "name": "task",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Parent run ID to pin source revisions to",
+                        "name": "from_run_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {

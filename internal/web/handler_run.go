@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,6 +99,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param name path string true "Project name"
 // @Param task path string true "Task name"
+// @Param from_run_id query int false "Parent run ID to pin source revisions to"
 // @Success 200 {object} map[string]interface{} "run_id, project, task, and accepted status (running or queued)"
 // @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
@@ -119,7 +122,77 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	proj, primary, err := s.loadProjectPipeline(r.Context(), p, "", "single-task-run")
+
+	var fromRunID int
+	if q := r.URL.Query().Get("from_run_id"); q != "" {
+		id, err := strconv.Atoi(q)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid from_run_id")
+			return
+		}
+		fromRunID = id
+	} else if r.Body != nil {
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1048576))
+		if err == nil && len(bytes.TrimSpace(bodyBytes)) > 0 {
+			trimmed := bytes.TrimSpace(bodyBytes)
+			isJSON := strings.Contains(r.Header.Get("Content-Type"), "application/json") || bytes.HasPrefix(trimmed, []byte("{"))
+			if isJSON {
+				var bodyReq struct {
+					FromRunID *int `json:"from_run_id"`
+				}
+				if err := json.Unmarshal(trimmed, &bodyReq); err != nil {
+					writeError(w, http.StatusBadRequest, "invalid request body")
+					return
+				}
+				if bodyReq.FromRunID != nil {
+					if *bodyReq.FromRunID <= 0 {
+						writeError(w, http.StatusBadRequest, "invalid from_run_id")
+						return
+					}
+					fromRunID = *bodyReq.FromRunID
+				}
+			}
+		}
+	}
+
+	var pinnedSources []domain.AcquiredSource
+	var revision string
+	if fromRunID != 0 {
+		if s.runStore == nil {
+			writeError(w, http.StatusInternalServerError, "run store not configured")
+			return
+		}
+		parentRun, err := s.runStore.GetRun(fromRunID)
+		if err != nil || parentRun == nil || parentRun.ProjectName != name {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		if len(parentRun.Sources) == 0 {
+			writeError(w, http.StatusBadRequest, "run has no recorded sources")
+			return
+		}
+		pinnedSources = parentRun.Sources
+		for _, src := range parentRun.Sources {
+			if src.Primary && src.ResolvedRevision != "" {
+				revision = src.ResolvedRevision
+				break
+			}
+		}
+		if revision == "" {
+			for _, src := range parentRun.Sources {
+				if src.ResolvedRevision != "" {
+					revision = src.ResolvedRevision
+					break
+				}
+			}
+		}
+		if revision == "" {
+			writeError(w, http.StatusBadRequest, "run has no recorded source revisions")
+			return
+		}
+	}
+
+	proj, primary, err := s.loadProjectPipeline(r.Context(), p, revision, "single-task-run")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -148,13 +221,9 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var runID int
-	snap := &proj
-	runID, err = s.runStore.CreateRun(name, nil, taskName, false, snap, actor, []domain.AcquiredSource{primary.Source})
-	if err != nil {
-		primary.Cleanup()
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	initialSources := []domain.AcquiredSource{primary.Source}
+	if len(pinnedSources) > 0 {
+		initialSources = pinnedSources
 	}
 
 	// Return as soon as the run is accepted: StartTask records it queued or
@@ -162,13 +231,13 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	// re-run started while every slot is busy never holds this request
 	// open - see ui-single-task-rerun design.md D1/D3. The outcome is read
 	// from GET /api/projects/{name}/runs/{runID} afterwards.
-	queued, err := runService.StartTask(context.Background(), runID, name, &proj, taskName, domain.RunnerOptions{
+	runID, queued, err := runService.StartTask(context.Background(), name, &proj, taskName, domain.RunnerOptions{
 		WorkDir:              primary.Root,
 		Mode:                 p.Mode,
 		Variables:            varStore,
 		CredentialResolver:   s.credentialResolver(),
 		SourceSessions:       s.sourceSessions,
-		InitialSources:       []domain.AcquiredSource{primary.Source},
+		InitialSources:       initialSources,
 		WorkspaceCleanup:     primary.Cleanup,
 		Stdout:               io.Discard,
 		Stderr:               io.Discard,
@@ -177,9 +246,6 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		primary.Cleanup()
-		if finishErr := s.runStore.FinishRun(runID, "failed", "", err.Error(), nil); finishErr != nil {
-			slog.Warn("could not finish run record", "run_id", runID, "err", redact.Err(finishErr, s.knownSecrets()))
-		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

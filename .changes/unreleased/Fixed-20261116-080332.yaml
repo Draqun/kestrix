@@ -1,0 +1,3 @@
+kind: Fixed
+body: Pin single-task re-run execution to original run recorded revision and encapsulate run creation in StartTask
+time: 2026-11-16T08:03:32.017924728+01:00

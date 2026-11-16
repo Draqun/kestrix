@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   completeSetup, createAccount, createCredential, createProject, deleteAccount, getWebhookLogs,
   listAccounts, listCredentials, saveProjectPipeline, setAccountGrants, setAccountRole,
-  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus, runTask,
+  login, logout, me, setUnauthorizedHandler, healthCheck, listProjects, setupStatus, runTask, rerunTask,
   listRunners, createRunner, revokeRunner, normalizeProject,
 } from './client.js';
 import { remoteProjectPayload } from '../lib/projectForm.js';
@@ -445,6 +445,11 @@ test('UI API starts a single-task re-run and returns the accepted run', async (t
   assert.equal(captured.url, '/api/projects/my%20demo/tasks/build%2Fx/run');
   assert.equal(captured.options.method, 'POST');
   assert.deepEqual(run, { run_id: 42, project: 'my demo', task: 'build/x', status: 'queued' });
+
+  const rerun = await rerunTask('my demo', 'build/x', 5);
+  assert.equal(captured.url, '/api/projects/my%20demo/tasks/build%2Fx/run?from_run_id=5');
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(rerun, { run_id: 42, project: 'my demo', task: 'build/x', status: 'queued' });
 });
 
 test('UI API surfaces a rejected single-task re-run', async (t) => {

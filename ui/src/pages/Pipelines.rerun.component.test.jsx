@@ -145,7 +145,7 @@ test('an accepted re-run moves the view to the new run and shows it queued', asy
   assert.ok(await screen.findByText('Run #9'));
   assert.equal(screen.queryAllByRole('button', { name: /re-run/i }).length, 0);
   assert.ok(await screen.findByText('QUEUED'));
-  assert.ok(calls.some(c => c.method === 'POST' && c.url === '/api/projects/demo/tasks/build/run'));
+  assert.ok(calls.some(c => c.method === 'POST' && c.url === '/api/projects/demo/tasks/build/run?from_run_id=5'));
   assert.equal(screen.queryByRole('button', { name: /re-run/i }), null);
 });
 

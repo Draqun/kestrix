@@ -102,7 +102,7 @@ func TestRunService_ServiceLevelLocalRunnerGuard(t *testing.T) {
 			},
 		}
 
-		queued, err := s.StartTask(context.Background(), 1, "test-proj", proj, "test-task", opts)
+		_, queued, err := s.StartTask(context.Background(), "test-proj", proj, "test-task", opts)
 		if !errors.Is(err, ErrLocalExecutionDisabled) {
 			t.Fatalf("expected ErrLocalExecutionDisabled, got: %v", err)
 		}

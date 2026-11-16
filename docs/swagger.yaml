@@ -905,6 +905,10 @@ paths:
         name: task
         required: true
         type: string
+      - description: Parent run ID to pin source revisions to
+        in: query
+        name: from_run_id
+        type: integer
       produces:
       - application/json
       responses:
