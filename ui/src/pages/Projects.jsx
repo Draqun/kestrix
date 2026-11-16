@@ -5,7 +5,7 @@ import {
   LinearProgress, TextField, Button, Stack,
   Dialog, DialogTitle, DialogContent, DialogActions,
   List, ListItem, ListItemText, ListItemIcon, ListItemSecondaryAction,
-  Divider, Chip, Card, CardContent, InputAdornment,
+  Divider, Chip, Card, CardContent,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -15,56 +15,20 @@ import {
   AccountTree as PipelineIcon,
   ArrowBack as BackIcon,
   Edit as EditIcon,
-  Visibility as ShowIcon,
-  VisibilityOff as HideIcon,
 } from '@mui/icons-material';
 import { listProjects, createProject, deleteProject, getProject, updateProject, getProjectDefinition } from '../api/client';
 import CredentialSelectField from '../components/credentials/CredentialSelectField.jsx';
 import { useAuth } from '../context/AuthContext';
 import Pagination from '../components/Pagination';
 import WebhookSetupPanel from '../components/projects/WebhookSetupPanel.jsx';
+import WebhookSecretField from '../components/projects/WebhookSecretField.jsx';
 import useCredentials from '../hooks/useCredentials.js';
 import {
+  projectFormDefaults,
   remoteProjectPayload,
   repositorySourceLabel,
   validateRemoteProject,
 } from '../lib/projectForm.js';
-
-// Shared by both dialogs. A stored secret is never read back from the API,
-// so this field always starts empty. An empty value means different things
-// per dialog: on create it means "no per-project secret, use the global
-// one"; on edit it means "keep the stored secret unchanged".
-function WebhookSecretField({ value, onChange, helperText }) {
-  const [reveal, setReveal] = useState(false);
-  return (
-    <TextField
-      label="Webhook secret (optional)"
-      type={reveal ? 'text' : 'password'}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      size="small"
-      fullWidth
-      autoComplete="new-password"
-      helperText={helperText}
-      slotProps={{
-        input: {
-          endAdornment: (
-            <InputAdornment position="end">
-              <IconButton
-                size="small"
-                aria-label={reveal ? 'Hide webhook secret' : 'Show webhook secret'}
-                onClick={() => setReveal(prev => !prev)}
-                edge="end"
-              >
-                {reveal ? <HideIcon fontSize="small" /> : <ShowIcon fontSize="small" />}
-              </IconButton>
-            </InputAdornment>
-          ),
-        },
-      }}
-    />
-  );
-}
 
 export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   const { roleAtLeast } = useAuth();
@@ -88,19 +52,13 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [editForm, setEditForm] = useState({ repo_url: '', repo_ref: '', repo_credential_ref: '', pipeline_dir: 'ci', pipeline_file: 'pipeline.tf', webhook_secret: '' });
+  const [editForm, setEditForm] = useState(() => projectFormDefaults({}));
   const [saving, setSaving] = useState(false);
 
-  const [name, setName] = useState('');
-	const [repoURL, setRepoURL] = useState('');
-	const [repoRef, setRepoRef] = useState('main');
-	const [credentialRef, setCredentialRef] = useState('');
-  const [pipelineDir, setPipelineDir] = useState('ci');
-  const [pipelineFile, setPipelineFile] = useState('pipeline.tf');
-  const [webhookSecret, setWebhookSecret] = useState('');
+  const [createForm, setCreateForm] = useState(() => projectFormDefaults());
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState(null);
-	const { items: credentials, refresh: fetchCredentials } = useCredentials();
+  const { items: credentials, refresh: fetchCredentials } = useCredentials();
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
@@ -158,8 +116,8 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   // project B. Resetting is therefore not just tidiness on success - it has
   // to run on every way the dialog closes without saving.
   const resetCreateForm = () => {
-    setName(''); setRepoURL(''); setRepoRef('main'); setCredentialRef(''); setPipelineDir('ci');
-    setPipelineFile('pipeline.tf'); setWebhookSecret(''); setFormError(null);
+    setCreateForm(projectFormDefaults());
+    setFormError(null);
   };
 
   const closeCreateDialog = () => {
@@ -171,15 +129,11 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
     e.preventDefault();
     setCreating(true);
     setFormError(null);
-	try {
-		const form = {
-			repo_url: repoURL, repo_ref: repoRef, repo_credential_ref: credentialRef,
-			pipeline_dir: pipelineDir, pipeline_file: pipelineFile, webhook_secret: webhookSecret,
-		};
-		const validationError = validateRemoteProject(name, form);
-		if (validationError) throw new Error(validationError);
-		await createProject(remoteProjectPayload(name, form));
-		resetCreateForm();
+    try {
+      const validationError = validateRemoteProject(createForm.name, createForm);
+      if (validationError) throw new Error(validationError);
+      await createProject(remoteProjectPayload(createForm.name, createForm));
+      resetCreateForm();
       setShowCreate(false);
       await fetchProjects();
     } catch (err) {
@@ -200,16 +154,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
   };
 
   const openEdit = () => {
-    setEditForm({
-      repo_url: config?.repo_url || '',
-      repo_ref: config?.repo_ref || '',
-      repo_credential_ref: config?.repo_credential_ref || '',
-      pipeline_dir: config?.pipeline_dir || 'ci',
-      pipeline_file: config?.pipeline_file || 'pipeline.tf',
-      // Deliberately blank: the API never returns the stored secret, and an
-      // empty value is what tells remoteProjectPayload to leave it alone.
-      webhook_secret: '',
-    });
+    setEditForm(projectFormDefaults(config));
     setShowEdit(true);
   };
 
@@ -501,8 +446,8 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
               label="Project name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={createForm.name}
+              onChange={(e) => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
               required
               size="small"
               placeholder="my-project"
@@ -510,27 +455,35 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
               fullWidth
             />
             <TextField
-			  label="Repository URL"
-			  value={repoURL}
-			  onChange={(e) => setRepoURL(e.target.value)}
-			  size="small"
-			  placeholder="https://gitlab.com/group/project.git"
-			  helperText="Do not include a token or password in the URL"
-			  required
-			  fullWidth
-			/>
-			<TextField label="Repository ref" value={repoRef} onChange={(e) => setRepoRef(e.target.value)} size="small" placeholder="main, v1.2.3, or commit SHA" required fullWidth />
-			<CredentialSelectField
-			  value={credentialRef}
-			  onChange={setCredentialRef}
-			  credentials={credentials}
-			  onCredentialsChanged={fetchCredentials}
-			  helperText="Use public access or add a write-only credential for a private repository."
-			/>
+              label="Repository URL"
+              value={createForm.repo_url}
+              onChange={(e) => setCreateForm(prev => ({ ...prev, repo_url: e.target.value }))}
+              size="small"
+              placeholder="https://gitlab.com/group/project.git"
+              helperText="Do not include a token or password in the URL"
+              required
+              fullWidth
+            />
+            <TextField
+              label="Repository ref"
+              value={createForm.repo_ref}
+              onChange={(e) => setCreateForm(prev => ({ ...prev, repo_ref: e.target.value }))}
+              size="small"
+              placeholder="main, v1.2.3, or commit SHA"
+              required
+              fullWidth
+            />
+            <CredentialSelectField
+              value={createForm.repo_credential_ref}
+              onChange={(value) => setCreateForm(prev => ({ ...prev, repo_credential_ref: value }))}
+              credentials={credentials}
+              onCredentialsChanged={fetchCredentials}
+              helperText="Use public access or add a write-only credential for a private repository."
+            />
             <TextField
               label="Pipeline directory"
-              value={pipelineDir}
-              onChange={(e) => setPipelineDir(e.target.value)}
+              value={createForm.pipeline_dir}
+              onChange={(e) => setCreateForm(prev => ({ ...prev, pipeline_dir: e.target.value }))}
               required
               size="small"
               placeholder="ci"
@@ -539,16 +492,16 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
             />
             <TextField
               label="Pipeline file"
-              value={pipelineFile}
-              onChange={(e) => setPipelineFile(e.target.value)}
+              value={createForm.pipeline_file}
+              onChange={(e) => setCreateForm(prev => ({ ...prev, pipeline_file: e.target.value }))}
               size="small"
               placeholder="pipeline.tf"
               helperText="Entry file inside the pipeline directory"
               fullWidth
             />
             <WebhookSecretField
-              value={webhookSecret}
-              onChange={setWebhookSecret}
+              value={createForm.webhook_secret}
+              onChange={(value) => setCreateForm(prev => ({ ...prev, webhook_secret: value }))}
               helperText="Verifies webhook deliveries for this project. Empty means the global secret is used. Generate one with openssl rand -hex 32."
             />
             {formError && <Alert severity="error">{formError}</Alert>}
@@ -556,7 +509,7 @@ export default function Projects({ onOpenPipeline, selectedName, onSelect }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={closeCreateDialog}>Cancel</Button>
-		  <Button variant="contained" onClick={handleCreate} disabled={creating || !name || !repoURL || !repoRef || !pipelineDir}>
+          <Button variant="contained" onClick={handleCreate} disabled={creating || !createForm.name || !createForm.repo_url || !createForm.repo_ref || !createForm.pipeline_dir}>
             {creating ? 'Creating…' : 'Create project'}
           </Button>
         </DialogActions>
