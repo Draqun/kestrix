@@ -1,3 +1,16 @@
+export function projectFormDefaults(project) {
+  const isEditing = Boolean(project);
+  return {
+    name: project?.name || '',
+    repo_url: project?.repo_url || '',
+    repo_ref: project?.repo_ref !== undefined ? (project.repo_ref || '') : (isEditing ? '' : 'main'),
+    repo_credential_ref: project?.repo_credential_ref || '',
+    pipeline_dir: project?.pipeline_dir || 'ci',
+    pipeline_file: project?.pipeline_file || 'pipeline.tf',
+    webhook_secret: '',
+  };
+}
+
 export function remoteProjectPayload(name, form) {
   // The API keeps a stored webhook secret when the update omits the field, so
   // the key is only emitted when the user actually typed one. Sending an empty

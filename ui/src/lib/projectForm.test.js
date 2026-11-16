@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   activeCredentialMetadata,
   createdCredentialSelection,
+  projectFormDefaults,
   remoteProjectPayload,
   repositorySourceLabel,
   validateRemoteProject,
@@ -87,3 +88,43 @@ test('an edited pipeline file replaces the default', () => {
   assert.equal(remoteProjectPayload(undefined, { ...form, pipeline_file: '  ' }).pipeline_file, 'pipeline.tf');
   assert.equal(remoteProjectPayload(undefined, form).pipeline_file, 'pipeline.tf');
 });
+
+test('project form defaults initializes create and edit structures', () => {
+  assert.deepEqual(projectFormDefaults(), {
+    name: '',
+    repo_url: '',
+    repo_ref: 'main',
+    repo_credential_ref: '',
+    pipeline_dir: 'ci',
+    pipeline_file: 'pipeline.tf',
+    webhook_secret: '',
+  });
+
+  assert.deepEqual(projectFormDefaults({
+    name: 'demo',
+    repo_url: 'https://git.example.test/demo.git',
+    repo_ref: 'v1.0',
+    repo_credential_ref: 'cred-1',
+    pipeline_dir: 'pipelines',
+    pipeline_file: 'main.tf',
+  }), {
+    name: 'demo',
+    repo_url: 'https://git.example.test/demo.git',
+    repo_ref: 'v1.0',
+    repo_credential_ref: 'cred-1',
+    pipeline_dir: 'pipelines',
+    pipeline_file: 'main.tf',
+    webhook_secret: '',
+  });
+
+  assert.deepEqual(projectFormDefaults({}), {
+    name: '',
+    repo_url: '',
+    repo_ref: '',
+    repo_credential_ref: '',
+    pipeline_dir: 'ci',
+    pipeline_file: 'pipeline.tf',
+    webhook_secret: '',
+  });
+});
+
