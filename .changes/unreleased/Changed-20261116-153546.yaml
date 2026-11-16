@@ -1,3 +1,0 @@
-kind: Changed
-body: Unify project dialog form state handling and extract WebhookSecretField into a reusable component
-time: 2026-11-16T15:35:46.36606439+01:00
