@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.9.3] - 2026-11-16
+### Fixed
+- Pin single-task re-run execution to original run recorded revision and encapsulate run creation in StartTask
+
 ## [v0.9.2] - 2026-11-16
 ### Fixed
 - Support cross-run manual gate approval when dependencies passed in prior executions on the same branch
