@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.11.0] - 2026-11-17
+### Added
+- Add configurable CORS support for API routes via KESTRIX_HTTP_CORS_ALLOWED_ORIGINS
+
 ## [v0.10.0] - 2026-11-16
 ### Changed
 - Unify project dialog form state handling and extract WebhookSecretField into a reusable component
