@@ -8,4 +8,4 @@
 ## 2. Modularize `ui/src/pages/Pipelines.jsx`
 
 - [x] 2.1 Extract run detail header/action controls and task log/manual-gate panel from `ui/src/pages/Pipelines.jsx` into subcomponents under `ui/src/components/pipelines/`, ensuring all hooks follow Rules of Hooks.
-- [x] 2.2 Run `cd ui && npm test -- --run && npm run build` to verify all frontend unit tests and production build succeed.
+- [x] 2.2 Run `cd ui && npm test && npm run build` to verify all frontend unit tests and production build succeed.
