@@ -249,12 +249,14 @@ if [[ "${DEFAULT_SERVICES}" != "kestrix postgres " ]]; then
   exit 1
 fi
 
-if ! compose --profile business config --services | grep -qx business; then
+BUSINESS_SERVICES="$(compose --profile business config --services)"
+if ! grep -qx business <<< "${BUSINESS_SERVICES}"; then
   echo "--profile business unexpectedly omits the business service." >&2
   exit 1
 fi
 
-if ! compose --profile tls config --services | grep -qx proxy; then
+TLS_SERVICES="$(compose --profile tls config --services)"
+if ! grep -qx proxy <<< "${TLS_SERVICES}"; then
   echo "--profile tls unexpectedly omits the proxy service." >&2
   exit 1
 fi
@@ -288,9 +290,10 @@ wait_for_health() {
 wait_for_health
 
 echo "Verifying PostgreSQL has no published host port by default..."
-if compose ps postgres | grep -q '5432->'; then
+POSTGRES_PS="$(compose ps postgres)"
+if grep -q '5432->' <<< "${POSTGRES_PS}"; then
   echo "postgres unexpectedly published a host port by default:" >&2
-  compose ps postgres >&2
+  printf '%s\n' "${POSTGRES_PS}" >&2
   exit 1
 fi
 
@@ -820,7 +823,7 @@ if [[ "${status}" != "200" ]]; then
 fi
 
 deadline=$((SECONDS + 20))
-while docker ps --filter "name=${CONTAINER_NAME}" --format '{{.Names}}' | grep -q "${CONTAINER_NAME}"; do
+while grep -q "${CONTAINER_NAME}" <<< "$(docker ps --filter "name=${CONTAINER_NAME}" --format '{{.Names}}')"; do
   if (( SECONDS >= deadline )); then
     echo "Container ${CONTAINER_NAME} is still running after cancellation:" >&2
     docker ps >&2
@@ -905,12 +908,12 @@ echo "Verifying a task on the runner cannot read the control-plane key files..."
 CHECK_NO_KEYS_RUN="${TEMP_DIR}/check-no-keys-run.json"
 run_single_task remote-runner check_no_keys "${CHECK_NO_KEYS_RUN}"
 CHECK_NO_KEYS_OUTPUT="$(task_output "${CHECK_NO_KEYS_RUN}")"
-if echo "${CHECK_NO_KEYS_OUTPUT}" | grep -q 'PRESENT'; then
+if grep -q 'PRESENT' <<< "${CHECK_NO_KEYS_OUTPUT}"; then
   echo "A task on the runner found a control-plane key file:" >&2
   sed -n '1,200p' "${CHECK_NO_KEYS_RUN}" >&2
   exit 1
 fi
-if ! echo "${CHECK_NO_KEYS_OUTPUT}" | grep -q 'ABSENT'; then
+if ! grep -q 'ABSENT' <<< "${CHECK_NO_KEYS_OUTPUT}"; then
   echo "check_no_keys did not report ABSENT for either key file:" >&2
   sed -n '1,200p' "${CHECK_NO_KEYS_RUN}" >&2
   exit 1
@@ -921,12 +924,12 @@ echo "Verifying the runner cannot reach postgres:5432..."
 CHECK_NO_DB_RUN="${TEMP_DIR}/check-no-db-run.json"
 run_single_task remote-runner check_no_db "${CHECK_NO_DB_RUN}"
 CHECK_NO_DB_OUTPUT="$(task_output "${CHECK_NO_DB_RUN}")"
-if echo "${CHECK_NO_DB_OUTPUT}" | grep -q 'DB_REACHABLE'; then
+if grep -q 'DB_REACHABLE' <<< "${CHECK_NO_DB_OUTPUT}"; then
   echo "A task on the runner reached postgres:5432:" >&2
   sed -n '1,200p' "${CHECK_NO_DB_RUN}" >&2
   exit 1
 fi
-if ! echo "${CHECK_NO_DB_OUTPUT}" | grep -q 'DB_UNREACHABLE'; then
+if ! grep -q 'DB_UNREACHABLE' <<< "${CHECK_NO_DB_OUTPUT}"; then
   echo "check_no_db did not report DB_UNREACHABLE:" >&2
   sed -n '1,200p' "${CHECK_NO_DB_RUN}" >&2
   exit 1

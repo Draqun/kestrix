@@ -38,4 +38,25 @@ if rg -n --hidden --fixed-strings "$OLD_IMAGE" "$ROOT" \
   exit 1
 fi
 
+if rg -n --hidden -i "\b${OLD_PROJECT}\b" "$ROOT" \
+  --glob '!openspec/changes/archive/**' \
+  --glob '!openspec/specs/binary-identity/**' \
+  --glob '!openspec/specs/docker-project-identity/**' \
+  --glob '!CHANGELOG.md' \
+  --glob '!.changes/**' \
+  --glob '!scripts/check-project-identity.sh' \
+  --glob '!ui/node_modules/**' \
+  --glob '!ui/dist/**' \
+  --glob '!ui/coverage/**' \
+  --glob '!ui/business/node_modules/**' \
+  --glob '!node_modules/**' \
+  --glob '!.gocache/**' \
+  --glob '!.gomodcache/**' \
+  --glob '!.gopath/**' \
+  --glob '!.jj/**' \
+  --glob '!.git/**'; then
+  echo "Project identity check failed: obsolete project name (${OLD_PROJECT}) is still present"
+  exit 1
+fi
+
 echo "Project identity check passed: Kestrix / kestrix"

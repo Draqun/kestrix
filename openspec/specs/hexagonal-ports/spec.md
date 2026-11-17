@@ -9,7 +9,7 @@ TBD - created by archiving change hexagonal-refactor. Update Purpose after archi
 The `internal/domain` package SHALL NOT import any other `internal/*` package. It SHALL contain only interfaces and shared types.
 
 #### Scenario: Domain is a leaf
-- **WHEN** running `go list -deps gitlab.com/lunaris-bot/metaci/internal/domain`
+- **WHEN** running `go list -deps kestrix/internal/domain`
 - **THEN** no `internal/web`, `internal/store`, `internal/runner`, or `internal/service` appears
 
 ### Requirement: ProjectStore port covers project CRUD

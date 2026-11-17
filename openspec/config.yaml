@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Go 1.26, Chi HTTP framework, HCL (hashicorp/hcl/v2)
+  Tech stack: Go 1.25, Chi HTTP framework, HCL (hashicorp/hcl/v2)
   Build system: Makefile (help as default target, self-documenting)
   Testing: go test with coverage, 42+ unit tests
   CI/CD: GitLab (glab CLI), gitlab-ci-local for local testing
@@ -47,7 +47,7 @@ capabilities:
     - notifications          # Slack/Teams/email on pipeline status
     - artifact-handling      # S3/minio for build artifacts
     - runner-selection       # Tag-based runner mapping + health
-    - tf-provider            # Terraform/OpenTofu provider for MetaCI
+    - tf-provider            # Terraform/OpenTofu provider for Kestrix
     - secrets-integration    # Vault/AWS Secrets Manager JIT injection
     - cli-enhancements       # projects list, dispatch, logs commands
     - execution-dashboard    # Real-time pipeline status in UI
