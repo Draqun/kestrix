@@ -1,19 +1,17 @@
-# Roadmap: security and cross-repo batch (September 2026)
+# Roadmap: security and cross-repo batch (September 2026 — Completed)
 
-Seven changes proposed together after a documentation and code review. They
-are independent OpenSpec changes so each can be reviewed, implemented, and
-archived on its own, but they touch shared code and two pairs have an ordering
-constraint. Implement in the order below.
+Seven changes proposed together after a documentation and code review. All seven
+have been implemented, verified, and archived under `openspec/changes/archive/`.
 
-| # | Change | Kind | Depends on |
-|---|--------|------|------------|
-| 1 | `runner-execution-isolation` | security | - |
-| 2 | `webhook-ingress-hardening` | security | - |
-| 3 | `infra-housekeeping` | chore | - |
-| 4 | `run-actor-attribution` | audit | - |
-| 5 | `runtime-secrets` | feature | 1 (secrets pass the task env allowlist) |
-| 6 | `multi-source-projects` | feature | 2 (per-project webhook verification runs before fan-out) |
-| 7 | `session-cookie-auth` | security | - |
+| # | Change | Kind | Depends on | Status |
+|---|--------|------|------------|--------|
+| 1 | `runner-execution-isolation` | security | - | Archived (`2026-09-10-runner-execution-isolation`) |
+| 2 | `webhook-ingress-hardening` | security | - | Archived (`2026-09-10-webhook-ingress-hardening`) |
+| 3 | `infra-housekeeping` | chore | - | Archived (`2026-09-10-infra-housekeeping`) |
+| 4 | `run-actor-attribution` | audit | - | Archived (`2026-09-10-run-actor-attribution`) |
+| 5 | `runtime-secrets` | feature | 1 (secrets pass the task env allowlist) | Archived (`2026-09-10-runtime-secrets`) |
+| 6 | `multi-source-projects` | feature | 2 (per-project webhook verification runs before fan-out) | Archived (`2026-09-10-multi-source-projects`) |
+| 7 | `session-cookie-auth` | security | - | Archived (`2026-09-10-session-cookie-auth`) |
 
 ## Why this order
 
