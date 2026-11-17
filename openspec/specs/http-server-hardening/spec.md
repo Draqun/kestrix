@@ -7,7 +7,7 @@ Bounds what a single HTTP client can make the Kestrix process hold: connection l
 
 ### Requirement: Listener timeouts
 
-The HTTP listener SHALL enforce a read timeout covering request headers and body, a write timeout covering the response, and an idle timeout for keep-alive connections. Each SHALL have a non-zero default and SHALL be configurable through the canonical `KESTRIX_HTTP_READ_TIMEOUT`, `KESTRIX_HTTP_WRITE_TIMEOUT`, and `KESTRIX_HTTP_IDLE_TIMEOUT` settings as Go duration strings. A non-positive or unparseable value SHALL fail startup with a message naming the setting. The write timeout default SHALL be long enough for a webhook delivery that acquires a remote source before responding.
+The HTTP listener SHALL enforce read, write, and idle timeouts with non-zero defaults. Timeouts SHALL be configurable via `KESTRIX_HTTP_READ_TIMEOUT`, `KESTRIX_HTTP_WRITE_TIMEOUT`, and `KESTRIX_HTTP_IDLE_TIMEOUT` as Go duration strings; non-positive or unparseable values SHALL fail startup.
 
 #### Scenario: Slow client is disconnected
 
@@ -33,7 +33,7 @@ The HTTP listener SHALL enforce a read timeout covering request headers and body
 
 ### Requirement: Bounded request bodies
 
-Every request body the server reads SHALL be bounded. API routes SHALL share one bound configured by `KESTRIX_HTTP_MAX_BODY_BYTES`; `POST /webhook` SHALL have its own bound configured by `KESTRIX_WEBHOOK_MAX_BODY_BYTES`, since a push payload carries file lists for up to twenty commits. Both SHALL have positive defaults. A request whose body exceeds its bound SHALL be answered `413` with the standard JSON error shape, SHALL NOT run the route's business logic, and SHALL be handled identically whether the body is read as JSON or as raw bytes. A non-positive or unparseable bound SHALL fail startup with a message naming the setting.
+Every request body SHALL be bounded. API routes SHALL enforce `KESTRIX_HTTP_MAX_BODY_BYTES` and `POST /webhook` SHALL enforce `KESTRIX_WEBHOOK_MAX_BODY_BYTES`, both with positive defaults. Any request exceeding its bound SHALL be rejected with HTTP 413 without running business logic. Non-positive or unparseable bounds SHALL fail startup.
 
 #### Scenario: Oversized API body
 

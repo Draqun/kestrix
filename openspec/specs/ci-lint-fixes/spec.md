@@ -1,7 +1,7 @@
 # ci-lint-fixes Specification
 
 ## Purpose
-TBD - created by archiving change fix-fmt-check-staticcheck-ci. Update Purpose after archive.
+Ensures CI code-quality and linting checks target only project source files while ignoring vendor caches, build artifacts, and third-party modules.
 ## Requirements
 ### Requirement: fmt-check excludes vendored and cache directories
 The `make fmt-check` target SHALL only check Go source files in the project (excluding downloaded dependencies, module cache, and build artifacts), and SHALL pass when all project files are properly formatted.

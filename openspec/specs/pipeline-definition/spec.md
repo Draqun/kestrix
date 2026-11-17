@@ -137,16 +137,7 @@ The pipeline definition documentation SHALL be included in the project‑docs si
 
 ### Requirement: Variable Declaration
 
-A project MAY declare **variable** blocks. Each `variable` block SHALL have
-exactly one label, the variable key, and SHALL supply its value in exactly one
-of three ways: a literal `value`, a literal `default`, or a `secret_ref`
-naming a `secret` credential in the credential store. `secret_ref` SHALL NOT
-be combined with `value` or `default`. A variable MAY set `scope` to
-`project`, `repo`, or `job`; `repo` SHALL be required when `scope = "repo"`
-and both `repo` and `job` SHALL be required when `scope = "job"`. A variable
-MAY set `env`, `protected`, and `masked`. A variable with `secret_ref` SHALL
-be masked regardless of the `masked` attribute. Secret values SHALL NOT be
-written in HCL.
+A project MAY declare `variable` blocks with a key label, supplying a value via literal `value`, `default`, or `secret_ref` exclusively. Variables MAY declare `scope` (`project`, `repo`, `job`), `env`, `protected`, and `masked`. Variables referencing `secret_ref` SHALL be masked by default and SHALL NOT specify plaintext secrets in HCL.
 
 #### Scenario: Plaintext variable
 
@@ -198,13 +189,7 @@ SHALL be accepted and ignored.
 
 ### Requirement: Task artifacts
 
-A `ci_task` block MAY declare `artifacts`, a list of paths relative to the
-task's working directory that the task produces for tasks depending on it.
-Each path SHALL be relative, SHALL NOT contain a `..` component, and SHALL
-NOT be empty; a task SHALL declare at most 32. A pipeline violating any of
-these SHALL fail to parse, naming the task and the path. In every execution
-mode, a task whose script exits successfully but leaves a declared path
-absent SHALL be recorded as failed with an error naming the missing path.
+A `ci_task` block MAY declare `artifacts` containing up to 32 relative paths without `..` components. Pipelines violating these rules SHALL fail to parse. If a task exits with zero but leaves any declared artifact path missing, the task SHALL fail with an error naming the missing artifact.
 
 #### Scenario: Declare artifacts
 - **WHEN** a pipeline declares `ci_task "build" { artifacts = ["dist/"] ... }`
@@ -220,32 +205,7 @@ absent SHALL be recorded as failed with an error naming the missing path.
 
 ### Requirement: Variable interpolation in declared fields
 
-A pipeline file MAY reference variables it declares, as `var.<name>` or
-inside a string template `"...${var.<name>}..."`, in exactly these
-attributes:
-- a `ci_task`'s `execute` `image`;
-- each element of a `ci_task`'s `runner_tags`;
-- the project's `default_image`;
-- a `ci_repo`'s `url` and `ref`.
-
-The parser SHALL resolve each reference from the file's own `variable`
-blocks. A variable SHALL be eligible only if:
-- its scope is unset or `project`;
-- it has a literal `value` or `default`;
-- it has no `secret_ref`;
-- it is neither `masked` nor `protected`.
-
-A reference to an unknown or ineligible variable SHALL fail parsing, naming
-the attribute, the variable and the reason. Only variable references and
-string templates SHALL be accepted: a function call or any other expression
-SHALL fail parsing. Resolved values SHALL pass the same validation as literal
-values, including runner-tag normalisation and source URL validation.
-
-Every other attribute SHALL keep rejecting interpolation. For `script` the
-error SHALL say that the shell's `$VAR` is available and that `$${` writes a
-literal `${`. For `trigger` it SHALL say that triggers use their own
-expression syntax. A pipeline file without interpolation SHALL parse exactly
-as before.
+Pipelines MAY interpolate project-scoped non-secret literal variables (`var.<name>` or `${var.<name>}`) within task images, runner tags, project `default_image`, and `ci_repo` `url`/`ref`. References to unknown, scoped, secret, or masked variables SHALL fail parsing. Other attributes (e.g., `script`, `trigger`) SHALL NOT support HCL interpolation.
 
 #### Scenario: Image from a variable
 - **WHEN** a pipeline declares `variable "node" { value = "22" }` and a task sets `image = "node:${var.node}"`

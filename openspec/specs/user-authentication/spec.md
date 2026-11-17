@@ -46,23 +46,7 @@ comparison SHALL NOT be sensitive to timing.
 
 ### Requirement: Token issuance on login
 
-Kestrix SHALL expose an unauthenticated login endpoint that accepts a name and
-password and, on success, returns a signed token carrying the account name, the
-account's current token version, and an expiry. The response SHALL also state
-when the token expires. Kestrix SHALL reject a login with an unknown name and a
-login with a wrong password identically, disclosing neither which one failed nor
-whether the account exists.
-
-A token SHALL NOT be the authority on what the account may do. Any role the
-token carries is informational for the interface only, and Kestrix SHALL NOT use
-it to decide a request.
-
-On success the response SHALL also set a session cookie carrying the same
-token. The cookie SHALL be marked `HttpOnly` and `SameSite=Strict`, SHALL be
-scoped to the API path, SHALL expire when the token expires, and SHALL be
-marked `Secure` unless the deployment explicitly disables that mark for
-plain-HTTP development. The cookie SHALL NOT be readable by script running in
-the page.
+Kestrix SHALL expose an unauthenticated login endpoint returning a signed token and expiry on valid credentials, while rejecting wrong passwords and unknown accounts identically with HTTP 401. Tokens SHALL contain the account name and current token version. Successful responses SHALL also set a matching `HttpOnly`, `SameSite=Strict`, `Secure` (unless explicitly disabled) session cookie.
 
 #### Scenario: Successful login
 
@@ -104,24 +88,7 @@ the page.
 
 ### Requirement: Token verification
 
-Kestrix SHALL accept a token only when its signature verifies against the
-configured signing key, its signing algorithm is the expected one, it has not
-expired, it names an account that still exists, and it carries a token version
-equal to the version stored for that account. Kestrix SHALL reject a token whose
-header names a different algorithm, including an unsigned one, even when the
-rest of the token is well-formed. A token carrying no token version SHALL be
-rejected.
-
-Every rejection under this requirement SHALL be `401` and SHALL carry the same
-message, so that a caller cannot tell a bad signature from an unknown account
-from a superseded version.
-
-Kestrix SHALL read the token from the bearer authorization header when one is
-present, and otherwise from the session cookie. When both are present the
-header SHALL be used and the cookie ignored. A token presented in the cookie
-SHALL be verified by exactly the same rules as one presented in the header,
-including token-version revocation, and a rejected cookie token SHALL answer
-with the same status and body as a rejected header token.
+Kestrix SHALL verify tokens against the signing key, algorithm, expiration, existing account, and matching token version, reading from the `Authorization` header or fallback session cookie. Any verification failure SHALL return a uniform HTTP 401 response without disclosing whether failure was due to signature, expiry, account existence, or revoked token version.
 
 #### Scenario: Expired token
 

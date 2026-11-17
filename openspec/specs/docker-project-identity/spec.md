@@ -1,13 +1,13 @@
 # docker-project-identity Specification
 
 ## Purpose
-TBD - created by archiving change rename-docker-project-references. Update Purpose after archive.
+Standardizes Docker container, service, and image names under the unified Kestrix project naming convention.
 
 ## Requirements
 
 ### Requirement: Docker resources use the Kestrix identity
 
-Docker development and production configurations SHALL use `kestrix` for project-facing application service names and container names. Compose dependency references SHALL resolve using the renamed service names. Existing PostgreSQL database, user, password, and test-database names SHALL remain unchanged for application and test compatibility. The Compose configurations SHALL declare only the services the application connects to; a supporting service that no application code uses SHALL NOT be declared.
+Docker development and production configurations SHALL use `kestrix` for project-facing application service and container names, with Compose dependencies resolving to the renamed services. Configurations SHALL declare only services the application actively connects to.
 
 #### Scenario: Development Compose configuration
 

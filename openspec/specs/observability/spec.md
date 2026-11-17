@@ -27,14 +27,7 @@ unknown path.
 
 ### Requirement: Exposed metric set
 
-When metrics are enabled, the endpoint SHALL expose at least: the total number
-of runs that reached each terminal status (`passed`, `failed`, `canceled`), the
-current number of `running` and `queued` runs, a histogram of completed run
-durations in seconds, the total number of webhook deliveries by outcome
-(accepted, rejected, skipped), the current number of pending remote jobs that no registered runner can take (`kestrix_remote_jobs_unmatched`), and a build-information gauge whose value is `1`
-and whose labels carry the same version string reported by `GET /api/version`.
-Every metric SHALL carry a `HELP` and a `TYPE` line. Counters SHALL be
-monotonic for the life of the process and SHALL restart at zero after a restart.
+When metrics are enabled, the endpoint SHALL expose pipeline run status counters, running and queued gauges, run duration histograms, webhook delivery counters, unmatched remote job counts, and build-information metadata. Metrics SHALL include standard HELP and TYPE declarations, and counters SHALL be strictly monotonic per process lifecycle.
 
 #### Scenario: Run outcome counted once
 - **WHEN** a run reaches a terminal status

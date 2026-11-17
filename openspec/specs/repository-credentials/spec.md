@@ -8,7 +8,7 @@ Define encrypted, provider-neutral credentials for remote Git source acquisition
 
 ### Requirement: Encrypted provider-neutral credential storage
 
-Kestrix SHALL store Git credentials and run-time `secret` credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key. The credential type SHALL be bound to the ciphertext so that a stored record cannot be reinterpreted as a different type.
+Kestrix SHALL store Git and runtime `secret` credentials in PostgreSQL as authenticated ciphertext referenced by a stable `credential_ref`, bound to its credential type. The master key SHALL come exclusively from `KESTRIX_MASTER_KEY_PATH` without keyrings or implicit fallbacks. Plaintext secrets SHALL NOT be exposed in definitions, run metadata, logs, or API responses.
 
 #### Scenario: Store a GitHub or GitLab token
 
@@ -46,7 +46,7 @@ The system SHALL provide create, rotate, inspect-metadata, and revoke operations
 
 ### Requirement: Secure runtime resolution
 
-The source-acquisition port SHALL resolve Git credentials by reference at runtime and SHALL expose plaintext values only to the Git child process. Temporary credential files SHALL use restrictive permissions and SHALL be removed after success, failure, cancellation, or timeout. Git credential types (`token`, `basic`, `ssh`) SHALL NOT be injected into task processes or deployment environments; only a credential of type `secret`, referenced from a pipeline variable, reaches a task, and only as specified by the `runtime-secrets` capability. The source-acquisition port SHALL refuse a credential of type `secret`.
+The source-acquisition port SHALL resolve Git credentials by reference at runtime, exposing plaintext values only to Git subprocesses and cleaning up temporary files with restrictive permissions immediately. Git credential types (`token`, `basic`, `ssh`) SHALL NOT be injected into task execution environments, and source acquisition SHALL reject credentials of type `secret`.
 
 #### Scenario: HTTPS token acquisition
 

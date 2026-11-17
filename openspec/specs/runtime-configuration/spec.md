@@ -1,7 +1,7 @@
 # runtime-configuration Specification
 
 ## Purpose
-TBD - created by archiving change centralize-runtime-environment. Update Purpose after archive.
+Defines unified runtime configuration mechanisms, environment variable resolution, and canonical `KESTRIX_*` parameter handling.
 ## Requirements
 ### Requirement: Canonical Kestrix environment names
 
@@ -21,7 +21,7 @@ Kestrix-owned runtime environment variables SHALL use the `KESTRIX_` prefix. The
 
 ### Requirement: Startup-initialized immutable environment singleton
 
-The process SHALL initialize a single immutable environment configuration snapshot before command or server work begins. Application packages SHALL obtain environment-backed values through that snapshot or its configuration API and SHALL NOT read the process environment directly. Exactly one startup-time replacement of the snapshot is permitted: after configuration is loaded and before the server and runner are constructed — while still single-threaded — the process MAY install one derived snapshot carrying the reconciled runner settings. Initialization MUST have run before the replacement (otherwise the replacement is lost), and after the replacement all configuration consumers SHALL read the replaced snapshot.
+The process SHALL initialize a single immutable environment configuration snapshot before command or server execution. Application packages SHALL read environment configuration via this snapshot rather than querying the host environment directly. Exactly one single-threaded startup replacement is permitted to install reconciled runner settings before server and runner construction.
 
 #### Scenario: Values are loaded once at startup
 
@@ -43,7 +43,7 @@ The process SHALL initialize a single immutable environment configuration snapsh
 
 ### Requirement: Deterministic configuration precedence
 
-For each migrated setting, explicit CLI flags SHALL override config-file values, config-file values SHALL override canonical `KESTRIX_*` environment values, and application defaults SHALL be used only when no higher-precedence value exists. Legacy `METACI_*` names SHALL not participate in precedence. This precedence SHALL be applied at startup to every setting that has more than one form, through one reconciliation path: the config file is read first and the keys it sets are recorded; an environment value SHALL fill only a key the file did not set; a non-empty CLI flag SHALL override both. A setting SHALL NOT take a different rule because of where in the startup sequence it is read. This covers the Docker runner hardening settings (`runner.docker_pids`, `runner.docker_memory`, `runner.docker_cpus`, `runner.docker_user`, `runner.docker_network` and their `KESTRIX_RUNNER_DOCKER_*` equivalents), the runner cancellation grace period (`runner.cancel_grace` and `KESTRIX_RUNNER_CANCEL_GRACE`), `webhook.secret`, `webhook.history_limit`, `dispatch.project_id`, `dispatch.gitlab_token`, `dispatch.gitlab_url`, `listen_addr`, `pipeline.dir`, `database_url`, and `source_cache.*`.
+Settings SHALL follow deterministic precedence: explicit CLI flags override config-file values, config-file values override canonical `KESTRIX_*` environment variables, and defaults apply when unset. Legacy names SHALL NOT participate in precedence. This uniform rule SHALL apply to runner limits, timeouts, webhook settings, database connections, and source caches without exceptions.
 
 #### Scenario: Legacy names do not override canonical settings
 
@@ -97,9 +97,7 @@ For each migrated setting, explicit CLI flags SHALL override config-file values,
 
 ### Requirement: Centralized environment access and forwarding
 
-The configuration boundary SHALL provide typed fields for known application settings and a controlled Kestrix-prefixed environment map for child processes or dispatch. Application code SHALL read known settings from those typed fields rather than passing environment variable names as string keys. Code that forwards variables SHALL use the canonical map rather than scanning legacy names directly.
-
-Task processes started by a runner are not child processes in this sense: they SHALL NOT receive the Kestrix process environment or the canonical Kestrix-prefixed map. They SHALL receive only the allowlist defined by the `task-execution-isolation` capability, built through one function at the configuration boundary so that no executor assembles a task environment on its own.
+The configuration boundary SHALL expose typed fields for known settings and controlled environment maps. Application code SHALL access settings via typed fields rather than raw string lookups. Runner task processes SHALL NOT receive process environment maps, but strictly the isolated allowlist defined by the `task-execution-isolation` capability.
 
 #### Scenario: Dispatch context uses canonical names
 
@@ -158,7 +156,7 @@ Every configuration form Kestrix accepts — a config-file key, a `KESTRIX_*` or
 
 ### Requirement: Run scheduling settings follow the precedence rule
 
-The settings `runner.max_concurrent_runs` (`KESTRIX_RUNNER_MAX_CONCURRENT_RUNS`), `runner.run_history_limit` (`KESTRIX_RUN_HISTORY_LIMIT`), and `runner.max_output_bytes` (`KESTRIX_RUNNER_MAX_OUTPUT_BYTES`) SHALL be resolved by the same precedence as every other multi-form setting (explicit flag, then config file, then environment, then default), SHALL appear in the startup source report, and SHALL each fail startup with an error naming the setting when the resolved value is not a positive integer.
+Run scheduling settings (`runner.max_concurrent_runs`, `runner.run_history_limit`, `runner.max_output_bytes`) SHALL follow standard configuration precedence and appear in startup source reports. Unparseable or non-positive values SHALL fail startup naming the offending setting.
 
 #### Scenario: File wins over environment
 - **WHEN** `config.yaml` sets `runner.max_concurrent_runs: 4` and the environment sets `KESTRIX_RUNNER_MAX_CONCURRENT_RUNS=1`
@@ -174,14 +172,7 @@ The settings `runner.max_concurrent_runs` (`KESTRIX_RUNNER_MAX_CONCURRENT_RUNS`)
 
 ### Requirement: Observability settings follow the precedence rule
 
-The settings `metrics.enabled` (`KESTRIX_METRICS_ENABLED`), `metrics.token`
-(`KESTRIX_METRICS_TOKEN`), and `logging.level` (`KESTRIX_LOG_LEVEL`) SHALL be
-resolved by the same precedence as every other multi-form setting (explicit
-flag, then config file, then environment, then default), SHALL appear in the
-startup source report, and SHALL fail startup with an error naming the setting
-when the resolved value is not one of its accepted values. `metrics.token` is a
-secret: its value SHALL NOT appear in the source report, in any log line, or in
-any API response.
+Observability settings (`metrics.enabled`, `metrics.token`, `logging.level`) SHALL follow standard precedence and appear in startup source reports. Invalid values SHALL fail startup naming the setting. The `metrics.token` secret SHALL NOT appear in startup reports, logs, or API responses.
 
 #### Scenario: File wins over environment
 - **WHEN** `config.yaml` sets `logging.level: debug` and the environment sets `KESTRIX_LOG_LEVEL=warn`

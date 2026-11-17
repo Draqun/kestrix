@@ -1,7 +1,7 @@
 # test-db-isolation Specification
 
 ## Purpose
-TBD - created by archiving change fix-tests-use-separate-database. Update Purpose after archive.
+Guarantees test suites execute against a dedicated, isolated test database (`KESTRIX_TEST_DATABASE_URL`) without impacting development databases.
 ## Requirements
 ### Requirement: Tests use a separate database env var
 PGStore integration tests SHALL read `KESTRIX_TEST_DATABASE_URL` for the database connection string, NOT `DATABASE_URL`. When `KESTRIX_TEST_DATABASE_URL` is unset, the test helper SHALL default to `postgres://kestrix:kestrix@localhost:5433/kestrix_test?sslmode=disable&connect_timeout=2`.

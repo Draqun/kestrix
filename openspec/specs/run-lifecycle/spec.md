@@ -1,7 +1,7 @@
 # run-lifecycle Specification
 
 ## Purpose
-TBD - created by archiving change atomic-run-sources. Update Purpose after archive.
+Governs pipeline run creation, state transitions, atomic persistence of run sources, and execution lifecycle guarantees.
 
 ## Requirements
 

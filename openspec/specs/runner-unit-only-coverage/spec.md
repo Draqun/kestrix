@@ -1,7 +1,7 @@
 # runner-unit-only-coverage Specification
 
 ## Purpose
-TBD - created by archiving change runner-unit-only-coverage. Update Purpose after archive.
+Enforces complete, deterministic unit-test statement coverage for the runner execution package without relying on external integration services.
 ## Requirements
 ### Requirement: Runner SHALL have complete unit-test statement coverage
 The project SHALL enforce 100.0% statement coverage for `internal/runner` using unit tests alone. Every production statement in the package, including orchestration, adapters, dispatch, callbacks, and error handling, SHALL be executable through deterministic unit tests.
