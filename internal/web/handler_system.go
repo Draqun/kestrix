@@ -207,7 +207,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 </html>`, version.Version)
 }
 
-// handleVersion returns the server version
+// handleVersion godoc
+// @Summary Get server version
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /api/version [get]
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"version": version.Version})
