@@ -57,3 +57,12 @@ export function isManualWaiting(job, pipelineDef, allJobs) {
     return status === 'passed' || status === undefined;
   });
 }
+
+// actorLabel renders an attribution actor string for display: an empty or
+// missing actor (a run recorded before run-attribution existed) shows as
+// "unknown", and the "user:" prefix is stripped so the account name reads
+// on its own. See run-attribution: "Attribution is shown in the interface".
+export function actorLabel(actor) {
+  if (!actor) return 'unknown';
+  return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
+}

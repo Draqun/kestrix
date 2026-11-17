@@ -156,7 +156,11 @@ project "name" {
 | `cmd/kestrix/main.go` | CLI entry, config loading |
 | `cmd/kestrix/runner.go` | Remote runner agent (`kestrix runner`) and offline trace spooling |
 | `internal/domain/ports.go` | Hexagonal port interfaces (`ProjectStore`, `RunStore`, `RunnerStore`, `RemoteJobStore`) |
-| `internal/service/service.go` | `ProjectService`, `RunService`, `WebhookService`, and `BuildVarStore` |
+| `internal/service/run_service.go` | `RunService` run lifecycle, async execution, cancellation, and manual gate approval |
+| `internal/service/project_service.go` | `ProjectService` project CRUD and remote pipeline validation |
+| `internal/service/repo_url_validation.go` | Repository URL validation and IPv4/SSRF address blocking |
+| `internal/service/webhook_service.go` | `WebhookService` webhook event processing and history logging |
+| `internal/service/var_store.go` | `BuildVarStore` variable resolution and secret error types |
 | `internal/service/remote_dispatch.go` | Remote job queueing, DAG resumption walker, and run completion telemetry |
 | `internal/web/server.go` | HTTP server setup, middleware wiring, and Chi route table |
 | `internal/web/handler_run.go` | Run start, single-task re-run, manual gate approval, and cancellation handlers |

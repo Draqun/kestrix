@@ -7,8 +7,8 @@ import 'reactflow/dist/style.css';
 import {
   Box, Card, CardContent, Typography, Button, TextField, Chip,
   Alert, LinearProgress, FormControlLabel, Switch,
-  Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Divider,
-  List, ListItem, ListItemText, ListItemIcon, ListItemButton,
+  Dialog, DialogTitle, DialogContent, IconButton, Divider,
+  List, ListItem, ListItemText, ListItemIcon,
   Select, MenuItem, FormControl, InputLabel,
 } from '@mui/material';
 import {
@@ -21,69 +21,19 @@ import {
   History as HistoryIcon,
   Visibility as ViewIcon,
   Add as AddIcon,
-  Replay as RerunIcon,
 } from '@mui/icons-material';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import DAGViewer from '../components/DAGViewer';
-import CopyButton from '../components/CopyButton';
-import SkipReasonPanel from '../components/SkipReasonPanel';
-import { getSkipSummary } from '../lib/skipReason';
+import RunDetailHeader from '../components/pipelines/RunDetailHeader';
+import TaskLogPanel from '../components/pipelines/TaskLogPanel';
 import { layoutFromProject, applyTaskResultsToDagNodes } from '../lib/dagLayout';
-import { formatStatus, isManualWaiting } from '../lib/status.js';
+import { formatStatus, actorLabel } from '../lib/status.js';
 import { getProjectPipeline, getProjectDefinition, resolveProject, runProject, listProjects, listAllRuns, getRun, cancelRun, approveManualTask, runTask } from '../api/client';
 import { filterRuns, getUniqueRepos, RUN_STATUSES } from '../lib/runFilters.js';
 import Pagination from '../components/Pagination';
 import { useAuth } from '../context/AuthContext';
 import useRunEvents from '../hooks/useRunEvents.js';
-
-// actorLabel renders an attribution actor string for display: an empty or
-// missing actor (a run recorded before run-attribution existed) shows as
-// "unknown", and the "user:" prefix is stripped so the account name reads
-// on its own. See run-attribution: "Attribution is shown in the interface".
-function actorLabel(actor) {
-  if (!actor) return 'unknown';
-  return actor.startsWith('user:') ? actor.slice('user:'.length) : actor;
-}
-
-const TERMINAL_RUN_STATUSES = ['passed', 'failed', 'canceled'];
-
-const SKIPPED_SECONDARY_SX = {
-  fontSize: '0.7rem',
-  color: 'text.secondary',
-  display: 'block',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
-
-// canRerun reports whether a task of a run may be re-run on its own: the run
-// and the task must both have finished (passed, failed, or canceled). A task
-// waiting for manual approval is `manual` or `skipped`, never one of those,
-// so it keeps its approval action and never gets this one; a task skipped
-// because a dependency failed or was canceled never ran and is not offered
-// either - see ui-single-task-rerun design.md D5.
-function canRerun(job, run) {
-  return TERMINAL_RUN_STATUSES.includes(run?.status) && TERMINAL_RUN_STATUSES.includes(job?.status);
-}
-
-// RerunButton is the Re-run action for one task, shown in the job list and
-// the selected-job header. rerunning names the task whose re-run is in
-// flight, if any; every Re-run button is disabled while one is.
-function RerunButton({ task, rerunning, onRerun, sx }) {
-  return (
-    <Button size="small" variant="outlined" startIcon={<RerunIcon />} sx={sx}
-      disabled={!!rerunning} onClick={() => onRerun(task)}>
-      {rerunning === task ? 'Starting…' : 'Re-run'}
-    </Button>
-  );
-}
-
-function formatDuration(ms) {
-  if (!ms) return '';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
 
 export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
   const { roleAtLeast } = useAuth();
@@ -92,8 +42,8 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedJob, setSelectedJob] = useState(null);
-  const [dagNodes, setDagNodes, onDagNodesChange] = useNodesState([]);
-  const [dagEdges, setDagEdges, onDagEdgesChange] = useEdgesState([]);
+  const [dagNodes, setDagNodes] = useNodesState([]);
+  const [dagEdges, setDagEdges] = useEdgesState([]);
   const [canceling, setCanceling] = useState(false);
   const [approving, setApproving] = useState(null);
   const [approveErr, setApproveErr] = useState(null);
@@ -291,198 +241,37 @@ export function RunDetail({ projectName, runId, onBack, onRerunStarted }) {
   // Until the new run loads, detail may still hold the previous run: never
   // render its jobs, or their Re-run buttons, under this run's id.
   const r = detail?.id === runId ? detail : null;
-  const st = r ? formatStatus(r.status) : null;
-  const jobs = (() => {
-    const map = {};
-    (r?.task_results || []).forEach(j => { map[j.name] = j; });
-    return Object.values(map);
-  })();
-  const activeJob = selectedJob != null ? jobs.find(j => j.name === selectedJob) : null;
-  const activeTaskDef = (r?.pipeline_def?.tasks || []).find(
-    t => (t.name ?? t.Name) === activeJob?.name
-  );
 
   return (
     <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
-        <Button size="small" startIcon={<BackIcon />} onClick={onBack}>Back to runs</Button>
-        <Typography variant="h4">Run #{runId}</Typography>
-        <Typography variant="h6" color="text.secondary">{projectName}</Typography>
-        {st && <Chip label={st.label} color={st.color} size="small" />}
-        {r?.rerun_task ? (
-          <Chip label={`Re-run: ${r.rerun_task}`} size="small" variant="outlined" />
-        ) : r?.changed?.length > 0 && (
-          <Chip label={`Changed: ${r.changed.join(', ')}`} size="small" variant="outlined" />
-        )}
-        <Box sx={{ flexGrow: 1 }} />
-        {canOperate && (r?.status === 'running' || r?.status === 'queued') && (
-          <Button variant="outlined" color="warning" size="small" onClick={handleCancel} disabled={canceling}>
-            {canceling ? 'Canceling…' : 'Cancel'}
-          </Button>
-        )}
-      </Box>
-
-      {loading && !r && <LinearProgress sx={{ mb: 2 }} />}
-      {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-      {approveErr && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setApproveErr(null)}>{approveErr}</Alert>}
-      {rerunErr && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setRerunErr(null)}>{rerunErr}</Alert>}
-
-      {r && (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-          {new Date(r.started_at).toLocaleString()} by {actorLabel(r.started_by)}
-          {r.finished_at && ` → ${new Date(r.finished_at).toLocaleString()}`}
-          {r.status === 'canceled' && ` · canceled by ${actorLabel(r.canceled_by)}`}
-        </Typography>
-      )}
-
-	  {r?.sources?.length > 0 && (
-		<Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-		  {r.sources.map((source, index) => (
-			<Chip
-			  key={`${source.repo_name}-${source.resolved_revision}-${index}`}
-			  size="small"
-			  variant="outlined"
-			  label={`${source.repo_name}${source.primary ? ' (primary)' : ''}: ${source.url} @ ${source.requested_ref} → ${source.resolved_revision}`}
-			/>
-		  ))}
-		</Box>
-	  )}
-
-      <Box sx={{ display: 'flex', gap: 2, flex: 1, minHeight: 0 }}>
-        <Card sx={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-          <CardContent sx={{ flex: 1, overflow: 'auto', py: 1, '&:last-child': { pb: 1 } }}>
-            <Typography variant="subtitle2" gutterBottom>Jobs</Typography>
-            {jobs.length > 0 ? (
-              <List dense disablePadding>
-                {jobs.map(job => {
-                  const js = formatStatus(job.status);
-                  const canRun = isManualWaiting(job, r?.pipeline_def, jobs);
-                  return (
-                    <ListItem key={job.name} disablePadding sx={{ mb: 0.5, flexDirection: 'column', alignItems: 'stretch' }}>
-                      <ListItemButton
-                        selected={selectedJob === job.name}
-                        onClick={() => setSelectedJob(selectedJob === job.name ? null : job.name)}
-                        sx={{ borderRadius: 1, px: 1 }}>
-                        <Chip label={js.label} color={js.color} size="small" sx={{ mr: 1, minWidth: 54 }} />
-                        <ListItemText
-                          primary={job.name}
-                          secondary={job.status === 'skipped' ? getSkipSummary(job) : formatDuration(job.duration)}
-                          slotProps={{
-                            primary: { variant: 'body2', fontWeight: 600 },
-                            secondary: {
-                              variant: 'caption',
-                              sx: job.status === 'skipped' ? SKIPPED_SECONDARY_SX : {}
-                            },
-                          }}
-                        />
-                      </ListItemButton>
-                      {job.waiting_reason && (
-                        <Alert severity="warning" sx={{ mt: 0.5, mx: 1, py: 0, px: 1, fontSize: '0.75rem' }}>
-                          {job.waiting_reason}
-                        </Alert>
-                      )}
-                      {canOperate && canRun && (
-                        <Button size="small" variant="contained" color="info" sx={{ mt: 0.5, mx: 1 }}
-                          disabled={!!approving} onClick={() => handleApprove(job.name)}>
-                          {approving === job.name ? 'Starting…' : 'Run'}
-                        </Button>
-                      )}
-                      {canOperate && canRerun(job, r) && (
-                        <RerunButton task={job.name} rerunning={rerunning} onRerun={handleRerun} sx={{ mt: 0.5, mx: 1 }} />
-                      )}
-                    </ListItem>
-                  );
-                })}
-              </List>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                {loading ? 'Loading…' : 'No job data yet.'}
-              </Typography>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 1, minHeight: 0, '&:last-child': { pb: 1 } }}>
-            {activeJob ? (
-              <>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, px: 1 }}>
-                  <Button size="small" onClick={() => setSelectedJob(null)}>← DAG</Button>
-                  <Typography variant="subtitle1" fontWeight={700}>{activeJob.name}</Typography>
-                  <Chip label={formatStatus(activeJob.status).label} color={formatStatus(activeJob.status).color} size="small" />
-                  {activeJob.duration > 0 && (
-                    <Typography variant="caption" color="text.secondary">{formatDuration(activeJob.duration)}</Typography>
-                  )}
-                  {canOperate && isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
-                    <Button size="small" variant="contained" color="info" disabled={!!approving}
-                      onClick={() => handleApprove(activeJob.name)}>
-                      {approving === activeJob.name ? 'Starting…' : 'Run manual job'}
-                    </Button>
-                  )}
-                  {canOperate && canRerun(activeJob, r) && (
-                    <RerunButton task={activeJob.name} rerunning={rerunning} onRerun={handleRerun} />
-                  )}
-                </Box>
-                {activeJob.approved_by && (
-                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1, px: 1 }}>
-                    approved by {actorLabel(activeJob.approved_by)}
-                    {activeJob.approved_at && ` at ${new Date(activeJob.approved_at).toLocaleString()}`}
-                  </Typography>
-                )}
-                {activeJob.error && activeJob.status !== 'manual' && activeJob.status !== 'skipped' && (
-                  <Alert severity="error" sx={{ mb: 1, mx: 1 }}>{activeJob.error}</Alert>
-                )}
-                {activeJob.waiting_reason && (
-                  <Alert severity="warning" sx={{ mb: 1, mx: 1 }}>{activeJob.waiting_reason}</Alert>
-                )}
-                {isManualWaiting(activeJob, r?.pipeline_def, jobs) && (
-                  <Alert severity="info" sx={{ mb: 1, mx: 1 }}>Waiting for manual approval.</Alert>
-                )}
-
-                <SkipReasonPanel
-                  job={activeJob}
-                  taskDef={activeTaskDef}
-                  jobs={jobs}
-                  changed={r?.changed}
-                  onSelectJob={setSelectedJob}
-                />
-
-                {(activeJob.output || activeJob.status !== 'skipped') && (
-                  <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                    <CopyButton text={activeJob.output || ''} />
-                    <Box component="pre" sx={{ m: 0, p: 1.5, flex: 1, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                      {activeJob.output || (activeJob.status === 'running' ? 'Running…' : '(No output)')}
-                    </Box>
-                  </Box>
-                )}
-            </>
-            ) : (
-              <Box sx={{ flex: 1, borderRadius: 1, overflow: 'hidden', minHeight: 320 }}>
-                {dagNodes.length > 0 ? (
-                  <DAGViewer nodes={dagNodes} edges={dagEdges}
-                    onNodeClick={(_, node) => {
-                      if (node.data?.type === 'task') setSelectedJob(node.id.replace('task:', ''));
-                    }} />
-            ) : (
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                    <Typography variant="body2" color="text.secondary">
-                      {loading ? 'Loading pipeline…' : 'No pipeline definition'}
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-            )}
-            {r?.output && !activeJob && (
-              <Box sx={{ position: 'relative', mt: 1 }}>
-                <CopyButton text={r.output} />
-                <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 160, overflow: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? 'grey.900' : 'grey.200', borderRadius: 1, fontSize: 11, whiteSpace: 'pre-wrap' }}>
-                  {r.output}
-                </Box>
-              </Box>
-            )}
-          </CardContent>
-        </Card>
-      </Box>
+      <RunDetailHeader
+        projectName={projectName}
+        runId={runId}
+        run={r}
+        loading={loading}
+        error={error}
+        approveErr={approveErr}
+        rerunErr={rerunErr}
+        canceling={canceling}
+        canOperate={canOperate}
+        onBack={onBack}
+        onCancel={handleCancel}
+        onClearApproveErr={() => setApproveErr(null)}
+        onClearRerunErr={() => setRerunErr(null)}
+      />
+      <TaskLogPanel
+        run={r}
+        loading={loading}
+        selectedJob={selectedJob}
+        onSelectJob={setSelectedJob}
+        dagNodes={dagNodes}
+        dagEdges={dagEdges}
+        canOperate={canOperate}
+        approving={approving}
+        onApprove={handleApprove}
+        rerunning={rerunning}
+        onRerun={handleRerun}
+      />
     </Box>
   );
 }
