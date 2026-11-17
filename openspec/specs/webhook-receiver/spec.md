@@ -11,8 +11,23 @@ The webhook receiver is an HTTP server that accepts push events from GitLab (and
 
 ### Requirement: HTTP Endpoint (implemented)
 
-The server SHALL expose `POST /webhook` accepting JSON push webhooks from GitLab and GitHub, rejecting unverified deliveries with HTTP 401 using constant-time comparison against project or global secrets. GitHub payloads SHALL require valid `X-Hub-Signature-256` HMAC signatures, while GitLab uses the configured method (`gitlab` header or `hmac`). Bodies exceeding the configured limit SHALL return 413.
+The server SHALL expose a `POST /webhook` endpoint that accepts JSON payloads from GitLab and GitHub push webhooks. The server SHALL also expose a `GET /api/health` endpoint that reports service status and stored counts, and a `GET /ping` heartbeat, for monitoring.
 
+#### Scenario: Ping heartbeat
+- **WHEN** `GET /ping` is requested
+- **THEN** server returns HTTP 200 with `.`
+
+### Requirement: Webhook authentication fail-closed and constant-time
+
+Every delivery to `POST /webhook` SHALL be authenticated before any part of its payload is trusted, and verification SHALL fail closed. A delivery is accepted only if it verifies against either the matched registered project's own webhook secret or the global webhook secret. A delivery that verifies against neither SHALL be rejected with `401`, unrecorded, without triggering work. Secret comparison SHALL be constant time. The rejection response SHALL be identical and disclose no secret details.
+
+#### Scenario: Constant-time secret verification
+- **WHEN** a webhook secret is checked
+- **THEN** comparison SHALL be constant time
+
+### Requirement: Webhook verification methods and body bounds
+
+A delivery carrying an `X-GitHub-Event` header SHALL be verified by HMAC-SHA256 over the raw body (`X-Hub-Signature-256`), regardless of configured method. Other deliveries use configured method (`gitlab` header or `hmac` signature), configurable via `--method` or `KESTRIX_WEBHOOK_METHOD` (default `gitlab`). Request body SHALL be read at most once, bounded by configured webhook body limit; exceeding bodies SHALL return `413` and remain unrecorded.
 #### Scenario: Health check
 
 - **WHEN** a client sends `GET /api/health` and every backing store answers
@@ -105,8 +120,15 @@ The server SHALL expose `POST /webhook` accepting JSON push webhooks from GitLab
 
 ### Requirement: Push Event Parsing (implemented)
 
-The server SHALL parse GitLab and GitHub push payloads into repository identifiers, clone URLs, branch names, deduplicated file changes, commit counts, and checkout SHAs. Verified GitHub `ping` events SHALL return HTTP 200 `pong`, while non-push events or non-JSON encodings SHALL return HTTP 400.
+The server SHALL parse GitLab and GitHub push event payloads, extracting repository path_with_namespace, repository URLs (HTTP, SSH, web), GitLab project ID (GitLab only), branch name (normalized from refs/heads/* or refs/tags/*), deduplicated changed files across all commits, commit count, and immutable checkout SHA.
 
+#### Scenario: Event commit count extracted
+- **WHEN** a push payload has 3 commits
+- **THEN** commit count SHALL be recorded as 3
+
+### Requirement: GitHub event fields and non-push handling
+
+For a GitHub delivery the server SHALL read `repository.full_name`, `repository.clone_url`, `repository.ssh_url`, `repository.html_url`, `repository.default_branch`, `ref`, `after`, `deleted`, and `commits[].added`, `modified` and `removed`. A GitHub `ping` event SHALL return `200` with `{"status": "pong"}` without recording. Other events or form-encoded deliveries SHALL return `400`.
 #### Scenario: Parse a push event
 
 ```
@@ -172,8 +194,15 @@ AND no tasks SHALL be triggered
 
 ### Requirement: Pipeline Loading (implemented)
 
-For registered projects, the server SHALL load pipeline definitions from the primary source: at the event SHA for primary deliveries, or at the configured `repo_ref` for secondary source deliveries while attributing the event SHA to the secondary source. Multiple `.tf` pipeline files SHALL merge into one project definition.
+For a registered project the server SHALL load the pipeline definition from the project's primary source on each webhook request. When the delivery came from the primary source, the definition SHALL be loaded at the event's immutable checkout SHA. Multiple .tf files in the pipeline directory SHALL be merged into a single project. When the server runs against a single pipeline directory with no registered project, it SHALL load that directory as before.
 
+#### Scenario: Merged pipeline files
+- **WHEN** multiple .tf files exist in pipeline directory
+- **THEN** they SHALL merge into one project definition
+
+### Requirement: Secondary source pipeline loading
+
+When the delivery came from a secondary source, the definition SHALL be loaded from the primary source at the project's configured `repo_ref`, and the event SHA SHALL be recorded against the secondary source rather than checked out as the pipeline.
 #### Scenario: Load pipeline from directory
 
 ```
@@ -334,8 +363,15 @@ Each recorded webhook event SHALL carry the name of the source it matched
 
 ### Requirement: A push to the configured ref starts a run
 
-When a verified push matches a registered project, targets its configured ref (`repo_ref` or `ci_repo` ref), resolves triggered tasks, and does not dispatch to GitLab CI, Kestrix SHALL start a pipeline run under standard concurrency, secret, and redaction rules, returning the `run_id` in the webhook response.
+When a verified push matches a registered project, resolves at least one triggered task, and the project does not dispatch to GitLab CI, Kestrix SHALL start a run of that project in its execution mode. The run SHALL use the pipeline and source revision the webhook loaded and the changed set it computed. It SHALL go through the same concurrency limit, secret resolution and output redaction as a run started from the interface.
 
+#### Scenario: Run uses loaded pipeline revision
+- **WHEN** a push starts a run
+- **THEN** the run executes with the pipeline loaded at that event revision
+
+### Requirement: Branch push filtering and dispatch exclusivity
+
+Only a branch push to the configured ref SHALL start a run: the project's `repo_ref` for its primary repository; the matched `ci_repo`'s `ref` (or default branch) for secondary repository. A push to any other branch or tag push SHALL NOT start a run. A project dispatching to GitLab CI SHALL NOT start a Kestrix run. The response SHALL carry the started `run_id`, starting at most one run per project.
 #### Scenario: Push to the configured branch starts a run
 - **WHEN** a verified push to `main` of a project whose `repo_ref` is `main` triggers the task `build`
 - **THEN** a run of that project SHALL be started at the pushed SHA with `build` triggered

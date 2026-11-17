@@ -116,8 +116,15 @@ Cancelling an in-process run (`local` or `docker`) SHALL terminate executing tas
 
 ### Requirement: Local execution requires an explicit opt-in
 
-Kestrix SHALL execute `local` mode tasks only when `runner.allow_local` (`KESTRIX_RUNNER_ALLOW_LOCAL`) is explicitly enabled (default `false`). If disabled, startup with `local` mode, project CRUD in `local` mode, and execution of `local` projects SHALL be rejected. When enabled, startup SHALL log a security warning.
+Kestrix SHALL execute a task in `local` mode inside its own process only when the instance setting `runner.allow_local` (environment variable `KESTRIX_RUNNER_ALLOW_LOCAL`) is true. The setting SHALL default to false and follow the configuration precedence rule. The instance runner mode itself (`runner.mode`) SHALL be settable via the environment variable `KESTRIX_EXECUTION_MODE`, following the same precedence rule; this is distinct from `KESTRIX_RUNNER_MODE`.
 
+#### Scenario: Execution mode precedence
+- **WHEN** `KESTRIX_EXECUTION_MODE` is provided
+- **THEN** it SHALL configure the instance runner mode
+
+### Requirement: Local execution rejection and warning rules
+
+When `runner.allow_local` is false: startup SHALL fail if instance runner mode is `local` or unset, with a message stating that `local` tasks can read Kestrix's key files and naming `remote` and the opt-in as alternatives; creating or updating a project with mode `local` SHALL be rejected as validation error; a run of a stored `local` project SHALL fail before source acquisition. When true, startup SHALL log a warning naming the exposure and stored `local` projects count.
 #### Scenario: Local instance mode without the opt-in
 - **WHEN** Kestrix starts with `runner.mode` unset and `KESTRIX_RUNNER_ALLOW_LOCAL` unset
 - **THEN** startup SHALL fail with a message naming the key-file exposure, `remote`, and `KESTRIX_RUNNER_ALLOW_LOCAL`

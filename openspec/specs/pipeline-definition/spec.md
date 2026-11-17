@@ -137,8 +137,15 @@ The pipeline definition documentation SHALL be included in the project‑docs si
 
 ### Requirement: Variable Declaration
 
-A project MAY declare `variable` blocks with a key label, supplying a value via literal `value`, `default`, or `secret_ref` exclusively. Variables MAY declare `scope` (`project`, `repo`, `job`), `env`, `protected`, and `masked`. Variables referencing `secret_ref` SHALL be masked by default and SHALL NOT specify plaintext secrets in HCL.
+A project MAY declare **variable** blocks. Each `variable` block SHALL have exactly one label, the variable key, and SHALL supply its value in exactly one of three ways: a literal `value`, a literal `default`, or a `secret_ref` naming a `secret` credential in the credential store. `secret_ref` SHALL NOT be combined with `value` or `default`. Secret values SHALL NOT be written in HCL.
 
+#### Scenario: Secret variable with literal rejected
+- **WHEN** a variable declares both `secret_ref` and `value`
+- **THEN** pipeline parsing SHALL fail with a validation error
+
+### Requirement: Variable scopes and attributes
+
+A variable MAY set `scope` to `project`, `repo`, or `job`; `repo` SHALL be required when `scope = "repo"` and both `repo` and `job` SHALL be required when `scope = "job"`. A variable MAY set `env`, `protected`, and `masked`. A variable with `secret_ref` SHALL be masked regardless of the `masked` attribute.
 #### Scenario: Plaintext variable
 
 - **WHEN** a user writes `variable "DOCKER_REGISTRY" { value = "registry.example.test" scope = "project" }`
@@ -187,10 +194,17 @@ SHALL be accepted and ignored.
 - **WHEN** a project in `docker` mode runs a task declaring `runner_tags`
 - **THEN** the task SHALL execute as it would without the attribute
 
-### Requirement: Task artifacts
+### Requirement: Task artifacts declaration
 
-A `ci_task` block MAY declare `artifacts` containing up to 32 relative paths without `..` components. Pipelines violating these rules SHALL fail to parse. If a task exits with zero but leaves any declared artifact path missing, the task SHALL fail with an error naming the missing artifact.
+A `ci_task` block MAY declare `artifacts`, a list of paths relative to the task's working directory that the task produces for tasks depending on it. Each path SHALL be relative, SHALL NOT contain a `..` component, and SHALL NOT be empty; a task SHALL declare at most 32. A pipeline violating any of these SHALL fail to parse, naming the task and the path.
 
+#### Scenario: Valid task artifacts count bound
+- **WHEN** a task declares at most 32 relative artifact paths
+- **THEN** the pipeline SHALL parse successfully
+
+### Requirement: Task artifacts presence validation
+
+In every execution mode, a task whose script exits successfully but leaves a declared path absent SHALL be recorded as failed with an error naming the missing path.
 #### Scenario: Declare artifacts
 - **WHEN** a pipeline declares `ci_task "build" { artifacts = ["dist/"] ... }`
 - **THEN** the parsed task SHALL carry the artifact path `dist/`
@@ -205,8 +219,27 @@ A `ci_task` block MAY declare `artifacts` containing up to 32 relative paths wit
 
 ### Requirement: Variable interpolation in declared fields
 
-Pipelines MAY interpolate project-scoped non-secret literal variables (`var.<name>` or `${var.<name>}`) within task images, runner tags, project `default_image`, and `ci_repo` `url`/`ref`. References to unknown, scoped, secret, or masked variables SHALL fail parsing. Other attributes (e.g., `script`, `trigger`) SHALL NOT support HCL interpolation.
+A pipeline file SHALL support referencing variables it declares, as `var.<name>` or inside a string template `"...${var.<name>}..."`, in exactly these attributes:
+- a `ci_task`'s `execute` `image`;
+- each element of a `ci_task`'s `runner_tags`;
+- the project's `default_image`;
+- a `ci_repo`'s `url` and `ref`.
 
+#### Scenario: Interpolated variable in task image attribute
+- **WHEN** a task image uses `${var.custom_image}`
+- **THEN** the image reference SHALL resolve to the variable value
+
+### Requirement: Interpolation eligibility and expressions
+
+The parser SHALL resolve each reference from the file's own `variable` blocks. A variable SHALL be eligible only if: its scope is unset or `project`; it has a literal `value` or `default`; it has no `secret_ref`; and it is neither `masked` nor `protected`. References to unknown or ineligible variables SHALL fail parsing, naming the attribute, variable, and reason. Only variable references and string templates SHALL be accepted; function calls or other expressions SHALL fail parsing.
+
+#### Scenario: Function call in interpolation rejected
+- **WHEN** an interpolated field uses a function expression
+- **THEN** parsing SHALL fail with a syntax error
+
+### Requirement: Rejection of interpolation in other attributes
+
+Every other attribute SHALL keep rejecting interpolation. For `script` the error SHALL state that `$VAR` is available and `$${` writes a literal `${`. For `trigger` it SHALL state that triggers use their own expression syntax. A pipeline file without interpolation SHALL parse as before. Resolved values SHALL pass standard validation, including runner-tag normalisation and source URL validation.
 #### Scenario: Image from a variable
 - **WHEN** a pipeline declares `variable "node" { value = "22" }` and a task sets `image = "node:${var.node}"`
 - **THEN** the parsed task's image SHALL be `node:22`

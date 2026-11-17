@@ -32,8 +32,15 @@ The project detail view SHALL indicate whether a webhook secret is stored, deriv
 
 ### Requirement: Webhook setup instructions are shown per project
 
-The project detail view SHALL show a setup panel with the `/webhook` delivery URL, copy action, and Git host instructions (payload URL, secret token, push events). The panel SHALL detail GitLab header verification modes (`X-Gitlab-Token` and `X-Hub-Signature-256`) and GitHub configuration requirements (`application/json`, `X-Hub-Signature-256`).
+The project detail view SHALL show a setup panel containing the delivery URL built from the page origin and the `/webhook` path, a one-click copy action, and the Git host steps required (webhook URL, secret token, push events). The panel SHALL name both accepted header forms (`X-Gitlab-Token` for token mode, `X-Hub-Signature-256` for HMAC mode) and state that the server's configured method decides which one is verified for GitLab.
 
+#### Scenario: Webhook setup panel details
+- **WHEN** user opens setup panel
+- **THEN** it SHALL display webhook URL and GitLab verification header forms
+
+### Requirement: GitHub webhook setup instructions
+
+The setup panel SHALL also show GitHub steps: the payload URL, content type `application/json`, the secret, and push events only, and SHALL state that GitHub deliveries are always verified by `X-Hub-Signature-256`.
 #### Scenario: User copies the delivery URL
 - **WHEN** the UI is served at `https://ci.example.com` and the user opens a project's setup panel
 - **THEN** the panel shows `https://ci.example.com/webhook` and copying places exactly that string on the clipboard

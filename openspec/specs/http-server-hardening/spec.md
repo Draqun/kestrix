@@ -7,7 +7,7 @@ Bounds what a single HTTP client can make the Kestrix process hold: connection l
 
 ### Requirement: Listener timeouts
 
-The HTTP listener SHALL enforce read, write, and idle timeouts with non-zero defaults. Timeouts SHALL be configurable via `KESTRIX_HTTP_READ_TIMEOUT`, `KESTRIX_HTTP_WRITE_TIMEOUT`, and `KESTRIX_HTTP_IDLE_TIMEOUT` as Go duration strings; non-positive or unparseable values SHALL fail startup.
+The HTTP listener SHALL enforce a read timeout covering request headers and body, a write timeout covering the response, and an idle timeout for keep-alive connections. Each SHALL have a non-zero default and SHALL be configurable through the canonical `KESTRIX_HTTP_READ_TIMEOUT`, `KESTRIX_HTTP_WRITE_TIMEOUT`, and `KESTRIX_HTTP_IDLE_TIMEOUT` settings as Go duration strings.
 
 #### Scenario: Slow client is disconnected
 
@@ -20,12 +20,15 @@ The HTTP listener SHALL enforce read, write, and idle timeouts with non-zero def
 - **WHEN** a client completes a request and sends nothing further for longer than the idle timeout
 - **THEN** the server SHALL close the connection
 
+### Requirement: Listener timeout validation and webhook margin
+
+A non-positive or unparseable listener timeout value SHALL fail startup with a message naming the setting. The write timeout default SHALL be long enough for a webhook delivery that acquires a remote source before responding.
+
 #### Scenario: Invalid timeout fails startup
 
 - **WHEN** `KESTRIX_HTTP_READ_TIMEOUT` is set to `0`, a negative duration, or a non-duration string
 - **THEN** the server SHALL refuse to start
 - **AND** the error SHALL name `KESTRIX_HTTP_READ_TIMEOUT`
-
 #### Scenario: Defaults apply when unset
 
 - **WHEN** none of the timeout settings is provided
@@ -33,7 +36,7 @@ The HTTP listener SHALL enforce read, write, and idle timeouts with non-zero def
 
 ### Requirement: Bounded request bodies
 
-Every request body SHALL be bounded. API routes SHALL enforce `KESTRIX_HTTP_MAX_BODY_BYTES` and `POST /webhook` SHALL enforce `KESTRIX_WEBHOOK_MAX_BODY_BYTES`, both with positive defaults. Any request exceeding its bound SHALL be rejected with HTTP 413 without running business logic. Non-positive or unparseable bounds SHALL fail startup.
+Every request body the server reads SHALL be bounded. API routes SHALL share one bound configured by `KESTRIX_HTTP_MAX_BODY_BYTES`; `POST /webhook` SHALL have its own bound configured by `KESTRIX_WEBHOOK_MAX_BODY_BYTES`, since a push payload carries file lists for up to twenty commits. Both SHALL have positive defaults.
 
 #### Scenario: Oversized API body
 
@@ -41,12 +44,15 @@ Every request body SHALL be bounded. API routes SHALL enforce `KESTRIX_HTTP_MAX_
 - **THEN** the server SHALL respond `413`
 - **AND** no project SHALL be created
 
+### Requirement: Request body rejection handling
+
+A request whose body exceeds its bound SHALL be answered `413` with the standard JSON error shape, SHALL NOT run the route's business logic, and SHALL be handled identically whether the body is read as JSON or as raw bytes. A non-positive or unparseable bound SHALL fail startup with a message naming the setting.
+
 #### Scenario: Oversized login body
 
 - **WHEN** a client sends `POST /api/auth/login` with a body larger than `KESTRIX_HTTP_MAX_BODY_BYTES`
 - **THEN** the server SHALL respond `413`
 - **AND** the login throttle and password verification SHALL NOT run
-
 #### Scenario: Body within bound is unaffected
 
 - **WHEN** a client sends a request whose body is within its bound

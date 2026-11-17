@@ -7,8 +7,15 @@ Webhook log history gives operators a durable, queryable record of every webhook
 
 ### Requirement: Durable Event Storage
 
-Kestrix SHALL persist processed webhook events to the database across restarts. Each record SHALL capture the receipt timestamp, matched project name, repository identifier, branch, checkout revision, commit count, triggered task names, terminal status (`triggered`, `skipped`, `ignored`, `error`), error details, and dispatch outcomes.
+Kestrix SHALL persist each processed webhook event to the runtime database. A recorded event SHALL survive a server restart and SHALL contain: the receive timestamp, the project name (the registered project's name when matched, otherwise the name in parsed pipeline), the source repository identifier and branch, the checkout revision, and the commit count.
 
+#### Scenario: Core event fields persisted
+- **WHEN** a webhook event is processed
+- **THEN** timestamp, project name, branch, and commit count SHALL be stored
+
+### Requirement: Event outcome and dispatch metadata
+
+A recorded webhook event SHALL contain the list of triggered task names, a terminal status of `triggered`, `skipped`, `ignored`, or `error`, the error message when the status is `error`, and the dispatch outcome, including the pipeline ID and pipeline URL when a pipeline was dispatched.
 #### Scenario: Event survives restart
 
 - **WHEN** a webhook event is processed and the server is restarted

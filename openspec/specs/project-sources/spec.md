@@ -8,8 +8,15 @@ push to any repository the pipeline declares can reach that project's triggers.
 
 ### Requirement: Sources are derived from the project and its pipeline
 
-A registered project's sources SHALL consist of its primary `repo_url` plus each parsed `ci_repo` block declaring a `url`. Sources SHALL be recomputed in full upon project creation, update, or pipeline reload at its configured ref, but not during arbitrary commit loads. Sources SHALL NOT be modified directly through the API.
+Every registered project SHALL have a set of sources consisting of exactly: its primary repository (`repo_url`), marked primary, and one entry for each `ci_repo` block in its parsed pipeline that declares a `url`. A source SHALL NOT be created, edited, or deleted directly through the API.
 
+#### Scenario: Secondary sources derived
+- **WHEN** a pipeline declares remote `ci_repo` blocks with `url`
+- **THEN** they SHALL be included in the project sources
+
+### Requirement: Sources recomputation on project and ref updates
+
+Kestrix SHALL recompute the set whenever the project is created, updated, or its pipeline definition is loaded from Git **at its configured ref**, replacing the previous set in full. A load of any other revision, such as the immutable SHA of a push to the primary repository, SHALL NOT change the set.
 #### Scenario: Registration derives the primary source
 
 - **WHEN** a project is registered with `repo_url` and a pipeline that declares no remote `ci_repo`
