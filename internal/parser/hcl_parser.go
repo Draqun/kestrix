@@ -1,4 +1,4 @@
-// Package parser reads HCL files and produces model.Project values.
+// Package parser reads HCL files and produces domain.Project values.
 //
 // We deliberately avoid gohcl: it requires an *hcl.EvalContext even though our
 // HCL contains only literal values (no interpolation, no variables). Manual
@@ -19,38 +19,37 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // ParseFile reads a single HCL file and returns its Project definition.
-func ParseFile(path string) (model.Project, error) {
+func ParseFile(path string) (domain.Project, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return model.Project{}, fmt.Errorf("read %s: %w", path, err)
+		return domain.Project{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	return ParseSource(src, path)
 }
 
 // ParseSource parses HCL source bytes into a Project.
-func ParseSource(src []byte, filename string) (model.Project, error) {
+func ParseSource(src []byte, filename string) (domain.Project, error) {
 	f, diags := hclsyntax.ParseConfig(src, filename, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
-		return model.Project{}, formatDiags(diags, filename)
+		return domain.Project{}, formatDiags(diags, filename)
 	}
 	body := f.Body.(*hclsyntax.Body)
 
-	var proj model.Project
+	var proj domain.Project
 	for _, blk := range body.Blocks {
 		switch blk.Type {
 		case "project":
 			p, err := decodeProjectBlock(blk)
 			if err != nil {
-				return model.Project{}, fmt.Errorf("project block: %w", err)
+				return domain.Project{}, fmt.Errorf("project block: %w", err)
 			}
 			proj = p
 		default:
 			// Top-level blocks must be `project`.
-			return model.Project{}, fmt.Errorf("unsupported top-level block %q", blk.Type)
+			return domain.Project{}, fmt.Errorf("unsupported top-level block %q", blk.Type)
 		}
 	}
 	return proj, nil
@@ -58,11 +57,11 @@ func ParseSource(src []byte, filename string) (model.Project, error) {
 
 // decodeProjectBlock reads the inner attributes (name, default_image) and
 // child blocks (ci_repo, ci_task) of a project block.
-func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
+func decodeProjectBlock(blk *hclsyntax.Block) (domain.Project, error) {
 	if len(blk.Labels) != 1 {
-		return model.Project{}, fmt.Errorf("project block requires exactly 1 label, got %d", len(blk.Labels))
+		return domain.Project{}, fmt.Errorf("project block requires exactly 1 label, got %d", len(blk.Labels))
 	}
-	proj := model.Project{Name: blk.Labels[0]}
+	proj := domain.Project{Name: blk.Labels[0]}
 
 	// Decode variable blocks first so we can build the interpolation evaluation context
 	// before decoding project attributes, repos and tasks.
@@ -70,7 +69,7 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 		if child.Type == "variable" {
 			v, err := decodeVariableBlock(child)
 			if err != nil {
-				return model.Project{}, fmt.Errorf("variable: %w", err)
+				return domain.Project{}, fmt.Errorf("variable: %w", err)
 			}
 			proj.Variables = append(proj.Variables, v)
 		}
@@ -91,7 +90,7 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 			_, err = literal(item.Expr, item.Name)
 		}
 		if err != nil {
-			return model.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
+			return domain.Project{}, fmt.Errorf("attribute %q: %w", item.Name, err)
 		}
 	}
 
@@ -103,29 +102,29 @@ func decodeProjectBlock(blk *hclsyntax.Block) (model.Project, error) {
 		case "ci_repo":
 			r, err := decodeRepoBlock(child, vc)
 			if err != nil {
-				return model.Project{}, fmt.Errorf("ci_repo: %w", err)
+				return domain.Project{}, fmt.Errorf("ci_repo: %w", err)
 			}
 			proj.Repos = append(proj.Repos, r)
 		case "ci_task":
 			t, err := decodeTaskBlock(child, vc)
 			if err != nil {
-				return model.Project{}, fmt.Errorf("ci_task: %w", err)
+				return domain.Project{}, fmt.Errorf("ci_task: %w", err)
 			}
 			proj.Tasks = append(proj.Tasks, t)
 		default:
-			return model.Project{}, fmt.Errorf("unsupported child block %q in project", child.Type)
+			return domain.Project{}, fmt.Errorf("unsupported child block %q in project", child.Type)
 		}
 	}
 	return proj, nil
 }
 
-func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Repo, error) {
+func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (domain.Repo, error) {
 	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
 	// own syntax error for `ci_repo {}` (no labels) and `ci_repo "a" "b"`
 	// before this block-decoder runs. The guard stays as a defensive
 	// check; the branch is documented as unreachable in parser tests.
 	if len(blk.Labels) != 1 {
-		return model.Repo{}, fmt.Errorf("ci_repo requires 1 label")
+		return domain.Repo{}, fmt.Errorf("ci_repo requires 1 label")
 	}
 	var vc *varEvalContext
 	if len(vctx) > 0 && vctx[0] != nil {
@@ -134,7 +133,7 @@ func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Repo,
 		vc = buildVarEvalContext(nil)
 	}
 
-	r := model.Repo{Name: blk.Labels[0]}
+	r := domain.Repo{Name: blk.Labels[0]}
 	for name, attr := range attrsMap(blk.Body) {
 		var val string
 		var err error
@@ -147,7 +146,7 @@ func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Repo,
 			val, err = literal(attr.Expr, name)
 		}
 		if err != nil {
-			return model.Repo{}, fmt.Errorf("attribute %q: %w", name, err)
+			return domain.Repo{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
 		switch name {
 		case "path":
@@ -163,25 +162,25 @@ func decodeRepoBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Repo,
 		}
 	}
 	if strings.TrimSpace(r.Path) == "" && strings.TrimSpace(r.URL) == "" {
-		return model.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
+		return domain.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
 	}
 	if strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.URL) != "" {
-		return model.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
+		return domain.Repo{}, fmt.Errorf("repository must define exactly one of path or url")
 	}
 	if strings.TrimSpace(r.Path) != "" {
 		clean := filepath.Clean(r.Path)
 		if filepath.IsAbs(r.Path) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return model.Repo{}, fmt.Errorf("local repository %q path must be relative and stay within the primary checkout", r.Name)
+			return domain.Repo{}, fmt.Errorf("local repository %q path must be relative and stay within the primary checkout", r.Name)
 		}
 	}
 	if strings.TrimSpace(r.URL) != "" && hasEmbeddedCredentials(r.URL) {
-		return model.Repo{}, fmt.Errorf("repository url must not contain embedded credentials")
+		return domain.Repo{}, fmt.Errorf("repository url must not contain embedded credentials")
 	}
 	if strings.TrimSpace(r.URL) != "" && strings.TrimSpace(r.Ref) == "" {
-		return model.Repo{}, fmt.Errorf("remote repository %q must define a non-empty ref", r.Name)
+		return domain.Repo{}, fmt.Errorf("remote repository %q must define a non-empty ref", r.Name)
 	}
 	if strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.Ref) != "" {
-		return model.Repo{}, fmt.Errorf("local repository %q must not define ref", r.Name)
+		return domain.Repo{}, fmt.Errorf("local repository %q must not define ref", r.Name)
 	}
 	return r, nil
 }
@@ -204,12 +203,12 @@ func hasEmbeddedCredentials(raw string) bool {
 	return true
 }
 
-func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task, error) {
+func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (domain.Task, error) {
 	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
 	// own syntax error for `ci_task {}` (no labels) and `ci_task "a" "b"`
 	// before this block-decoder runs. Defensive guard only.
 	if len(blk.Labels) != 1 {
-		return model.Task{}, fmt.Errorf("ci_task requires 1 label")
+		return domain.Task{}, fmt.Errorf("ci_task requires 1 label")
 	}
 	var vc *varEvalContext
 	if len(vctx) > 0 && vctx[0] != nil {
@@ -218,7 +217,7 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 		vc = buildVarEvalContext(nil)
 	}
 
-	t := model.Task{Name: blk.Labels[0]}
+	t := domain.Task{Name: blk.Labels[0]}
 
 	// Top-level attributes of ci_task: trigger, manual, depends_on, runner_tags, artifacts
 	for name, attr := range attrsMap(blk.Body) {
@@ -229,20 +228,20 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 				for _, ex := range tc.Exprs {
 					itemVal, err := evalInterpolatedString(ex, vc, "runner_tags")
 					if err != nil {
-						return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+						return domain.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
 					}
 					items = append(items, itemVal)
 				}
 			} else {
 				itemVal, err := evalInterpolatedString(attr.Expr, vc, "runner_tags")
 				if err != nil {
-					return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+					return domain.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
 				}
 				items = splitList(itemVal)
 			}
 			tags, err := domain.NormalizeRunnerTags(items)
 			if err != nil {
-				return model.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
+				return domain.Task{}, fmt.Errorf("task %q: runner_tags: %w", t.Name, err)
 			}
 			t.RunnerTags = tags
 			continue
@@ -252,17 +251,17 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 				var err error
 				items, err = tupleStrings(tc)
 				if err != nil {
-					return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
+					return domain.Task{}, fmt.Errorf("attribute %q: %w", name, err)
 				}
 			} else {
 				val, err := literal(attr.Expr, name)
 				if err != nil {
-					return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
+					return domain.Task{}, fmt.Errorf("attribute %q: %w", name, err)
 				}
 				items = splitList(val)
 			}
 			if err := domain.ValidateArtifacts(t.Name, items); err != nil {
-				return model.Task{}, err
+				return domain.Task{}, err
 			}
 			t.Artifacts = items
 			continue
@@ -270,7 +269,7 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 
 		val, err := literal(attr.Expr, name)
 		if err != nil {
-			return model.Task{}, fmt.Errorf("attribute %q: %w", name, err)
+			return domain.Task{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
 		switch name {
 		case "trigger":
@@ -282,10 +281,10 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 		case "timeout":
 			d, err := time.ParseDuration(val)
 			if err != nil {
-				return model.Task{}, fmt.Errorf("attribute %q: invalid duration %q: %w", name, val, err)
+				return domain.Task{}, fmt.Errorf("attribute %q: invalid duration %q: %w", name, val, err)
 			}
 			if d <= 0 {
-				return model.Task{}, fmt.Errorf("attribute %q: duration must be positive, got %q", name, val)
+				return domain.Task{}, fmt.Errorf("attribute %q: duration must be positive, got %q", name, val)
 			}
 			t.Timeout = val
 		}
@@ -295,7 +294,7 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 	for _, child := range blk.Body.Blocks {
 		switch child.Type {
 		case "execute":
-			t.Execute = model.ExecuteSpec{}
+			t.Execute = domain.ExecuteSpec{}
 			for name, attr := range attrsMap(child.Body) {
 				var val string
 				var err error
@@ -306,7 +305,7 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 					val, err = literal(attr.Expr, name)
 				}
 				if err != nil {
-					return model.Task{}, fmt.Errorf("execute.%s: %w", name, err)
+					return domain.Task{}, fmt.Errorf("execute.%s: %w", name, err)
 				}
 				switch name {
 				case "repo":
@@ -318,7 +317,7 @@ func decodeTaskBlock(blk *hclsyntax.Block, vctx ...*varEvalContext) (model.Task,
 				}
 			}
 		default:
-			return model.Task{}, fmt.Errorf("unsupported child block %q in ci_task", child.Type)
+			return domain.Task{}, fmt.Errorf("unsupported child block %q in ci_task", child.Type)
 		}
 	}
 	return t, nil
@@ -340,12 +339,12 @@ func attrsMap(body *hclsyntax.Body) map[string]*hclsyntax.Attribute {
 // variable references in allowlisted fields.
 type varEvalContext struct {
 	evalCtx  *hcl.EvalContext
-	varIndex map[string]model.Variable
+	varIndex map[string]domain.Variable
 }
 
 // checkVariableEligibility verifies that a variable meets the eligibility rules
 // defined in design D2 for interpolation into allowlisted fields.
-func checkVariableEligibility(v model.Variable, fieldName string) error {
+func checkVariableEligibility(v domain.Variable, fieldName string) error {
 	prefix := ""
 	if fieldName != "" {
 		prefix = fmt.Sprintf("variable %q cannot be interpolated into %s: ", v.Key, fieldName)
@@ -376,8 +375,8 @@ func checkVariableEligibility(v model.Variable, fieldName string) error {
 	return nil
 }
 
-func buildVarEvalContext(vars []model.Variable) *varEvalContext {
-	varIndex := make(map[string]model.Variable, len(vars))
+func buildVarEvalContext(vars []domain.Variable) *varEvalContext {
+	varIndex := make(map[string]domain.Variable, len(vars))
 	eligibleMap := make(map[string]cty.Value)
 
 	for _, v := range vars {
@@ -407,13 +406,13 @@ func buildVarEvalContext(vars []model.Variable) *varEvalContext {
 	}
 }
 
-func checkVariableRef(varName string, varIndex map[string]model.Variable, fieldName string) (model.Variable, error) {
+func checkVariableRef(varName string, varIndex map[string]domain.Variable, fieldName string) (domain.Variable, error) {
 	v, ok := varIndex[varName]
 	if !ok {
-		return model.Variable{}, fmt.Errorf("variable %q cannot be interpolated into %s: unknown variable; variable/scoped references are not supported", varName, fieldName)
+		return domain.Variable{}, fmt.Errorf("variable %q cannot be interpolated into %s: unknown variable; variable/scoped references are not supported", varName, fieldName)
 	}
 	if err := checkVariableEligibility(v, fieldName); err != nil {
-		return model.Variable{}, err
+		return domain.Variable{}, err
 	}
 	return v, nil
 }
@@ -614,12 +613,12 @@ func splitList(s string) []string {
 }
 
 // ParseDir reads all .tf files in a directory and merges them into one Project.
-func ParseDir(dir string) (model.Project, error) {
+func ParseDir(dir string) (domain.Project, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return model.Project{}, fmt.Errorf("read dir %s: %w", dir, err)
+		return domain.Project{}, fmt.Errorf("read dir %s: %w", dir, err)
 	}
-	var proj model.Project
+	var proj domain.Project
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
 			continue
@@ -627,7 +626,7 @@ func ParseDir(dir string) (model.Project, error) {
 		path := filepath.Join(dir, e.Name())
 		p, err := ParseFile(path)
 		if err != nil {
-			return model.Project{}, fmt.Errorf("parse %s: %w", path, err)
+			return domain.Project{}, fmt.Errorf("parse %s: %w", path, err)
 		}
 		proj.Repos = append(proj.Repos, p.Repos...)
 		proj.Tasks = append(proj.Tasks, p.Tasks...)
@@ -636,7 +635,7 @@ func ParseDir(dir string) (model.Project, error) {
 			if proj.Name == "" {
 				proj.Name = p.Name
 			} else if proj.Name != p.Name {
-				return model.Project{}, fmt.Errorf("parse %s: project name %q does not match %q", path, p.Name, proj.Name)
+				return domain.Project{}, fmt.Errorf("parse %s: project name %q does not match %q", path, p.Name, proj.Name)
 			}
 		}
 		if p.DefaultImage != "" {
@@ -651,18 +650,18 @@ func ParseDir(dir string) (model.Project, error) {
 	return proj, nil
 }
 
-func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
+func decodeVariableBlock(blk *hclsyntax.Block) (domain.Variable, error) {
 	// len(blk.Labels) != 1 is unreachable in practice: HCL raises its
 	// own syntax error for `variable {}` (no labels) and `variable "k" "v"`
 	// before this block-decoder runs. Defensive guard only.
 	if len(blk.Labels) != 1 {
-		return model.Variable{}, fmt.Errorf("variable requires 1 label (key name)")
+		return domain.Variable{}, fmt.Errorf("variable requires 1 label (key name)")
 	}
-	v := model.Variable{Key: blk.Labels[0]}
+	v := domain.Variable{Key: blk.Labels[0]}
 	for name, attr := range attrsMap(blk.Body) {
 		val, err := literal(attr.Expr)
 		if err != nil {
-			return model.Variable{}, fmt.Errorf("attribute %q: %w", name, err)
+			return domain.Variable{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
 		switch name {
 		case "value":
@@ -694,18 +693,18 @@ func decodeVariableBlock(blk *hclsyntax.Block) (model.Variable, error) {
 			conflicts = append(conflicts, "default")
 		}
 		if len(conflicts) > 0 {
-			return model.Variable{}, fmt.Errorf("variable %q: secret_ref cannot be combined with %s", v.Key, strings.Join(conflicts, ", "))
+			return domain.Variable{}, fmt.Errorf("variable %q: secret_ref cannot be combined with %s", v.Key, strings.Join(conflicts, ", "))
 		}
 		v.Masked = true
 	}
 	switch v.Scope {
 	case "repo":
 		if strings.TrimSpace(v.Repo) == "" {
-			return model.Variable{}, fmt.Errorf("variable %q: scope \"repo\" requires repo", v.Key)
+			return domain.Variable{}, fmt.Errorf("variable %q: scope \"repo\" requires repo", v.Key)
 		}
 	case "job":
 		if strings.TrimSpace(v.Repo) == "" || strings.TrimSpace(v.Job) == "" {
-			return model.Variable{}, fmt.Errorf("variable %q: scope \"job\" requires repo and job", v.Key)
+			return domain.Variable{}, fmt.Errorf("variable %q: scope \"job\" requires repo and job", v.Key)
 		}
 	}
 	return v, nil

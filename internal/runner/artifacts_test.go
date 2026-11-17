@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 func TestLocalExecutor_MissingArtifactFailsTask(t *testing.T) {
 	root := t.TempDir()
-	repos := map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
+	repos := map[string]domain.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
 	local := &LocalExecutor{WorkDir: root, Repos: repos}
 
-	task := model.Task{
+	task := domain.Task{
 		Name:      "build",
 		Artifacts: []string{"dist/"},
-		Execute: model.ExecuteSpec{
+		Execute: domain.ExecuteSpec{
 			Repo:   "app",
 			Script: "echo 'built nothing'",
 		},
@@ -34,13 +34,13 @@ func TestLocalExecutor_MissingArtifactFailsTask(t *testing.T) {
 
 func TestLocalExecutor_ExistingArtifactSucceeds(t *testing.T) {
 	root := t.TempDir()
-	repos := map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
+	repos := map[string]domain.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
 	local := &LocalExecutor{WorkDir: root, Repos: repos}
 
-	task := model.Task{
+	task := domain.Task{
 		Name:      "build",
 		Artifacts: []string{"dist/"},
-		Execute: model.ExecuteSpec{
+		Execute: domain.ExecuteSpec{
 			Repo:   "app",
 			Script: "mkdir dist && echo hello > dist/app.txt",
 		},
@@ -56,13 +56,13 @@ func TestLocalExecutor_ExistingArtifactSucceeds(t *testing.T) {
 func TestDockerExecutor_MissingArtifactFailsTask(t *testing.T) {
 	installFakeCommands(t, false)
 	root := t.TempDir()
-	repos := map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
+	repos := map[string]domain.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
 	docker := &DockerExecutor{WorkDir: root, Repos: repos}
 
-	task := model.Task{
+	task := domain.Task{
 		Name:      "build",
 		Artifacts: []string{"dist/app.txt"},
-		Execute: model.ExecuteSpec{
+		Execute: domain.ExecuteSpec{
 			Repo:   "app",
 			Script: "echo 'built nothing'",
 		},
@@ -78,7 +78,7 @@ func TestDockerExecutor_MissingArtifactFailsTask(t *testing.T) {
 func TestDockerExecutor_ExistingArtifactSucceeds(t *testing.T) {
 	installFakeCommands(t, false)
 	root := t.TempDir()
-	repos := map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
+	repos := map[string]domain.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}
 	docker := &DockerExecutor{WorkDir: root, Repos: repos}
 
 	// Create artifact beforehand to simulate container creating it
@@ -89,10 +89,10 @@ func TestDockerExecutor_ExistingArtifactSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task := model.Task{
+	task := domain.Task{
 		Name:      "build",
 		Artifacts: []string{"dist/app.txt"},
-		Execute: model.ExecuteSpec{
+		Execute: domain.ExecuteSpec{
 			Repo:   "app",
 			Script: "echo ok",
 		},

@@ -3,41 +3,41 @@ package dag
 import (
 	"testing"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 func newTestEngine() *Engine {
-	proj := model.Project{
+	proj := domain.Project{
 		Name: "test-project",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "service_a", Path: "src/a", Kind: "subpath"},
 			{Name: "service_b", Path: "src/b", Kind: "subpath"},
 			{Name: "docs", Path: "docs", Kind: "subpath"},
 			{Name: "tests", Path: "tests", Kind: "subpath"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{
 				Name:    "build_a",
 				Trigger: "repo.service_a.changed",
-				Execute: model.ExecuteSpec{Repo: "service_a", Script: "./build.sh"},
+				Execute: domain.ExecuteSpec{Repo: "service_a", Script: "./build.sh"},
 			},
 			{
 				Name:    "build_b",
 				Trigger: "repo.service_b.changed",
-				Execute: model.ExecuteSpec{Repo: "service_b", Script: "./build.sh"},
+				Execute: domain.ExecuteSpec{Repo: "service_b", Script: "./build.sh"},
 			},
 			{
 				Name:      "integration_tests",
 				Trigger:   "(repo.service_a.changed || repo.service_b.changed) && !repo.docs.changed",
 				DependsOn: []string{"build_a", "build_b"},
-				Execute:   model.ExecuteSpec{Repo: "tests", Script: "./run.sh"},
+				Execute:   domain.ExecuteSpec{Repo: "tests", Script: "./run.sh"},
 			},
 			{
 				Name:      "deploy",
 				Trigger:   "repo.service_a.changed || repo.service_b.changed",
 				DependsOn: []string{"integration_tests"},
 				Manual:    true,
-				Execute:   model.ExecuteSpec{Repo: "service_a", Script: "./deploy.sh"},
+				Execute:   domain.ExecuteSpec{Repo: "service_a", Script: "./deploy.sh"},
 			},
 		},
 	}
@@ -194,12 +194,12 @@ func TestResolveBothServices(t *testing.T) {
 // --- Cycle detection ---
 
 func TestCycleDetection(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:  "cyclic",
-		Repos: []model.Repo{{Name: "a", Path: "a"}},
-		Tasks: []model.Task{
-			{Name: "task_a", Trigger: "repo.a.changed", DependsOn: []string{"task_b"}, Execute: model.ExecuteSpec{Repo: "a"}},
-			{Name: "task_b", Trigger: "repo.a.changed", DependsOn: []string{"task_a"}, Execute: model.ExecuteSpec{Repo: "a"}},
+		Repos: []domain.Repo{{Name: "a", Path: "a"}},
+		Tasks: []domain.Task{
+			{Name: "task_a", Trigger: "repo.a.changed", DependsOn: []string{"task_b"}, Execute: domain.ExecuteSpec{Repo: "a"}},
+			{Name: "task_b", Trigger: "repo.a.changed", DependsOn: []string{"task_a"}, Execute: domain.ExecuteSpec{Repo: "a"}},
 		},
 	}
 	_, err := New(proj).Resolve(changedSet("a"))
@@ -209,11 +209,11 @@ func TestCycleDetection(t *testing.T) {
 }
 
 func TestValidateUnknownRepo(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:  "bad-ref",
-		Repos: []model.Repo{{Name: "a", Path: "a"}},
-		Tasks: []model.Task{
-			{Name: "task_x", Trigger: "repo.a.changed", Execute: model.ExecuteSpec{Repo: "nonexistent", Script: "./x.sh"}},
+		Repos: []domain.Repo{{Name: "a", Path: "a"}},
+		Tasks: []domain.Task{
+			{Name: "task_x", Trigger: "repo.a.changed", Execute: domain.ExecuteSpec{Repo: "nonexistent", Script: "./x.sh"}},
 		},
 	}
 	err := New(proj).Validate()
@@ -223,13 +223,13 @@ func TestValidateUnknownRepo(t *testing.T) {
 }
 
 func TestDefaultTriggerRunsAlways(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:  "default-trigger-proj",
-		Repos: []model.Repo{{Name: "auth", Path: "auth"}},
-		Tasks: []model.Task{
-			{Name: "build", Trigger: "", Execute: model.ExecuteSpec{Repo: "auth", Script: "make build"}},
-			{Name: "deploy", Trigger: "always", DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "auth", Script: "make deploy"}},
-			{Name: "notify", Trigger: "true", DependsOn: []string{"deploy"}, Execute: model.ExecuteSpec{Repo: "auth", Script: "make notify"}},
+		Repos: []domain.Repo{{Name: "auth", Path: "auth"}},
+		Tasks: []domain.Task{
+			{Name: "build", Trigger: "", Execute: domain.ExecuteSpec{Repo: "auth", Script: "make build"}},
+			{Name: "deploy", Trigger: "always", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "auth", Script: "make deploy"}},
+			{Name: "notify", Trigger: "true", DependsOn: []string{"deploy"}, Execute: domain.ExecuteSpec{Repo: "auth", Script: "make notify"}},
 		},
 	}
 	engine := New(proj)
@@ -427,10 +427,10 @@ func TestResolveWithSkipped_MultipleSkippedAndCycle(t *testing.T) {
 	}
 
 	// Cycle error
-	cyclic := model.Project{
+	cyclic := domain.Project{
 		Name:  "cyclic",
-		Repos: []model.Repo{{Name: "r1"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "r1"}},
+		Tasks: []domain.Task{
 			{Name: "t1", DependsOn: []string{"t2"}, Trigger: "repo.r1.changed"},
 			{Name: "t2", DependsOn: []string{"t1"}, Trigger: "repo.r1.changed"},
 		},

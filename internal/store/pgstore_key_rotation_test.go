@@ -7,7 +7,6 @@ import (
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 func TestPG_RotateMasterKey_AllThreeColumnsReencrypted(t *testing.T) {
@@ -43,7 +42,7 @@ func TestPG_RotateMasterKey_AllThreeColumnsReencrypted(t *testing.T) {
 
 	// 3. Create project and run
 	mustUpsert(t, pg, "rot-proj", "")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name:  "rot-proj",
 		Tasks: []domain.Task{{Name: "build"}},
 	}
@@ -169,7 +168,7 @@ func TestPG_RotateMasterKey_InjectedFailureRollsBack(t *testing.T) {
 	}
 
 	mustUpsert(t, pg, "rollback-proj", "")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name:  "rollback-proj",
 		Tasks: []domain.Task{{Name: "build"}},
 	}

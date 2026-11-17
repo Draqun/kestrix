@@ -2,7 +2,7 @@
 
 The system consists of several loosely coupled components:
 
-- **Parser** – reads HCL files (`pipeline.tf`) and builds a `model.Project`.
+- **Parser** – reads HCL files (`pipeline.tf`) and builds a `domain.Project`.
 - **[DAG Engine](dag-engine.md)** – evaluates boolean trigger expressions, detects cycles, and orders tasks.
 - **CI Generator** – converts the resolved task set into a `gitlab‑ci.yml`.
 - **Dispatch** – uses the GitLab API to start a pipeline.

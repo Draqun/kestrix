@@ -8,14 +8,13 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // buildThenDeploy is the pipeline the proposal's bug is about: deploy runs
 // only after build passed.
-func buildThenDeploy() *model.Project {
+func buildThenDeploy() *domain.Project {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	return &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	return &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 	}}
@@ -66,7 +65,7 @@ func TestRunService_CompleteRemoteJob_SkipDoesNotFinishTheRunBeforeTheDueTaskIsD
 	// package waits for lint and build; deploy waits for lint only. When lint
 	// passes, package is blocked by the failed build and deploy becomes due -
 	// both in the same pass.
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "lint", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "package", Trigger: "repo.app.changed", DependsOn: []string{"lint", "build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -226,7 +225,7 @@ func TestResumeRemoteRun_DispatchFailureFailsTheTaskAndTheRun(t *testing.T) {
 // remote-run-waits-for-dependents design.md D5.
 func TestResumeRemoteRun_DispatchFailureKeepsTheRestOfTheBatch(t *testing.T) {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 		{Name: "package", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
@@ -359,7 +358,7 @@ func TestResumeRemoteRun_PendingAndFailedRecordErrorsReportBoth(t *testing.T) {
 // keeps the failure it already has.
 func TestResumeRemoteRun_BlockedDependentRecordFailureIsReported(t *testing.T) {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 		{Name: "package", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},

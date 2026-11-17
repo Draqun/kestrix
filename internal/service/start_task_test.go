@@ -10,14 +10,13 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // ui-single-task-rerun design.md D1/D2: StartTask accepts a single-task run
 // synchronously and executes it in the background through executeStartedTask.
 
-func startTaskProject() *model.Project {
-	return &model.Project{Name: "p", Tasks: []model.Task{{Name: "t"}}}
+func startTaskProject() *domain.Project {
+	return &domain.Project{Name: "p", Tasks: []domain.Task{{Name: "t"}}}
 }
 
 func waitFinish(t *testing.T, ch chan struct{}) {
@@ -74,13 +73,13 @@ func TestRunService_StartTask_PinsRepositoryRevisions(t *testing.T) {
 	runner := &blockingTaskRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{}), returnedCh: make(chan struct{})}
 	svc := newTestRunService(store, nil, runner)
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "p",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "app", Ref: "main"},
 			{Name: "sub", Ref: "v1.0"},
 		},
-		Tasks: []model.Task{{Name: "t"}},
+		Tasks: []domain.Task{{Name: "t"}},
 	}
 	initialSources := []domain.AcquiredSource{
 		{RepoName: "sub", ResolvedRevision: "sub-sha-123"},

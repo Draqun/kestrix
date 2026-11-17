@@ -7,12 +7,11 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 func TestOrderedPassedAncestors_NoAncestors(t *testing.T) {
-	proj := model.Project{
-		Tasks: []model.Task{
+	proj := domain.Project{
+		Tasks: []domain.Task{
 			{Name: "root"},
 		},
 	}
@@ -23,8 +22,8 @@ func TestOrderedPassedAncestors_NoAncestors(t *testing.T) {
 }
 
 func TestOrderedPassedAncestors_Chain(t *testing.T) {
-	proj := model.Project{
-		Tasks: []model.Task{
+	proj := domain.Project{
+		Tasks: []domain.Task{
 			{Name: "a"},
 			{Name: "b", DependsOn: []string{"a"}},
 			{Name: "c", DependsOn: []string{"b"}},
@@ -39,8 +38,8 @@ func TestOrderedPassedAncestors_Chain(t *testing.T) {
 
 func TestOrderedPassedAncestors_Diamond(t *testing.T) {
 	// a declared before b
-	projAB := model.Project{
-		Tasks: []model.Task{
+	projAB := domain.Project{
+		Tasks: []domain.Task{
 			{Name: "a"},
 			{Name: "b"},
 			{Name: "c", DependsOn: []string{"b", "a"}},
@@ -53,8 +52,8 @@ func TestOrderedPassedAncestors_Diamond(t *testing.T) {
 	}
 
 	// b declared before a
-	projBA := model.Project{
-		Tasks: []model.Task{
+	projBA := domain.Project{
+		Tasks: []domain.Task{
 			{Name: "b"},
 			{Name: "a"},
 			{Name: "c", DependsOn: []string{"a", "b"}},
@@ -67,8 +66,8 @@ func TestOrderedPassedAncestors_Diamond(t *testing.T) {
 }
 
 func TestOrderedPassedAncestors_UnknownDependency(t *testing.T) {
-	proj := model.Project{
-		Tasks: []model.Task{
+	proj := domain.Project{
+		Tasks: []domain.Task{
 			{Name: "a", DependsOn: []string{"nonexistent"}},
 		},
 	}
@@ -80,7 +79,7 @@ func TestOrderedPassedAncestors_UnknownDependency(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_WithArtifacts(t *testing.T) {
-	task := model.Task{Name: "deploy", Execute: domain.ExecuteSpec{Repo: "app"}}
+	task := domain.Task{Name: "deploy", Execute: domain.ExecuteSpec{Repo: "app"}}
 	artA := []byte("artifact-a")
 	artB := []byte("artifact-b")
 
@@ -94,9 +93,9 @@ func TestBuildRemoteJobPayload_WithArtifacts(t *testing.T) {
 }
 
 func TestResumeRemoteRun_CarriesAncestorsArtifacts(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Repos: []domain.Repo{{Name: "app", Path: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed"},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}},
 		},
@@ -148,9 +147,9 @@ func TestResumeRemoteRun_CarriesAncestorsArtifacts(t *testing.T) {
 }
 
 func TestResumeRemoteRun_ListArtifactsErrorSurfaces(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Repos: []domain.Repo{{Name: "app", Path: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed"},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}},
 		},

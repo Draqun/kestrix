@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
@@ -321,13 +320,13 @@ func TestSourceOrderIsByteWiseWhateverTheCollation(t *testing.T) {
 
 	// The invariant refreshSources actually relies on: the stored set and the
 	// derived one are equal, element for element.
-	repos := make([]model.Repo, 0, len(declared)-1)
+	repos := make([]domain.Repo, 0, len(declared)-1)
 	for _, src := range declared[1:] {
-		repos = append(repos, model.Repo{Name: src.Name, URL: src.URL, Ref: "main"})
+		repos = append(repos, domain.Repo{Name: src.Name, URL: src.URL, Ref: "main"})
 	}
 	derived := service.DeriveSources(
 		&domain.ProjectConfig{Name: "checkout", RepoURL: primaryURL},
-		model.Project{Repos: repos},
+		domain.Project{Repos: repos},
 	)
 	if !slices.Equal(derived, got.Sources) {
 		t.Fatalf("derived set differs from the stored one:\n derived = %+v\n stored  = %+v", derived, got.Sources)

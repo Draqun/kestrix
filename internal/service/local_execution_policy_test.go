@@ -7,7 +7,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // TestRunService_CheckLocalAllowed pins safe-production-execution
@@ -49,9 +48,9 @@ func TestRunService_CheckLocalAllowed(t *testing.T) {
 }
 
 func TestRunService_ServiceLevelLocalRunnerGuard(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "test-proj",
-		Tasks: []model.Task{{Name: "test-task"}},
+		Tasks: []domain.Task{{Name: "test-task"}},
 	}
 
 	t.Run("Start returns ErrLocalExecutionDisabled without fetching sources", func(t *testing.T) {

@@ -1,6 +1,6 @@
 // Package dag implements the dependency-graph engine for Kestrix.
 //
-// The engine takes a parsed model.Project and a set of "changed repos" (derived
+// The engine takes a parsed domain.Project and a set of "changed repos" (derived
 // from incoming webhook events or git diffs) and computes which tasks should
 // run, in what order, and which are blocked by manual-approval gates.
 package dag
@@ -11,13 +11,12 @@ import (
 	"strings"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // Node is a single task in the resolved DAG, annotated with whether its trigger
 // condition is satisfied and whether it requires manual approval.
 type Node struct {
-	Task            model.Task
+	Task            domain.Task
 	Triggered       bool
 	TriggeredReason string
 }
@@ -25,11 +24,11 @@ type Node struct {
 // Engine holds the parsed project and provides operations to evaluate triggers
 // and produce an execution plan.
 type Engine struct {
-	Project model.Project
+	Project domain.Project
 }
 
 // New creates a DAG engine from a parsed project.
-func New(p model.Project) *Engine {
+func New(p domain.Project) *Engine {
 	return &Engine{Project: p}
 }
 

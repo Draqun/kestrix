@@ -19,13 +19,12 @@ import (
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 var (
 	commandContext  = exec.CommandContext
 	absPath         = filepath.Abs
-	resolvePipeline = func(project model.Project, changed map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
+	resolvePipeline = func(project domain.Project, changed map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
 		return dag.New(project).ResolveWithSkipped(changed)
 	}
 	// killGroup signals every process in pgid's process group. It is a
@@ -132,7 +131,7 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 // Executor runs a single task in the pipeline.
 type Executor interface {
 	// RunTask executes a single task, returning its output and any error.
-	RunTask(ctx context.Context, task model.Task, opts Options) (output string, err error)
+	RunTask(ctx context.Context, task domain.Task, opts Options) (output string, err error)
 }
 
 // taskFatal signals that a task-level setup error (e.g. repoDir failure)
@@ -148,7 +147,7 @@ func (e taskFatal) Unwrap() error { return e.err }
 // task-execution-isolation and design.md D3.
 type DockerExecutor struct {
 	WorkDir      string
-	Repos        map[string]model.Repo
+	Repos        map[string]domain.Repo
 	DefaultImage string
 	PIDs         int
 	Memory       string
@@ -160,7 +159,7 @@ type DockerExecutor struct {
 	Grace time.Duration
 }
 
-func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
+func (e *DockerExecutor) RunTask(ctx context.Context, task domain.Task, opts Options) (string, error) {
 	repo := e.Repos[task.Execute.Repo]
 	taskDir, err := repoDirFor(e.WorkDir, repo, opts.RepoPaths)
 	if err != nil {
@@ -262,10 +261,10 @@ func (e *DockerExecutor) RunTask(ctx context.Context, task model.Task, opts Opti
 // LocalExecutor runs tasks directly on the host via bash.
 type LocalExecutor struct {
 	WorkDir string
-	Repos   map[string]model.Repo
+	Repos   map[string]domain.Repo
 }
 
-func (e *LocalExecutor) RunTask(ctx context.Context, task model.Task, opts Options) (string, error) {
+func (e *LocalExecutor) RunTask(ctx context.Context, task domain.Task, opts Options) (string, error) {
 	repo := e.Repos[task.Execute.Repo]
 	taskDir, err := repoDirFor(e.WorkDir, repo, opts.RepoPaths)
 	if err != nil {
@@ -437,7 +436,7 @@ func taskLoop(ctx context.Context, ordered []dag.Node, executor Executor, opts O
 
 // Run resolves and executes the tasks selected by changed. Each task runs
 // in its own Docker container. Tasks run in dependency order.
-func Run(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+func Run(ctx context.Context, project domain.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
 	defer cleanupWorkspace(&opts)
 	project, cleanup, err := prepareSources(ctx, project, &opts)
@@ -470,7 +469,7 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 	if err != nil {
 		return nil, err
 	}
-	repos := make(map[string]model.Repo, len(project.Repos))
+	repos := make(map[string]domain.Repo, len(project.Repos))
 	for _, repo := range project.Repos {
 		repos[repo.Name] = repo
 	}
@@ -483,7 +482,7 @@ func Run(ctx context.Context, project model.Project, changed map[string]bool, op
 // newDockerExecutor builds a DockerExecutor from the process-wide hardening
 // config, defaulting defaultImage to "alpine:latest" when the project sets
 // none. Shared by Run() and executorForMode so the two never drift.
-func newDockerExecutor(workDir string, repos map[string]model.Repo, defaultImage string) *DockerExecutor {
+func newDockerExecutor(workDir string, repos map[string]domain.Repo, defaultImage string) *DockerExecutor {
 	if defaultImage == "" {
 		defaultImage = "alpine:latest"
 	}
@@ -503,7 +502,7 @@ func newDockerExecutor(workDir string, repos map[string]model.Repo, defaultImage
 
 // RunLocal resolves and executes tasks directly on the host without Docker.
 // Each task runs via `bash -c` in the repo directory.
-func RunLocal(ctx context.Context, project model.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
+func RunLocal(ctx context.Context, project domain.Project, changed map[string]bool, opts Options) ([]TaskResult, error) {
 	synchronizeOutput(&opts)
 	defer cleanupWorkspace(&opts)
 	project, cleanup, err := prepareSources(ctx, project, &opts)
@@ -545,7 +544,7 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 	if err != nil {
 		return nil, err
 	}
-	repos := make(map[string]model.Repo, len(project.Repos))
+	repos := make(map[string]domain.Repo, len(project.Repos))
 	for _, repo := range project.Repos {
 		repos[repo.Name] = repo
 	}
@@ -561,7 +560,7 @@ func RunLocal(ctx context.Context, project model.Project, changed map[string]boo
 // executorForMode returns the Executor RunOne should use for a manual task
 // approval. Only "docker" changes behavior; every other Mode value keeps
 // the historical bare `bash -c` execution.
-func executorForMode(mode, workDir string, repos map[string]model.Repo, defaultImage string) Executor {
+func executorForMode(mode, workDir string, repos map[string]domain.Repo, defaultImage string) Executor {
 	if mode != "docker" {
 		return &LocalExecutor{WorkDir: workDir, Repos: repos}
 	}
@@ -572,7 +571,7 @@ func executorForMode(mode, workDir string, repos map[string]model.Repo, defaultI
 // honors opts.Mode so a manual approval on a Docker-mode project gets the
 // same container hardening as the rest of the pipeline instead of always
 // shelling out on the host.
-func RunOne(ctx context.Context, project model.Project, taskName string, opts Options) (TaskResult, error) {
+func RunOne(ctx context.Context, project domain.Project, taskName string, opts Options) (TaskResult, error) {
 	synchronizeOutput(&opts)
 	defer cleanupWorkspace(&opts)
 	project, cleanup, err := prepareSources(ctx, project, &opts)
@@ -590,7 +589,7 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		return TaskResult{}, fmt.Errorf("resolve workdir: %w", err)
 	}
 
-	var task *model.Task
+	var task *domain.Task
 	for i := range project.Tasks {
 		if project.Tasks[i].Name == taskName {
 			task = &project.Tasks[i]
@@ -601,7 +600,7 @@ func RunOne(ctx context.Context, project model.Project, taskName string, opts Op
 		return TaskResult{}, fmt.Errorf("task %q not found", taskName)
 	}
 
-	repos := make(map[string]model.Repo, len(project.Repos))
+	repos := make(map[string]domain.Repo, len(project.Repos))
 	for _, repo := range project.Repos {
 		repos[repo.Name] = repo
 	}
@@ -689,7 +688,7 @@ func order(nodes []dag.Node) ([]dag.Node, error) {
 	return ordered, nil
 }
 
-func repoDir(workDir string, repo model.Repo) (string, error) {
+func repoDir(workDir string, repo domain.Repo) (string, error) {
 	if repo.Kind == "git" {
 		return "", fmt.Errorf("remote repository %q cannot be run locally; clone it first and declare it as a subpath", repo.Name)
 	}

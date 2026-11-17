@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/source"
 )
 
@@ -22,20 +21,20 @@ var (
 // prepareSources acquires all repositories before DAG resolution. Remote
 // sources share a private per-run root; local sources retain their existing
 // checkout paths and are only validated.
-func prepareSources(ctx context.Context, project model.Project, opts *Options) (model.Project, func(), error) {
+func prepareSources(ctx context.Context, project domain.Project, opts *Options) (domain.Project, func(), error) {
 	if opts.SourcesPrepared {
 		return project, func() {}, nil
 	}
 	// Project values are passed by value, but their repository slice may still
 	// be shared with concurrent runs. Copy it before rewriting remote paths.
-	project.Repos = append([]model.Repo(nil), project.Repos...)
+	project.Repos = append([]domain.Repo(nil), project.Repos...)
 	baseDir := opts.WorkDir
 	if baseDir == "" {
 		baseDir = "."
 	}
 	baseDir, err := sourceAbsPath(baseDir)
 	if err != nil {
-		return model.Project{}, func() {}, fmt.Errorf("resolve source base directory: %w", err)
+		return domain.Project{}, func() {}, fmt.Errorf("resolve source base directory: %w", err)
 	}
 	hybrid := &source.HybridAcquirer{}
 	var acquirer domain.SourceAcquirer = hybrid
@@ -50,11 +49,11 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 			}
 			workspace, err = sourceMkdirTemp("", "kestrix-source-")
 			if err != nil {
-				return model.Project{}, func() {}, fmt.Errorf("create source workspace: %w", err)
+				return domain.Project{}, func() {}, fmt.Errorf("create source workspace: %w", err)
 			}
 			if err := sourceChmod(workspace, 0o700); err != nil {
 				_ = os.RemoveAll(workspace)
-				return model.Project{}, func() {}, fmt.Errorf("secure source workspace: %w", err)
+				return domain.Project{}, func() {}, fmt.Errorf("secure source workspace: %w", err)
 			}
 			break
 		}
@@ -85,7 +84,7 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 			})
 			if openErr != nil {
 				cleanup()
-				return model.Project{}, func() {}, openErr
+				return domain.Project{}, func() {}, openErr
 			}
 			result = session.Source
 			if session.Cleanup != nil {
@@ -103,7 +102,7 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 		}
 		if err != nil {
 			cleanup()
-			return model.Project{}, func() {}, err
+			return domain.Project{}, func() {}, err
 		}
 		acquired = append(acquired, result)
 		if repo.URL != "" {
@@ -113,13 +112,13 @@ func prepareSources(ctx context.Context, project model.Project, opts *Options) (
 	if opts.OnSourcesAcquired != nil {
 		if err := opts.OnSourcesAcquired(acquired); err != nil {
 			cleanup()
-			return model.Project{}, func() {}, err
+			return domain.Project{}, func() {}, err
 		}
 	}
 	return project, cleanup, nil
 }
 
-func repoDirFor(workDir string, repo model.Repo, paths map[string]string) (string, error) {
+func repoDirFor(workDir string, repo domain.Repo, paths map[string]string) (string, error) {
 	if path, ok := paths[repo.Name]; ok {
 		info, err := os.Stat(path)
 		if err != nil {

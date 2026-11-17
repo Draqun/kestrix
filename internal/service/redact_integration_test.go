@@ -7,7 +7,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // echoingPipelineRunner writes a fixed string to opts.Stdout, reports it via
@@ -45,8 +44,8 @@ func TestRunService_RedactsSecretFromOutputAndTaskResult(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	_, err := svc.Start(context.Background(), "proj", &model.Project{
-		Name: "proj", Tasks: []model.Task{{Name: "deploy"}},
+	_, err := svc.Start(context.Background(), "proj", &domain.Project{
+		Name: "proj", Tasks: []domain.Task{{Name: "deploy"}},
 	}, nil, domain.RunnerOptions{ResolvedSecretValues: []string{secret}})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -118,7 +117,7 @@ func TestRunService_RunTask_RedactsApplyTaskResultOutputExtra(t *testing.T) {
 	}
 	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
-	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "manual"}}}, "manual",
+	tr, _, err := svc.RunTask(context.Background(), 7, "proj", &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "manual"}}}, "manual",
 		domain.RunnerOptions{ResolvedSecretValues: []string{secret}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -157,8 +156,8 @@ func TestRunService_FlushRedactsSecretAtVeryEndOfOutput(t *testing.T) {
 	mockRun := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	_, err := svc.Start(context.Background(), "proj", &model.Project{
-		Name: "proj", Tasks: []model.Task{{Name: "deploy"}},
+	_, err := svc.Start(context.Background(), "proj", &domain.Project{
+		Name: "proj", Tasks: []domain.Task{{Name: "deploy"}},
 	}, nil, domain.RunnerOptions{ResolvedSecretValues: []string{secret}})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

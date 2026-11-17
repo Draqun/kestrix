@@ -9,18 +9,17 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/metrics"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
-func lintThenDeployProject() *model.Project {
-	return &model.Project{
+func lintThenDeployProject() *domain.Project {
+	return &domain.Project{
 		Name: "lint-deploy-proj",
 		Repos: []domain.Repo{
 			{Name: "docs"},
 			{Name: "app"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "lint", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "docs", Script: "echo lint"}},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"lint"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 		},
@@ -183,10 +182,10 @@ func TestPG_RemoteRunStart_NonExistentWorkDirFailsRun(t *testing.T) {
 
 func TestPG_ReclaimStaleRemoteJobs_TelemetryAndEvents(t *testing.T) {
 	pg := testPG(t)
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "reclaim-telemetry-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo ok"}},
 		},
 	}

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
@@ -36,7 +35,7 @@ func claimNextJob(t *testing.T, pg *PGStore, runnerID int, taskName string) *dom
 func TestPG_RemoteRunWaitsForDependents(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{Name: "deps-proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "deps-proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 	}}
@@ -86,7 +85,7 @@ func TestPG_RemoteRunWaitsForDependents(t *testing.T) {
 func TestPG_RemoteRunFailureSkipsDependents(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{Name: "deps-fail-proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "deps-fail-proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: spec},
 	}}

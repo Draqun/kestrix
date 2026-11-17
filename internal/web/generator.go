@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"kestrix/internal/dag"
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 // GenerateGitLabCI produces a .gitlab-ci.yml string from the resolved DAG nodes.
@@ -14,7 +14,7 @@ import (
 // job. Dependencies are mapped to GitLab's "needs" keyword. Manual tasks get
 // "when: manual". Container images are set per-job (the per-job dynamic image
 // pulling concept).
-func GenerateGitLabCI(proj model.Project, nodes []dag.Node) string {
+func GenerateGitLabCI(proj domain.Project, nodes []dag.Node) string {
 	var sb strings.Builder
 
 	// Header comment.
@@ -114,7 +114,7 @@ func deriveStages(nodes []dag.Node) []string {
 }
 
 // assignStage determines which stage a task belongs to.
-func assignStage(task model.Task, nodes []dag.Node) string {
+func assignStage(task domain.Task, nodes []dag.Node) string {
 	if task.Manual {
 		return "deploy"
 	}

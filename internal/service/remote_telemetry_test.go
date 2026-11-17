@@ -11,7 +11,6 @@ import (
 	"kestrix/internal/domain"
 	"kestrix/internal/metrics"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 func TestRemoteRunTelemetry_LastJobCompletion(t *testing.T) {
@@ -74,7 +73,7 @@ func TestRemoteRunTelemetry_LastJobCompletion(t *testing.T) {
 		reg := metrics.NewRegistry()
 		svc.Metrics = reg
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 			{Name: "test", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "exit 1"}},
 		}}
 
@@ -112,7 +111,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
 
@@ -144,7 +143,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
 
@@ -169,7 +168,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "other"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "other"}}, Tasks: []domain.Task{
 			{Name: "other", Trigger: "repo.other.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
 
@@ -197,7 +196,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
 
@@ -227,7 +226,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
 
@@ -259,7 +258,7 @@ func TestRemoteRunTelemetry_EarlyAborts(t *testing.T) {
 		recorder := &fakeRecorder{}
 		svc.Metrics = recorder
 
-		proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "other"}}, Tasks: []model.Task{
+		proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "other"}}, Tasks: []domain.Task{
 			{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 			{Name: "skipped_task", Trigger: "repo.other.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run"}},
 		}}
@@ -455,7 +454,7 @@ func TestRemoteRunTelemetry_Interleaving_DispatchFailureAndJobCompletion(t *test
 	recorder := &fakeRecorder{}
 	svc.Metrics = recorder
 
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "task1", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run1"}},
 		{Name: "task2", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "run2"}},
 	}}

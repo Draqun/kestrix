@@ -9,7 +9,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
 
@@ -40,7 +39,7 @@ func newFakeStatefulRunStore() *fakeStatefulRunStore {
 	return &fakeStatefulRunStore{MockRunStore: &mocks.MockRunStore{}, nextID: 1, runs: make(map[int]*domain.Run)}
 }
 
-func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
+func (f *fakeStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := f.nextID
@@ -242,7 +241,7 @@ func (f *fakeRemoteJobStore) CompleteJob(jobID, epoch int, status, output, taskE
 // ── RunService.CompleteRemoteJob / resumeRemoteRun (tasks.md 3.4/3.6) ──
 
 func TestRunService_CompleteRemoteJob_DependentBecomesEligibleAfterCompletion(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 	}}
@@ -282,7 +281,7 @@ func TestRunService_CompleteRemoteJob_DependentBecomesEligibleAfterCompletion(t 
 // the run terminal (see REVIEW.md R16 - previously unasserted even at
 // 100% line coverage, since no test subscribed to the hub).
 func TestRunService_CompleteRemoteJob_EmitsTaskAndTerminalStatusEvents(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 	}}
 	runStore := newFakeStatefulRunStore()
@@ -355,7 +354,7 @@ func TestRunService_CompleteRemoteJob_EmitsTaskAndTerminalStatusEvents(t *testin
 // dispatched instead of the run finishing, the run stays "running" and no
 // status/complete event follows the task event (see REVIEW.md R16).
 func TestRunService_CompleteRemoteJob_NonTerminalEmitsTaskButNoStatusOrComplete(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 	}}
@@ -445,7 +444,7 @@ func TestRunService_CompleteRemoteJob_GetRemoteJobErrorPropagates(t *testing.T) 
 }
 
 func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	remoteJobs := &mocks.MockRemoteJobStore{SetRemoteRunSnapshotErr: fmt.Errorf("disk full")}
@@ -585,7 +584,7 @@ func TestRunService_Cancel_NonRemoteRun_NoRemoteJobStoreCallsUnaffected(t *testi
 // ── resumeRemoteRun (tasks.md 3.6) ──────────────────────────────────
 
 func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "root", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "left", Trigger: "repo.app.changed", DependsOn: []string{"root"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "right", Trigger: "repo.app.changed", DependsOn: []string{"root"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -653,7 +652,7 @@ func TestResumeRemoteRun_DiamondBothBranchesMustFinishBeforeJoin(t *testing.T) {
 // write, the walker and the finishing of the run -
 // remote-run-waits-for-dependents design.md D3.
 func TestCompleteRemoteJob_ConcurrentCompletionsNeverDoubleDispatchSharedDependent(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "root", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "left", Trigger: "repo.app.changed", DependsOn: []string{"root"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "right", Trigger: "repo.app.changed", DependsOn: []string{"root"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -719,7 +718,7 @@ func TestCompleteRemoteJob_ConcurrentCompletionsNeverDoubleDispatchSharedDepende
 }
 
 func TestResumeRemoteRun_FailedDependencyLeavesDependentsUndispatched(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
@@ -773,9 +772,9 @@ func TestResumeRemoteRun_NoRunOrNoPipelineDefIsNoOp(t *testing.T) {
 
 func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 	runStore := newFakeStatefulRunStore()
-	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, &model.Project{
+	runID, err := runStore.CreateRun("proj", []string{"app"}, "", false, &domain.Project{
 		Name:  "proj",
-		Tasks: []model.Task{{Name: "t", Trigger: "not a valid ( expression"}},
+		Tasks: []domain.Task{{Name: "t", Trigger: "not a valid ( expression"}},
 	}, "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -789,7 +788,7 @@ func TestResumeRemoteRun_DagResolveErrorPropagates(t *testing.T) {
 }
 
 func TestResumeRemoteRun_AppendTaskResultErrorForSkipPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "unrelated", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
@@ -816,7 +815,7 @@ func TestResumeRemoteRun_AppendTaskResultErrorForSkipPropagates(t *testing.T) {
 }
 
 func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
@@ -843,7 +842,7 @@ func TestResumeRemoteRun_GetRemoteRunSnapshotErrorPropagates(t *testing.T) {
 // for it.
 func TestResumeRemoteRun_NothingToDispatchDoesNotLoadSnapshot(t *testing.T) {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "lint", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 	}}
@@ -872,7 +871,7 @@ func TestResumeRemoteRun_NothingToDispatchDoesNotLoadSnapshot(t *testing.T) {
 }
 
 func TestResumeRemoteRun_ManualTaskNotDispatchedUntilApproved(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "deploy", Trigger: "repo.app.changed", Manual: true, DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
@@ -914,9 +913,9 @@ func seedSnapshot(t *testing.T, remoteJobs *mocks.MockRemoteJobStore, runID int)
 // rerunProject is the pipeline from remote-run-ux's proposal: lint's negated
 // trigger holds for any changed set, so resolving the DAG against a re-run's
 // task name makes lint (and, once build passes, deploy) eligible.
-func rerunProject() *model.Project {
+func rerunProject() *domain.Project {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	return &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+	return &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []domain.Task{
 		{Name: "lint", Trigger: "!repo.docs.changed", Execute: spec},
 		{Name: "build", Trigger: "!repo.docs.changed", Execute: spec},
 		{Name: "deploy", Trigger: "!repo.docs.changed", DependsOn: []string{"build"}, Execute: spec},
@@ -959,7 +958,7 @@ func TestResumeRemoteRun_RunWithoutSnapshotDispatchesNothing(t *testing.T) {
 // has one, so approving a manual task still resumes that run's dependents.
 func TestResumeRemoteRun_ApprovedManualTaskInWholeRunStillDispatchesDependents(t *testing.T) {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		{Name: "deploy", Trigger: "repo.app.changed", Manual: true, DependsOn: []string{"build"}, Execute: spec},
 		{Name: "notify", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
@@ -999,7 +998,7 @@ func TestResumeRemoteRun_ApprovedManualTaskInWholeRunStillDispatchesDependents(t
 // dispatches the task that depends on it.
 func TestResumeRemoteRun_WholeRunStartedWithOnlyAManualTaskResumesAfterApproval(t *testing.T) {
 	spec := domain.ExecuteSpec{Repo: "app", Script: "x"}
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "deploy", Trigger: "repo.app.changed", Manual: true, Execute: spec},
 		{Name: "notify", Trigger: "repo.app.changed", DependsOn: []string{"deploy"}, Execute: spec},
 	}}

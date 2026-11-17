@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/source"
 )
 
@@ -24,7 +23,7 @@ import (
 // unchanged definition from a changed one (see the web package's
 // refreshSources) and a create/update response lists sources the same way a
 // later GET does.
-func DeriveSources(cfg *domain.ProjectConfig, proj model.Project) []domain.ProjectSource {
+func DeriveSources(cfg *domain.ProjectConfig, proj domain.Project) []domain.ProjectSource {
 	// primaryRank sorts the primary source ahead of every secondary one,
 	// mirroring the store's "is_primary DESC".
 	primaryRank := func(s domain.ProjectSource) int {

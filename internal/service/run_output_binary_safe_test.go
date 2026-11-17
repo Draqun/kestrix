@@ -9,7 +9,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // TestRunService_FinishRun_LogsFailedWriteAndReleasesSlot pins task 3.1:
@@ -33,9 +32,9 @@ func TestRunService_FinishRun_LogsFailedWriteAndReleasesSlot(t *testing.T) {
 	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 	svc.SetMaxConcurrentRuns(1)
 
-	runID, err := svc.Start(context.Background(), "test-proj", &model.Project{
+	runID, err := svc.Start(context.Background(), "test-proj", &domain.Project{
 		Name:  "test-proj",
-		Tasks: []model.Task{{Name: "build"}},
+		Tasks: []domain.Task{{Name: "build"}},
 	}, nil, domain.RunnerOptions{
 		ResolvedSecretValues: []string{secret},
 	})
@@ -107,9 +106,9 @@ func TestRunService_OnTaskComplete_LogsFailedAppendTaskResult(t *testing.T) {
 	}
 	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
-	_, err := svc.Start(context.Background(), "test-proj", &model.Project{
+	_, err := svc.Start(context.Background(), "test-proj", &domain.Project{
 		Name:  "test-proj",
-		Tasks: []model.Task{{Name: "build"}},
+		Tasks: []domain.Task{{Name: "build"}},
 	}, nil, domain.RunnerOptions{
 		ResolvedSecretValues: []string{secret},
 	})
@@ -156,9 +155,9 @@ func TestRunService_OnTaskComplete_LogsFailedFlushRunOutput(t *testing.T) {
 	}
 	svc := newTestRunService(mockRun, mockRunner, mockRunner)
 
-	_, err := svc.Start(context.Background(), "test-proj", &model.Project{
+	_, err := svc.Start(context.Background(), "test-proj", &domain.Project{
 		Name:  "test-proj",
-		Tasks: []model.Task{{Name: "build"}},
+		Tasks: []domain.Task{{Name: "build"}},
 	}, nil, domain.RunnerOptions{
 		ResolvedSecretValues: []string{secret},
 	})

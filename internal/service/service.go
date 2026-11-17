@@ -18,7 +18,6 @@ import (
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/metrics"
-	"kestrix/internal/model"
 	"kestrix/internal/redact"
 	"kestrix/internal/source"
 	"kestrix/internal/variables"
@@ -101,7 +100,7 @@ func (s *ProjectService) checkRepoCredential(cfg *domain.ProjectConfig) error {
 // secret-typed credential_ref on a secondary ci_repo was only caught later
 // at git fetch time instead of at project create/update - a known gap
 // tracked in the project wiki.
-func (s *ProjectService) checkCIRepoCredentials(proj model.Project) error {
+func (s *ProjectService) checkCIRepoCredentials(proj domain.Project) error {
 	for _, repo := range proj.Repos {
 		if ref, isSecret := s.credentialRefIsSecret(repo.CredentialRef); isSecret {
 			return fmt.Errorf("%w: ci_repo %q credential_ref %q is a secret credential and cannot be used for Git access", ErrValidation, repo.Name, ref)
@@ -359,7 +358,7 @@ func (s *ProjectService) Create(cfg *domain.ProjectConfig) error {
 // SourceValidator checks a candidate registration against its remote and
 // returns the pipeline it parsed there, so the service can derive the
 // project's sources from the same parse instead of a second Git operation.
-type SourceValidator func(*domain.ProjectConfig) (model.Project, error)
+type SourceValidator func(*domain.ProjectConfig) (domain.Project, error)
 
 // CreateValidated validates the complete remote source before persistence.
 func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSource SourceValidator) error {
@@ -388,7 +387,7 @@ func (s *ProjectService) CreateValidated(cfg *domain.ProjectConfig, validateSour
 // hand. Without a validator only the primary source is known; the next load of
 // the configured ref adds the rest.
 func (s *ProjectService) persistValidated(cfg *domain.ProjectConfig, validateSource SourceValidator) error {
-	var proj model.Project
+	var proj domain.Project
 	if validateSource != nil {
 		var err error
 		if proj, err = validateSource(cfg); err != nil {
@@ -647,7 +646,7 @@ func (s *RunService) ActiveRunIDsForProject(projectName string) ([]int, error) {
 
 // Start creates a run and executes the pipeline in the background.
 // Returns the run ID immediately; execution happens asynchronously.
-func (s *RunService) Start(ctx context.Context, projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+func (s *RunService) Start(ctx context.Context, projectName string, proj *domain.Project, changed []string, opts domain.RunnerOptions) (int, error) {
 	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
 		return 0, err
 	}
@@ -858,11 +857,11 @@ func toChangedSet(changed []string) map[string]bool {
 
 // resolvePipelineWithSkipped evaluates every task's trigger condition and partitions tasks
 // into triggered DAG nodes and trigger-unsatisfied skipped TaskResult items.
-func resolvePipelineWithSkipped(proj model.Project, changed []string) ([]dag.Node, []domain.TaskResult, error) {
+func resolvePipelineWithSkipped(proj domain.Project, changed []string) ([]dag.Node, []domain.TaskResult, error) {
 	return dag.New(proj).ResolveWithSkipped(toChangedSet(changed))
 }
 
-func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, []domain.TaskResult, error) {
+func (s *RunService) createRun(projectName string, changed []string, includeManual bool, proj *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, []domain.TaskResult, error) {
 	if proj == nil {
 		return 0, nil, fmt.Errorf("project not loaded")
 	}
@@ -999,7 +998,7 @@ func (s *RunService) prepareRunExecution(runID int, output *bytes.Buffer, opts *
 	return redactor
 }
 
-func (s *RunService) executeRun(ctx context.Context, runID int, proj *model.Project, changed []string, skippedTasks []domain.TaskResult, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter, startedAt time.Time) {
+func (s *RunService) executeRun(ctx context.Context, runID int, proj *domain.Project, changed []string, skippedTasks []domain.TaskResult, opts domain.RunnerOptions, output *bytes.Buffer, redactor *redactingWriter, startedAt time.Time) {
 	defer func() {
 		if r := recover(); r != nil && s.runStore != nil {
 			_ = redactor.Flush()
@@ -1141,7 +1140,7 @@ func (s *RunService) trackActive(ctx context.Context, runID int, projectName str
 // finishStartedTask does for StartTask's path) MUST NOT do so when
 // dispatched is true: the run stays open for the runner's own completion
 // report to finalize instead.
-func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (tr domain.TaskResult, dispatched bool, err error) {
+func (s *RunService) RunTask(ctx context.Context, runID int, projectName string, proj *domain.Project, taskName string, opts domain.RunnerOptions) (tr domain.TaskResult, dispatched bool, err error) {
 	if proj == nil {
 		return domain.TaskResult{}, false, fmt.Errorf("project not loaded")
 	}
@@ -1171,7 +1170,7 @@ func (s *RunService) RunTask(ctx context.Context, runID int, projectName string,
 // leaving the rest to executeStartedTask in a goroutine. It reports whether the
 // run was recorded as queued; see ui-single-task-rerun design.md D1 and
 // task-rerun-original-revision D2.
-func (s *RunService) StartTask(ctx context.Context, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (runID int, queued bool, err error) {
+func (s *RunService) StartTask(ctx context.Context, projectName string, proj *domain.Project, taskName string, opts domain.RunnerOptions) (runID int, queued bool, err error) {
 	if proj == nil {
 		return 0, false, fmt.Errorf("project not loaded")
 	}
@@ -1192,7 +1191,7 @@ func (s *RunService) StartTask(ctx context.Context, projectName string, proj *mo
 		}
 		if len(revByRepo) > 0 {
 			pCopy := *proj
-			pCopy.Repos = make([]model.Repo, len(proj.Repos))
+			pCopy.Repos = make([]domain.Repo, len(proj.Repos))
 			copy(pCopy.Repos, proj.Repos)
 			for i := range pCopy.Repos {
 				if rev, ok := revByRepo[pCopy.Repos[i].Name]; ok {
@@ -1240,7 +1239,7 @@ func (s *RunService) StartTask(ctx context.Context, projectName string, proj *mo
 // unless one was already acquired, executes the task, and records the run's
 // terminal state. A named method rather than a closure so tests can drive
 // it directly; see ui-single-task-rerun design.md D2 and Risks.
-func (s *RunService) executeStartedTask(ctx context.Context, untrack func(), acquired bool, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) {
+func (s *RunService) executeStartedTask(ctx context.Context, untrack func(), acquired bool, runID int, projectName string, proj *domain.Project, taskName string, opts domain.RunnerOptions) {
 	defer untrack()
 	if !acquired && !s.waitAndStart(ctx, runID) {
 		// Canceled while queued: record nothing here. Cancel waits for this
@@ -1276,7 +1275,7 @@ func (s *RunService) finishStartedTask(runID int, tr domain.TaskResult, runErr e
 	}
 }
 
-func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+func (s *RunService) runTaskInternal(ctx context.Context, runID int, projectName string, proj *domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	startedAt := time.Now()
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
@@ -1371,7 +1370,7 @@ func taskResultsByName(run *domain.Run) map[string]domain.TaskResult {
 	return results
 }
 
-func manualTaskContext(run *domain.Run, proj *model.Project, taskName string) (bool, []string) {
+func manualTaskContext(run *domain.Run, proj *domain.Project, taskName string) (bool, []string) {
 	manualOK := false
 	dependsOn := []string{}
 	if run != nil && run.PipelineDef != nil {
@@ -1400,7 +1399,7 @@ func manualTaskContext(run *domain.Run, proj *model.Project, taskName string) (b
 }
 
 // ApproveManualTask validates a waiting manual task and executes it.
-func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectName string, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
+func (s *RunService) ApproveManualTask(ctx context.Context, runID int, projectName string, proj *domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, error) {
 	if err := s.CheckLocalAllowed(opts.Mode); err != nil {
 		return domain.TaskResult{}, err
 	}
@@ -1507,7 +1506,7 @@ var (
 // error - see design.md D3 - that MUST abort the run or task before it
 // starts: a missing, revoked, wrong-type, or otherwise unresolvable
 // reference fails closed rather than injecting an empty or stale value.
-func BuildVarStore(ctx context.Context, proj *model.Project, resolver domain.CredentialResolver) (*variables.Store, []string, error) {
+func BuildVarStore(ctx context.Context, proj *domain.Project, resolver domain.CredentialResolver) (*variables.Store, []string, error) {
 	vs := variables.New()
 	var resolvedValues []string
 	if proj != nil {

@@ -251,27 +251,6 @@ definitions:
       value:
         type: string
     type: object
-  model.Project:
-    properties:
-      cancel_in_progress:
-        type: boolean
-      default_image:
-        type: string
-      name:
-        type: string
-      repos:
-        items:
-          $ref: '#/definitions/domain.Repo'
-        type: array
-      tasks:
-        items:
-          $ref: '#/definitions/domain.Task'
-        type: array
-      variables:
-        items:
-          $ref: '#/definitions/domain.Variable'
-        type: array
-    type: object
   store.Run:
     properties:
       canceled_by:
@@ -601,7 +580,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Project'
+            $ref: '#/definitions/domain.Project'
       summary: Parse and return pipeline definition
       tags:
       - pipeline

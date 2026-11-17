@@ -19,7 +19,6 @@ import (
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 func testPG(t *testing.T) *PGStore {
@@ -80,7 +79,7 @@ func mustUpsert(t *testing.T, pg *PGStore, name, _ string) {
 }
 
 // mustCreateRun creates a run and fails the test on error.
-func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *model.Project) int {
+func mustCreateRun(t *testing.T, pg *PGStore, projectName string, snap *domain.Project) int {
 	t.Helper()
 	id, err := pg.CreateRun(projectName, nil, "", false, snap, "", nil)
 	if err != nil {
@@ -453,7 +452,7 @@ func TestPG_Save(t *testing.T) {
 func TestPG_CreateRunAndGetRun(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rp", "/rp")
-	snap := &model.Project{Name: "rp"}
+	snap := &domain.Project{Name: "rp"}
 	id := mustCreateRun(t, pg, "rp", snap)
 	if id <= 0 {
 		t.Fatalf("invalid run id %d", id)
@@ -480,7 +479,7 @@ func TestPG_CreateRunAndGetRun(t *testing.T) {
 func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "rp2", "/rp2")
-	snap := &model.Project{Name: "rp2"}
+	snap := &domain.Project{Name: "rp2"}
 	id, err := pg.CreateRun("rp2", []string{"main"}, "", false, snap, "user:alice", nil)
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
@@ -529,7 +528,7 @@ func TestPG_CreateRunWithChangedAndGetRun(t *testing.T) {
 func TestPG_UpdateRunSourcesPersistsRemoteRevisionWithoutCheckoutPath(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "remote-source", "")
-	id := mustCreateRun(t, pg, "remote-source", &model.Project{Name: "remote-source"})
+	id := mustCreateRun(t, pg, "remote-source", &domain.Project{Name: "remote-source"})
 	sources := []domain.AcquiredSource{{
 		RepoName:         "main",
 		URL:              "https://git.example/remote-source.git",
@@ -562,7 +561,7 @@ func TestPG_UpdateRunSourcesPersistsRemoteRevisionWithoutCheckoutPath(t *testing
 func TestPG_CreateRunWithInitialSourcesPersistsImmediately(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "atomic-sources-proj", "")
-	snap := &model.Project{Name: "atomic-sources-proj"}
+	snap := &domain.Project{Name: "atomic-sources-proj"}
 	sources := []domain.AcquiredSource{{
 		RepoName:         "main",
 		URL:              "https://git.example/atomic.git",
@@ -602,7 +601,7 @@ func TestPG_CreateRunWithInitialSourcesPersistsImmediately(t *testing.T) {
 func TestPG_CreateRunWithoutInitialSourcesDefaultsToEmpty(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "empty-sources-proj", "")
-	snap := &model.Project{Name: "empty-sources-proj"}
+	snap := &domain.Project{Name: "empty-sources-proj"}
 
 	id, err := pg.CreateRun("empty-sources-proj", nil, "", false, snap, "user:bob", nil)
 	if err != nil {
@@ -984,9 +983,9 @@ func TestPG_CountRunsByStatus(t *testing.T) {
 func TestPG_CancelRun_Running(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "cancel", "/")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name: "cancel",
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "deploy", DependsOn: []string{"build"}},
 		},
 	}
@@ -1077,9 +1076,9 @@ func TestPG_CancelRun_AlreadyFinished(t *testing.T) {
 func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "cps", "/")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name: "cps",
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "deploy", DependsOn: []string{"build"}},
 			{Name: "build"},
 		},
@@ -1126,9 +1125,9 @@ func TestPG_CancelRun_PendingSkipped(t *testing.T) {
 func TestPG_CancelRun_TriggerSkippedDepDoesNotBlockPending(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "cps-trigger", "/")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name: "cps-trigger",
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "deploy", DependsOn: []string{"build"}},
 			{Name: "build"},
 		},
@@ -1221,9 +1220,9 @@ func TestPG_FailInterruptedRuns_RunningTask(t *testing.T) {
 func TestPG_FailInterruptedRuns_PassedAndPending(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "fir-pending", "/")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name: "fir-pending",
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build"},
 			{Name: "deploy", DependsOn: []string{"build"}},
 		},
@@ -1529,9 +1528,9 @@ func TestPG_StartQueuedRun_FalseWhenNotQueued(t *testing.T) {
 func TestPG_CancelRun_Queued(t *testing.T) {
 	pg := testPG(t)
 	mustUpsert(t, pg, "queue-cancel", "/")
-	snap := &model.Project{
+	snap := &domain.Project{
 		Name:  "queue-cancel",
-		Tasks: []model.Task{{Name: "build"}, {Name: "deploy", DependsOn: []string{"build"}}},
+		Tasks: []domain.Task{{Name: "build"}, {Name: "deploy", DependsOn: []string{"build"}}},
 	}
 	id := mustCreateRun(t, pg, "queue-cancel", snap)
 	if err := pg.AppendTaskResult(id, domain.TaskResult{Name: "build", Status: "pending"}); err != nil {

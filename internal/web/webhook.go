@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 // --- GitLab Webhook Payload ---
@@ -169,7 +169,7 @@ func (fc *FileClassifier) ChangedRepos(repoFiles map[string]map[string]bool) map
 // A repo matches if any changed file is under its configured path (for
 // subpath repos) or if it has any code-level change (for git repos, which
 // represent the whole repository).
-func (fc *FileClassifier) MatchRepos(files map[string]bool, repos []model.Repo) []string {
+func (fc *FileClassifier) MatchRepos(files map[string]bool, repos []domain.Repo) []string {
 	var matched []string
 	for _, repo := range repos {
 		if (repo.Kind == "subpath" || repo.Path != "") && repo.Path != "." && repo.Path != "./" {

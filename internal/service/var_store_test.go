@@ -9,7 +9,6 @@ import (
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // mockCredentialResolver resolves refs from an in-memory map, or returns Err
@@ -32,9 +31,9 @@ func (m *mockCredentialResolver) Resolve(_ context.Context, ref string) (domain.
 }
 
 func TestBuildVarStore_Happy(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "myproject",
-		Variables: []model.Variable{
+		Variables: []domain.Variable{
 			{Key: "DB_HOST", Value: "localhost", Scope: "project"},
 			{Key: "SECRET", Value: "s3cret", Scope: "project", Masked: true},
 			{Key: "PROTECTED", Value: "p", Scope: "project", Protected: true},
@@ -77,7 +76,7 @@ func TestBuildVarStore_Happy(t *testing.T) {
 }
 
 func TestBuildVarStore_Empty(t *testing.T) {
-	proj := &model.Project{Name: "empty"}
+	proj := &domain.Project{Name: "empty"}
 
 	vs, resolved, err := BuildVarStore(context.Background(), proj, nil)
 	if err != nil {
@@ -92,9 +91,9 @@ func TestBuildVarStore_Empty(t *testing.T) {
 }
 
 func TestBuildVarStore_DefaultValue(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "proj",
-		Variables: []model.Variable{
+		Variables: []domain.Variable{
 			{Key: "WITH_DEFAULT", Default: "fallback", Scope: "project"},
 		},
 	}
@@ -130,8 +129,8 @@ func TestBuildVarStore_ResolvesSecretsPerScope(t *testing.T) {
 		"cred_repo":    {Type: credentials.TypeSecret, Value: "repo-secret"},
 		"cred_job":     {Type: credentials.TypeSecret, Value: "job-secret"},
 	}}
-	proj := &model.Project{
-		Variables: []model.Variable{
+	proj := &domain.Project{
+		Variables: []domain.Variable{
 			{Key: "PROJECT_SECRET", SecretRef: "cred_project", Scope: "project"},
 			{Key: "REPO_SECRET", SecretRef: "cred_repo", Scope: "repo", Repo: "backend"},
 			{Key: "JOB_SECRET", SecretRef: "cred_job", Scope: "job", Repo: "backend", Job: "deploy"},
@@ -191,7 +190,7 @@ func TestBuildVarStore_SecretErrorShapes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proj := &model.Project{Variables: []model.Variable{{Key: "REGISTRY_PASSWORD", SecretRef: tt.ref, Scope: "project"}}}
+			proj := &domain.Project{Variables: []domain.Variable{{Key: "REGISTRY_PASSWORD", SecretRef: tt.ref, Scope: "project"}}}
 			_, _, err := BuildVarStore(context.Background(), proj, resolver)
 			if err == nil {
 				t.Fatal("expected an error")
@@ -214,7 +213,7 @@ func TestBuildVarStore_SecretErrorShapes(t *testing.T) {
 // TestBuildVarStore_NoResolverIsUnresolved pins design.md D6's fourth shape
 // for a project with no credential resolver configured at all.
 func TestBuildVarStore_NoResolverIsUnresolved(t *testing.T) {
-	proj := &model.Project{Variables: []model.Variable{{Key: "X", SecretRef: "cred_x", Scope: "project"}}}
+	proj := &domain.Project{Variables: []domain.Variable{{Key: "X", SecretRef: "cred_x", Scope: "project"}}}
 	_, _, err := BuildVarStore(context.Background(), proj, nil)
 	if !errors.Is(err, ErrSecretUnresolved) {
 		t.Fatalf("error = %v, want ErrSecretUnresolved", err)
