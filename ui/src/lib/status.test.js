@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { formatStatus, getStatusColor, STATUS_INFO, isWaitingForManualApproval, isManualWaiting } from './status.js';
+import { formatStatus, getStatusColor, STATUS_INFO, isWaitingForManualApproval, isManualWaiting, actorLabel } from './status.js';
 
 describe('status lib', () => {
   it('maps known statuses to colors and labels', () => {
@@ -102,6 +102,24 @@ describe('status lib', () => {
         ],
       };
       assert.strictEqual(isManualWaiting(deployNode, pipelineDef, [buildNode, deployNode]), true);
+    });
+  });
+
+  describe('actorLabel', () => {
+    it('returns unknown when actor is empty or null', () => {
+      assert.strictEqual(actorLabel(''), 'unknown');
+      assert.strictEqual(actorLabel(null), 'unknown');
+      assert.strictEqual(actorLabel(undefined), 'unknown');
+    });
+
+    it('strips user: prefix', () => {
+      assert.strictEqual(actorLabel('user:alice'), 'alice');
+      assert.strictEqual(actorLabel('user:admin'), 'admin');
+    });
+
+    it('returns actor unchanged when it has no user: prefix', () => {
+      assert.strictEqual(actorLabel('system'), 'system');
+      assert.strictEqual(actorLabel('gitlab-ci'), 'gitlab-ci');
     });
   });
 });
