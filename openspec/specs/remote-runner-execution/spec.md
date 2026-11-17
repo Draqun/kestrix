@@ -161,10 +161,25 @@ A runner SHALL queue outbound trace chunks in a bounded local trace spool whenev
 - **WHEN** unsent trace chunks exceed the runner spool limit `KESTRIX_RUNNER_TRACE_SPOOL_MAX_BYTES`
 - **THEN** the runner SHALL drop the oldest buffered chunks, insert a truncation marker, and preserve monotonic byte offsets
 
-### Requirement: Job completion
+### Requirement: Job completion report handling
 
-Runners SHALL report job completion once with terminal status, remaining output, and optional errors for its current claim epoch. Kestrix SHALL redact output/errors, record the task result, and resume DAG resolution atomically. Reports for already-terminal runs or stale/duplicate claim epochs SHALL be rejected without re-evaluating run status or task outcomes.
+A runner SHALL report a claimed job's outcome exactly once: a terminal status, remaining output, and optional error message. Kestrix SHALL redact output and error, bound error length, record the task result, and resume the run's dependency graph applying blocked/manual/ordering rules. Task results SHALL carry accepted trace appends in order, followed by completion output, bounded by `max_output_bytes`.
 
+#### Scenario: Completion records task result
+- **WHEN** a runner completes a job
+- **THEN** the task result SHALL be persisted with status and trace
+
+### Requirement: Completion claim epoch idempotency
+
+A completion report SHALL present the claim epoch it was issued. Kestrix SHALL accept the first completion report for a given claim epoch and SHALL reject subsequent reports for that epoch or past epochs, without re-recording task results or re-resuming the dependency graph.
+
+#### Scenario: Duplicate report rejected
+- **WHEN** completion is reported again for the same claim epoch
+- **THEN** it SHALL be rejected without duplicate processing
+
+### Requirement: Terminal run completion isolation
+
+A completion report whose run has reached terminal status (`canceled`, `failed`, `passed`) SHALL NOT record a task result or recompute run status. Run status SHALL be checked atomically with claim epoch in the transaction recording the result. Only the report's output is retained in trace, and a terminal run SHALL NOT return to non-terminal status.
 #### Scenario: Successful completion unblocks dependents
 - **WHEN** a runner reports a job passed
 - **THEN** the task's result SHALL be recorded
@@ -218,8 +233,15 @@ Runners SHALL report job completion once with terminal status, remaining output,
 
 ### Requirement: Cancelling a remote-mode run
 
-Cancelling a remote run SHALL immediately mark the run and its pending jobs `canceled` without signalling poll-only remote workers. Completions arriving after cancellation SHALL append output to the run trace for observability but SHALL NOT alter finalized task results or resume dependency graphs.
+Kestrix SHALL NOT send a stop signal to a runner: the runner-job protocol is poll-only, with no inbound channel from Kestrix to a runner. Canceling a remote-mode run SHALL prevent its `pending` jobs from being claimed and SHALL mark the run `canceled` without waiting for jobs already `claimed` or `running`.
 
+#### Scenario: Cancel transitions run immediately
+- **WHEN** a remote run is cancelled
+- **THEN** run status SHALL become `canceled` without waiting for workers
+
+### Requirement: Post-cancellation completion output retention
+
+A completion report for a job belonging to an already-`canceled` run SHALL be accepted so its remaining output is stored against the run's trace. It SHALL NOT be recorded as a task result: cancellation already finalized the task to `canceled`, and that record SHALL remain the surviving outcome. Such reports SHALL NOT resume dependency graphs or alter terminal status.
 #### Scenario: Cancel prevents pending jobs from being claimed
 - **WHEN** a remote-mode run is canceled while one of its jobs is still `pending`
 - **THEN** that job SHALL NOT be claimed by any runner afterward
@@ -242,8 +264,15 @@ Cancelling a remote run SHALL immediately mark the run and its pending jobs `can
 
 ### Requirement: Silent runner recovery
 
-Jobs abandoned without heartbeats or trace appends past timeouts SHALL be reset to `pending` with separate retry counters. Exceeding configured reclaim limits SHALL transition the job to `failed`. Recovery SHALL NOT reclaim jobs whose runs reached terminal status.
+A job left `claimed` or `running` with no trace append and no completion report past a configured timeout SHALL return to `pending` for another runner to claim. A job that recovery returned to `pending` and that no runner claims within the same timeout SHALL count as another unanswered attempt.
 
+#### Scenario: Unresponsive runner job returned to pending
+- **WHEN** a claimed job has no trace append or completion within timeout
+- **THEN** the job SHALL return to `pending` status
+
+### Requirement: Silent runner recovery limits and terminal run protection
+
+Kestrix SHALL count reclaims and unanswered attempts separately from the claim epoch; a job whose count reaches the configured maximum SHALL fail with an error naming the reason instead of returning to `pending` again. A job that has never been claimed SHALL NOT be counted or failed by recovery. Recovery SHALL NOT return a job to `pending` when its run is already in a terminal status, finalizing it in place.
 #### Scenario: Job reclaimed after timeout
 - **WHEN** a claimed job receives no update for longer than the configured timeout
 - **THEN** it SHALL become `pending` again and be eligible for another runner
@@ -310,8 +339,15 @@ The project detail page SHALL show the project's execution mode.
 
 ### Requirement: Runner liveness tracking
 
-Kestrix SHALL record timestamps of authenticated runner requests, reporting status as `busy` (holding jobs), `online` (seen within `KESTRIX_RUNNER_OFFLINE_AFTER`, default 60s), `offline`, or `never seen`. Invalid or revoked tokens SHALL NOT update liveness.
+Kestrix SHALL record the time of a runner's most recent authenticated request to any runner-job endpoint and SHALL report each runner's liveness as `busy` when it holds a claimed job, otherwise `online` when that time is within the configured staleness threshold (`KESTRIX_RUNNER_OFFLINE_AFTER`, default `60s`, a positive duration), `offline` when older, and `never seen` when no request was made.
 
+#### Scenario: Liveness online state
+- **WHEN** runner requests within staleness threshold
+- **THEN** liveness SHALL report `online`
+
+### Requirement: Unauthenticated request liveness exclusion
+
+A request with an unknown or revoked token SHALL NOT update any runner's recorded time.
 #### Scenario: Runner goes offline
 - **WHEN** a runner holding no claimed job has not made a runner-job request within the staleness threshold
 - **THEN** it SHALL be reported `offline`
@@ -405,8 +441,15 @@ resume that run's dependents.
 
 ### Requirement: Rejected runner credentials
 
-Runner endpoints SHALL reject missing or malformed headers with HTTP 401 (`missing or malformed Authorization header`), and unknown or revoked tokens uniformly with HTTP 401 (`invalid or revoked runner token`). Runners receiving HTTP 401 SHALL exit immediately with non-zero status.
+A runner-job request with no `Authorization` header, or one that is not a bearer token, SHALL be rejected with `401` and the message `missing or malformed Authorization header`. A bearer token Kestrix does not accept, unknown or revoked alike, SHALL be rejected with `401` and the message `invalid or revoked runner token`, without revealing which of the two it is. A failure to check the token SHALL answer `500`, not `401`.
 
+#### Scenario: Unknown token error message
+- **WHEN** an unknown runner token is presented
+- **THEN** response SHALL be HTTP 401 with `invalid or revoked runner token`
+
+### Requirement: Runner exit on authentication rejection
+
+The `kestrix runner` process SHALL exit with a non-zero status, printing the server's message, when a poll is rejected with `401`. It SHALL keep retrying every other poll failure.
 #### Scenario: Revoked token is named as such
 - **WHEN** a runner polls with a token an administrator has revoked
 - **THEN** the response SHALL be `401` with the message `invalid or revoked runner token`
@@ -429,8 +472,23 @@ Runner endpoints SHALL reject missing or malformed headers with HTTP 401 (`missi
 
 ### Requirement: A remote run finishes after its dependents are decided
 
-Remote runs SHALL remain `running` until job completions resolve all dependent tasks into dispatched jobs or skipped results. Once no tasks remain pending or running, the run SHALL transition to its derived terminal status. Uncreatable jobs SHALL mark tasks `failed` to prevent hanging runs.
+Kestrix SHALL NOT give a remote-mode run a terminal status because of a job's completion reported by a runner until it has decided what that completion unblocks: dispatched the tasks that became due, or recorded them `skipped` because a dependency failed. Until then the run SHALL stay `running`. Once no task is pending or running, the run SHALL take the status its results imply.
 
+#### Scenario: Dependents decided before terminal status
+- **WHEN** a task completes in a remote run
+- **THEN** dependent tasks SHALL be evaluated before finalizing run status
+
+### Requirement: Failed job creation and interrupted run recovery
+
+If Kestrix cannot create the job of a task that became due, it SHALL record that task as `failed` with an error naming the failure, so the run ends `failed` rather than staying `running` with a task that has no job. Failures reading run/pipeline snapshots or writing final state leave the run `running`, visible and cancelable, until the startup sweep marks it `failed` (`interrupted by server restart`).
+
+#### Scenario: Uncreatable job fails task
+- **WHEN** job creation for a due task fails
+- **THEN** the task SHALL be recorded as `failed`
+
+### Requirement: Manual gates and silent recovery exclusivity
+
+Silent-runner recovery SHALL operate outside completion processing: jobs exhausting reclaims SHALL fail via recovery sweep in the same transaction. A manual task SHALL never be dispatched and SHALL NOT record results until approved; unapproved gates SHALL leave dependents neither dispatched nor recorded.
 #### Scenario: A dependent unblocked by the last running task runs
 - **WHEN** a whole run has `build` and `deploy`, `deploy` depends on `build`, and the runner reports `build` passed
 - **THEN** the run SHALL still be `running`
@@ -463,8 +521,15 @@ Remote runs SHALL remain `running` until job completions resolve all dependent t
 
 ### Requirement: A remote run does not hang at start
 
-When a remote run starts, Kestrix SHALL dispatch jobs for ready tasks or finish the run immediately. If no tasks are triggered, the run SHALL finish `passed` with zero jobs. Job creation failures SHALL mark the task or run `failed` with redacted error messages rather than hanging.
+When a remote-mode run starts, Kestrix SHALL either dispatch a job for every task that is ready or finish the run. A dependency whose trigger is not satisfied is not part of the run and SHALL NOT delay or block the tasks that depend on it, as in an in-process run. A run in which no task is triggered SHALL finish `passed`, with no task result and no job.
 
+#### Scenario: Run with zero triggered tasks
+- **WHEN** no tasks are triggered at run start
+- **THEN** the run SHALL finish `passed` immediately
+
+### Requirement: Remote run start failure handling
+
+If starting fails after the run was created, Kestrix SHALL finish the run `failed` with an error naming the failure; when only the job of one task cannot be created, Kestrix SHALL record that task `failed` with that error instead. The error SHALL be redacted like an error a runner reports.
 #### Scenario: A dependency outside the run does not hold a task back
 - **WHEN** `deploy` (trigger `repo.app.changed`) depends on `lint` (trigger `repo.docs.changed`) and a run starts with only `app` changed
 - **THEN** a job for `deploy` SHALL be available to a runner
@@ -527,8 +592,15 @@ be an ordinary task. Kestrix SHALL record the sources a remote run started from.
 
 ### Requirement: Task artifacts reach dependent remote jobs
 
-Runners executing tasks with artifacts SHALL upload declared files as an archive bounded by `KESTRIX_RUNNER_ARTIFACT_MAX_BYTES` (default 50 MiB) before completion. Dependent downstream jobs SHALL receive and unpack ancestor artifacts topologically over their workspaces. Stored artifacts SHALL be purged when runs reach terminal status.
+In a `remote`-mode run, after a job whose task declares artifacts passes, its runner SHALL upload the declared paths as one archive before reporting completion. Kestrix SHALL accept the upload only for the job's current claim epoch from the runner holding the claim, SHALL reject an archive larger than `KESTRIX_RUNNER_ARTIFACT_MAX_BYTES` (default 50 MiB) with `413`, and SHALL reject entries outside declared paths. Repeated uploads replace stored archives.
 
+#### Scenario: Artifacts uploaded before completion
+- **WHEN** a task with artifacts passes
+- **THEN** the runner uploads the artifact archive before sending completion report
+
+### Requirement: Task artifacts unpacking and deletion
+
+When Kestrix dispatches a job, its payload SHALL carry the stored artifacts of every passed ancestor of the task, ordered topologically with ties broken by declaration order. The runner SHALL unpack them over the source archive in that order, rejecting any entry that would escape the job directory. Kestrix SHALL delete a run's artifacts once the run reaches a terminal status.
 #### Scenario: Deploy sees what build produced
 - **WHEN** `build` declares `artifacts = ["dist/"]`, writes `dist/app.txt` and passes, and `deploy` depends on `build`
 - **THEN** the job dispatched for `deploy` SHALL find `dist/app.txt` in its working directory
@@ -553,8 +625,15 @@ Runners executing tasks with artifacts SHALL upload declared files as an archive
 
 ### Requirement: Unmatched pending jobs are reported
 
-Pending remote jobs requiring tags absent from all registered runners SHALL report a `waiting_reason` (`no registered runner has tags: <tags>` or `no runner is registered`). The reason SHALL be computed dynamically in run responses and displayed as a warning until a matching runner registers, without automatically failing the job.
+A pending remote job is unmatched when no non-revoked registered runner has every tag the job requires, including jobs with no required tags when no runner is registered at all (regardless of runner online state). For every task whose latest result is pending on an unmatched job, every response returning the run SHALL include a `waiting_reason` (`no registered runner has tags: <tags>` or `no runner is registered`).
 
+#### Scenario: Pending job without runners reports waiting reason
+- **WHEN** a pending job has no matching registered runner
+- **THEN** responses SHALL include `waiting_reason`
+
+### Requirement: Unmatched job dynamic evaluation and warning
+
+The `waiting_reason` SHALL be evaluated when the response is built, disappearing as soon as a matching runner is registered. The run detail view SHALL show the reason as a warning next to the pending task. Kestrix SHALL log a warning naming the run, task, and required tags once for each unmatched job, and SHALL NOT fail or cancel an unmatched job on its own.
 #### Scenario: No runner has the required tag
 - **WHEN** a remote-mode task with `runner_tags = ["gpu"]` is pending and the only registered runner has no tags
 - **THEN** the run's response SHALL include `waiting_reason` `no registered runner has tags: gpu` for that task
