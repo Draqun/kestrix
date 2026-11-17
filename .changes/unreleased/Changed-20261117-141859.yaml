@@ -1,3 +1,0 @@
-kind: Changed
-body: Modularize internal/service package and UI Pipelines run detail into cohesive subcomponents
-time: 2026-11-17T14:18:59.892415614+01:00

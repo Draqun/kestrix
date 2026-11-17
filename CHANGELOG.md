@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v1.2.0] - 2026-11-17
+### Changed
+- Modularize internal/service package and UI Pipelines run detail into cohesive subcomponents
+
 ## [v1.1.0] - 2026-11-17
 ### Added
 - Complete Swagger/OpenAPI documentation for all HTTP routes and add automated route-parity test
