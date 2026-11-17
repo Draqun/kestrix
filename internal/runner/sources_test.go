@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 type recordingAcquirer struct {
@@ -82,11 +81,11 @@ func (a *recordingAcquirer) Acquire(_ context.Context, repo domain.Repo, opts do
 	return domain.AcquiredSource{RepoName: repo.Name, Path: dir, RequestedRef: repo.Ref, ResolvedRevision: "abc1234"}, nil
 }
 
-func remoteProject() model.Project {
-	return model.Project{
+func remoteProject() domain.Project {
+	return domain.Project{
 		Name:  "remote",
-		Repos: []model.Repo{{Name: "app", URL: "https://example.test/app.git", Ref: "main"}},
-		Tasks: []model.Task{{Name: "build", Trigger: "repo.app.changed", Execute: model.ExecuteSpec{Repo: "app", Script: "true"}}},
+		Repos: []domain.Repo{{Name: "app", URL: "https://example.test/app.git", Ref: "main"}},
+		Tasks: []domain.Task{{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "true"}}},
 	}
 }
 
@@ -131,7 +130,7 @@ func TestConcurrentRunsReceiveDistinctSourceWorkspaces(t *testing.T) {
 func TestSourceSessionsAcquireEveryRemoteBeforeTasksAndCleanupOnFailure(t *testing.T) {
 	manager := &recordingSessions{failAt: 2}
 	project := remoteProject()
-	project.Repos = append(project.Repos, model.Repo{Name: "docs", URL: "https://example.test/docs.git", Ref: "v1"})
+	project.Repos = append(project.Repos, domain.Repo{Name: "docs", URL: "https://example.test/docs.git", Ref: "v1"})
 	started := false
 	_, err := RunLocal(context.Background(), project, map[string]bool{"app": true}, Options{
 		WorkDir: t.TempDir(), SourceSessions: manager,
@@ -155,7 +154,7 @@ func TestSourceSessionTimeoutPreventsTasksAndCleansPartialAcquisition(t *testing
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &recordingSessions{cancel: cancel}
 	project := remoteProject()
-	project.Repos = append(project.Repos, model.Repo{Name: "docs", URL: "https://example.test/docs.git", Ref: "main"})
+	project.Repos = append(project.Repos, domain.Repo{Name: "docs", URL: "https://example.test/docs.git", Ref: "main"})
 	started := false
 
 	_, err := RunLocal(ctx, project, map[string]bool{"app": true}, Options{
@@ -267,20 +266,20 @@ func TestSourcePathHelpers(t *testing.T) {
 	if !pathWithin(root, inside) || pathWithin(root, filepath.Join(root, "..", "outside")) {
 		t.Fatal("pathWithin returned unexpected result")
 	}
-	if got, err := repoDirFor(root, model.Repo{Name: "repo"}, map[string]string{"repo": inside}); err != nil || got != inside {
+	if got, err := repoDirFor(root, domain.Repo{Name: "repo"}, map[string]string{"repo": inside}); err != nil || got != inside {
 		t.Fatalf("repoDirFor mapped path=%q err=%v", got, err)
 	}
 	file := filepath.Join(root, "file")
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repoDirFor(root, model.Repo{Name: "repo"}, map[string]string{"repo": file}); err == nil {
+	if _, err := repoDirFor(root, domain.Repo{Name: "repo"}, map[string]string{"repo": file}); err == nil {
 		t.Fatal("repoDirFor should reject a file")
 	}
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := repoDirFor(root, model.Repo{Name: "repo", Path: "sub"}, nil); err != nil || got != filepath.Join(root, "sub") {
+	if got, err := repoDirFor(root, domain.Repo{Name: "repo", Path: "sub"}, nil); err != nil || got != filepath.Join(root, "sub") {
 		t.Fatalf("repoDirFor fallback=%q err=%v", got, err)
 	}
 
@@ -336,7 +335,7 @@ func TestSourcePathHelperErrors(t *testing.T) {
 		}
 		return filepath.Abs(path)
 	}
-	if _, err := repoDirFor(".", model.Repo{Name: "repo"}, map[string]string{"repo": "any"}); err == nil {
+	if _, err := repoDirFor(".", domain.Repo{Name: "repo"}, map[string]string{"repo": "any"}); err == nil {
 		t.Fatal("expected mapped repo stat error")
 	}
 	if pathWithin(".", ".") {

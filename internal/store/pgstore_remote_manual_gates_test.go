@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
@@ -13,10 +12,10 @@ import (
 func TestPG_RemoteManualGate_BuildPassesLeavesDeployManualAndRunRunning(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "gate-a-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: spec},
 		},
@@ -73,10 +72,10 @@ func TestPG_RemoteManualGate_BuildPassesLeavesDeployManualAndRunRunning(t *testi
 func TestPG_RemoteManualGate_IncludeManualDispatchesDeployAfterBuild(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "gate-b-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: spec},
 		},
@@ -108,10 +107,10 @@ func TestPG_RemoteManualGate_IncludeManualDispatchesDeployAfterBuild(t *testing.
 func TestPG_RemoteManualGate_BuildFailsSkipsDeployAndFailsRun(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "gate-c-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: spec},
 		},
@@ -160,10 +159,10 @@ func TestPG_RemoteManualGate_BuildFailsSkipsDeployAndFailsRun(t *testing.T) {
 func TestPG_RemoteManualGate_AllTasksManualRunIsRunningAndTasksManual(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "gate-d-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "deploy-a", Trigger: "repo.app.changed", Manual: true, Execute: spec},
 			{Name: "deploy-b", Trigger: "repo.app.changed", Manual: true, Execute: spec},
 		},
@@ -215,10 +214,10 @@ func TestPG_RemoteManualGate_AllTasksManualRunIsRunningAndTasksManual(t *testing
 func TestPG_RemoteManualGate_StartGivenInitialSourcesRecordsThem(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "gate-e-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: spec},
 		},
 	}

@@ -32,13 +32,13 @@ Kestrix is a Go-based control plane that sits between git repositories and CI ru
 
 ## Components
 
-### 1. Domain Model (`internal/model/`)
+### 1. Domain Model (`internal/domain/`)
 
 Core types: `Project`, `Repo`, `Task`, `ExecuteSpec`. These are pure data structures with no logic — they represent the parsed HCL configuration.
 
 ### 2. HCL Parser (`internal/parser/`)
 
-Reads `.tf` files using `hashicorp/hcl/v2` with manual body decoding (no `gohcl` dependency). Produces `model.Project` values. Supports merging multiple files via `ParseDir`.
+Reads `.tf` files using `hashicorp/hcl/v2` with manual body decoding (no `gohcl` dependency). Produces `domain.Project` values. Supports merging multiple files via `ParseDir`.
 
 ### 3. DAG Engine (`internal/dag/`)
 

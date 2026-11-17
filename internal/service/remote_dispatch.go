@@ -15,7 +15,6 @@ import (
 
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // SetRemoteJobStore wires the port a "remote"-mode project dispatches
@@ -152,7 +151,7 @@ func archiveWorkDirWithOpener(workDir string, open func(string) (*os.File, error
 // and tasks.md 3.6. A task already dispatched, terminal, or still waiting
 // on an unresolved (not yet passed/failed/skipped/canceled) dependency is
 // left alone; the caller re-evaluates after the next completion.
-func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, includeManual bool) (eligible []model.Task, newlySkipped []domain.TaskResult, gates []domain.TaskResult) {
+func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, includeManual bool) (eligible []domain.Task, newlySkipped []domain.TaskResult, gates []domain.TaskResult) {
 	nodeSet := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
 		nodeSet[node.Task.Name] = true
@@ -239,7 +238,7 @@ func eligibleForDispatch(nodes []dag.Node, latest map[string]domain.TaskResult, 
 // archive, plus the run's resolved secret values so the runner can redact
 // its own output (remote-runner-fixes design.md D1), and passed ancestors'
 // artifacts in dependency order (remote-task-artifacts design.md D4).
-func buildRemoteJobPayload(task model.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte, secretValues []string, artifacts ...[][]byte) domain.RemoteJobPayload {
+func buildRemoteJobPayload(task domain.Task, repos []domain.Repo, defaultImage string, resolver domain.VariableResolver, archive []byte, secretValues []string, artifacts ...[][]byte) domain.RemoteJobPayload {
 	var vars map[string]string
 	if resolver != nil {
 		vars = resolver.Get(task.Execute.Repo, task.Name, "")
@@ -280,7 +279,7 @@ func sanitizeReposForPayload(repos []domain.Repo) []domain.Repo {
 // path's resumption walker (tasks.md 3.6), not here.
 // startRemote's only caller (Start) has already checked s.remoteJobStore is
 // non-nil.
-func (s *RunService) startRemote(projectName string, proj *model.Project, changed []string, opts domain.RunnerOptions) (int, error) {
+func (s *RunService) startRemote(projectName string, proj *domain.Project, changed []string, opts domain.RunnerOptions) (int, error) {
 	startedAt := time.Now()
 	if opts.WorkspaceCleanup != nil {
 		// The archive below copies everything a job needs out of the live
@@ -743,11 +742,11 @@ func (s *RunService) DeleteTerminalRemoteSecrets() error {
 // run's initial dispatch, narrowed to one task. It registers no
 // active/done entry and acquires no concurrency slot: the caller must not
 // call trackActive/acquireSlot/markQueuedIfBusy for this path at all.
-func (s *RunService) dispatchSingleTask(runID int, proj *model.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, bool, error) {
+func (s *RunService) dispatchSingleTask(runID int, proj *domain.Project, taskName string, opts domain.RunnerOptions) (domain.TaskResult, bool, error) {
 	if opts.WorkspaceCleanup != nil {
 		defer opts.WorkspaceCleanup()
 	}
-	var task *model.Task
+	var task *domain.Task
 	for i := range proj.Tasks {
 		if proj.Tasks[i].Name == taskName {
 			task = &proj.Tasks[i]
@@ -775,15 +774,15 @@ func (s *RunService) dispatchSingleTask(runID int, proj *model.Project, taskName
 // orderedPassedAncestors computes the passed transitive dependencies of task,
 // ordered topologically with ties broken by declaration order in proj.Tasks
 // (remote-task-artifacts design D4).
-func orderedPassedAncestors(proj model.Project, task model.Task, passed map[string]bool) []string {
-	allTasksByName := make(map[string]model.Task, len(proj.Tasks))
+func orderedPassedAncestors(proj domain.Project, task domain.Task, passed map[string]bool) []string {
+	allTasksByName := make(map[string]domain.Task, len(proj.Tasks))
 	for _, t := range proj.Tasks {
 		allTasksByName[t.Name] = t
 	}
 
 	ancestorSet := make(map[string]bool)
-	var collectAncestors func(t model.Task)
-	collectAncestors = func(t model.Task) {
+	var collectAncestors func(t domain.Task)
+	collectAncestors = func(t domain.Task) {
 		for _, depName := range t.DependsOn {
 			if !ancestorSet[depName] {
 				ancestorSet[depName] = true

@@ -21,7 +21,6 @@ import (
 
 	"kestrix/internal/config"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/redact"
 	"kestrix/internal/runner"
 )
@@ -207,9 +206,9 @@ func runJob(ctx context.Context, client *http.Client, baseURL, token, mode strin
 		}
 	}
 
-	project := model.Project{
+	project := domain.Project{
 		Repos:        job.Payload.Repos,
-		Tasks:        []model.Task{job.Payload.Task},
+		Tasks:        []domain.Task{job.Payload.Task},
 		DefaultImage: job.Payload.DefaultImage,
 	}
 	tw := newTraceWriter(ctx, client, baseURL, token, job.ID, job.ClaimEpoch, maxSpoolBytes)

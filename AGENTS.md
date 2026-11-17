@@ -54,7 +54,6 @@ go test -run TestWebhook ./internal/web/ -count=1
 | `internal/domain/` | Hexagonal architecture ports, domain entities (`Project`, `Task`, `Run`), and shared types |
 | `internal/metrics/` | Prometheus metrics collector and recorder |
 | `internal/mocks/` | Shared test mocks for domain ports |
-| `internal/model/` | Legacy compatibility type aliases for `internal/domain` |
 | `internal/parser/` | HCL parser (`hclsyntax`) + variable interpolation |
 | `internal/redact/` | Secret value redaction for logs, SSE events, and task output |
 | `internal/runner/` | Task execution engines: local bash, hardened Docker, and pipeline executor |

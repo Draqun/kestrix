@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
@@ -19,7 +18,7 @@ import (
 func TestPG_SingleTaskRerun_CompletionDispatchesNothingElse(t *testing.T) {
 	pg := testPG(t)
 	spec := domain.ExecuteSpec{Repo: "app", Script: "echo hi"}
-	proj := &model.Project{Name: "rerun-proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "rerun-proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []domain.Task{
 		{Name: "lint", Trigger: "!repo.docs.changed", Execute: spec},
 		{Name: "build", Trigger: "!repo.docs.changed", Execute: spec},
 		{Name: "deploy", Trigger: "!repo.docs.changed", DependsOn: []string{"build"}, Execute: spec},

@@ -9,7 +9,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 type cipBlockRunner struct {
@@ -24,7 +23,7 @@ func newCipBlockRunner() *cipBlockRunner {
 	}
 }
 
-func (r *cipBlockRunner) Run(ctx context.Context, _ model.Project, _ map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
+func (r *cipBlockRunner) Run(ctx context.Context, _ domain.Project, _ map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	r.started <- 1
 	select {
 	case <-r.release:
@@ -34,7 +33,7 @@ func (r *cipBlockRunner) Run(ctx context.Context, _ model.Project, _ map[string]
 	}
 }
 
-func (r *cipBlockRunner) RunTask(context.Context, model.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
+func (r *cipBlockRunner) RunTask(context.Context, domain.Project, string, domain.RunnerOptions) (domain.TaskResult, error) {
 	return domain.TaskResult{}, nil
 }
 
@@ -56,7 +55,7 @@ func newCipStatefulRunStore() *cipStatefulRunStore {
 	}
 }
 
-func (s *cipStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
+func (s *cipStatefulRunStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++
@@ -175,10 +174,10 @@ func TestRunService_Start_CancelInProgress_CancelsInFlightRunOnSameBranch(t *tes
 	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 
 	opts1 := domain.RunnerOptions{
@@ -240,10 +239,10 @@ func TestRunService_Start_CancelInProgress_CancelsQueuedRunOnSameBranch(t *testi
 	svc.SetMaxConcurrentRuns(1)
 	svc.CancelGrace = 50 * time.Millisecond
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 
 	// Run 1 on "main" occupies the only concurrency slot
@@ -317,10 +316,10 @@ func TestRunService_Start_CancelInProgress_LeavesDifferentBranchesUntouched(t *t
 	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 
 	opts1 := domain.RunnerOptions{
@@ -364,10 +363,10 @@ func TestRunService_Start_CancelInProgress_DisabledLeavesEarlierRunsRunning(t *t
 	svc := newTestRunService(store, runner, runner)
 	svc.CancelGrace = 50 * time.Millisecond
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: false, // disabled
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 
 	opts1 := domain.RunnerOptions{
@@ -414,10 +413,10 @@ func TestRunService_Start_CancelInProgress_RemoteMode(t *testing.T) {
 	svc := newTestRunService(mockRun, nil, nil)
 	svc.remoteJobStore = &mockRun.MockRemoteJobStore
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "remote-proj",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "build", Trigger: "true"}},
+		Tasks:            []domain.Task{{Name: "build", Trigger: "true"}},
 	}
 
 	opts := domain.RunnerOptions{
@@ -469,10 +468,10 @@ func TestRunService_Start_CancelInProgress_FindActiveRunsErrorLogged(t *testing.
 	runner := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 	opts := domain.RunnerOptions{
 		InitialSources: []domain.AcquiredSource{{
@@ -499,10 +498,10 @@ func TestRunService_Start_CancelInProgress_CancelErrorLogged(t *testing.T) {
 	runner := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 	opts := domain.RunnerOptions{
 		InitialSources: []domain.AcquiredSource{{
@@ -529,10 +528,10 @@ func TestRunService_Start_PersistsInitialSourcesAtCreation(t *testing.T) {
 	runner := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: false,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 	initialSources := []domain.AcquiredSource{{
 		RepoName:     "demo",
@@ -565,10 +564,10 @@ func TestRunService_Start_CancelInProgress_NoPrimarySourceRefIsNoop(t *testing.T
 	runner := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(mockRun, runner, runner)
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:             "demo",
 		CancelInProgress: true,
-		Tasks:            []model.Task{{Name: "test"}},
+		Tasks:            []domain.Task{{Name: "test"}},
 	}
 	// InitialSources without Primary: true or with empty RequestedRef
 	opts := domain.RunnerOptions{

@@ -17,7 +17,6 @@ import (
 
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/parser"
 	"kestrix/internal/redact"
 	"kestrix/internal/service"
@@ -131,7 +130,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.projectService.CreateValidated(&req, func(candidate *domain.ProjectConfig) (model.Project, error) {
+	if err := s.projectService.CreateValidated(&req, func(candidate *domain.ProjectConfig) (domain.Project, error) {
 		proj, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-create-validation")
 		if err == nil {
 			session.Cleanup()
@@ -184,7 +183,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	if !decodeProjectConfig(w, r, &update) {
 		return
 	}
-	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) (model.Project, error) {
+	if err := s.projectService.UpdateValidated(name, &update, func(candidate *domain.ProjectConfig) (domain.Project, error) {
 		proj, session, err := s.loadProjectPipeline(r.Context(), candidate, "", "project-update-validation")
 		if err == nil {
 			session.Cleanup()
@@ -285,29 +284,29 @@ func (s *Server) projectPipelinePath(p *domain.ProjectConfig, repoRoot string) (
 
 // parseProjectPipeline merges all .tf definitions from the configured pipeline
 // directory. Other .tf files in the repository are intentionally ignored.
-func (s *Server) parseProjectPipeline(p *domain.ProjectConfig) (model.Project, error) {
+func (s *Server) parseProjectPipeline(p *domain.ProjectConfig) (domain.Project, error) {
 	proj, session, err := s.loadProjectPipeline(context.Background(), p, "", "project-definition")
 	if err != nil {
-		return model.Project{}, err
+		return domain.Project{}, err
 	}
 	defer session.Cleanup()
 	return proj, nil
 }
 
-func (s *Server) loadProjectPipeline(ctx context.Context, p *domain.ProjectConfig, revision, purpose string) (model.Project, projectSourceSession, error) {
+func (s *Server) loadProjectPipeline(ctx context.Context, p *domain.ProjectConfig, revision, purpose string) (domain.Project, projectSourceSession, error) {
 	session, err := s.openProjectSource(ctx, p, revision, purpose)
 	if err != nil {
-		return model.Project{}, projectSourceSession{}, err
+		return domain.Project{}, projectSourceSession{}, err
 	}
 	dir, err := s.projectPipelineDir(p, session.Root)
 	if err != nil {
 		session.Cleanup()
-		return model.Project{}, projectSourceSession{}, err
+		return domain.Project{}, projectSourceSession{}, err
 	}
 	proj, err := parser.ParseDir(dir)
 	if err != nil {
 		session.Cleanup()
-		return model.Project{}, projectSourceSession{}, fmt.Errorf("parse pipeline directory: %w", err)
+		return domain.Project{}, projectSourceSession{}, fmt.Errorf("parse pipeline directory: %w", err)
 	}
 	return proj, session, nil
 }
@@ -370,7 +369,7 @@ func (s *Server) handleGetProjectDefinition(w http.ResponseWriter, r *http.Reque
 // recorded; an unchanged definition costs no write. Failing to record them is
 // logged, not fatal: the caller already has the definition, and the next
 // load retries.
-func (s *Server) refreshSources(p *domain.ProjectConfig, proj model.Project) {
+func (s *Server) refreshSources(p *domain.ProjectConfig, proj domain.Project) {
 	derived := service.DeriveSources(p, proj)
 	if slices.Equal(p.Sources, derived) {
 		return

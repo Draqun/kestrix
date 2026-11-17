@@ -279,7 +279,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Project"
+                            "$ref": "#/definitions/domain.Project"
                         }
                     }
                 }
@@ -1497,38 +1497,6 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "string"
-                }
-            }
-        },
-        "model.Project": {
-            "type": "object",
-            "properties": {
-                "cancel_in_progress": {
-                    "type": "boolean"
-                },
-                "default_image": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "repos": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Repo"
-                    }
-                },
-                "tasks": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Task"
-                    }
-                },
-                "variables": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Variable"
-                    }
                 }
             }
         },

@@ -19,7 +19,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 
 	"github.com/go-chi/chi/v5"
@@ -734,7 +733,7 @@ func TestHandleRunTask_QueuedRespondsImmediately(t *testing.T) {
 	srv.runService.SetMaxConcurrentRuns(1)
 
 	// Occupy the only slot with another run whose task blocks.
-	if _, _, err := srv.runService.StartTask(context.Background(), "demo", &model.Project{Name: "demo"}, "test", domain.RunnerOptions{SourcesPrepared: true}); err != nil {
+	if _, _, err := srv.runService.StartTask(context.Background(), "demo", &domain.Project{Name: "demo"}, "test", domain.RunnerOptions{SourcesPrepared: true}); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	select {

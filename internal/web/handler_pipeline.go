@@ -65,7 +65,7 @@ var resolvePipelinePath = func(path string) (string, error) {
 // @Tags pipeline
 // @Produce json
 // @Param dir query string false "Pipeline directory"
-// @Success 200 {object} model.Project
+// @Success 200 {object} domain.Project
 // @Router /api/pipeline [get]
 func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 	dir, err := boundPipelineDir(s.cfg.PipelineDir, r.URL.Query().Get("dir"))

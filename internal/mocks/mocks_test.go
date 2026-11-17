@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 func TestMockProjectStore_UpsertRecordsCall(t *testing.T) {
@@ -39,7 +38,7 @@ func TestMockProjectStore_DeleteRecordsCall(t *testing.T) {
 
 func TestMockRunStore_CreateRunRecordsCall(t *testing.T) {
 	m := &MockRunStore{CreateRunID: 42}
-	snap := &model.Project{Name: "demo"}
+	snap := &domain.Project{Name: "demo"}
 	sources := []domain.AcquiredSource{{RepoName: "svc", RequestedRef: "feat/x"}}
 	id, err := m.CreateRun("demo", []string{"svc"}, "", true, snap, "user:alice", sources)
 	if err != nil {
@@ -67,7 +66,7 @@ func TestMockRunStore_FinishRunRecordsCall(t *testing.T) {
 
 func TestMockPipelineRunner_ReturnsConfiguredResults(t *testing.T) {
 	m := &MockPipelineRunner{TaskResultList: []domain.TaskResult{{Name: "t", Status: "passed"}}}
-	results, err := m.Run(context.Background(), model.Project{}, nil, domain.RunnerOptions{})
+	results, err := m.Run(context.Background(), domain.Project{}, nil, domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -83,7 +82,7 @@ func TestMockPipelineRunner_Panics(t *testing.T) {
 			t.Errorf("recover = %v, want boom", r)
 		}
 	}()
-	_, _ = m.Run(context.Background(), model.Project{}, nil, domain.RunnerOptions{})
+	_, _ = m.Run(context.Background(), domain.Project{}, nil, domain.RunnerOptions{})
 }
 
 func TestMockPipelineRunner_RunTaskPanics(t *testing.T) {
@@ -93,7 +92,7 @@ func TestMockPipelineRunner_RunTaskPanics(t *testing.T) {
 			t.Errorf("recover = %v, want boom", r)
 		}
 	}()
-	_, _ = m.RunTask(context.Background(), model.Project{}, "lint", domain.RunnerOptions{})
+	_, _ = m.RunTask(context.Background(), domain.Project{}, "lint", domain.RunnerOptions{})
 }
 
 func TestMockWebhookLogSink_RecordAndList(t *testing.T) {
@@ -373,7 +372,7 @@ func TestMockRunStore_FirstApplyResultAndCounters(t *testing.T) {
 
 func TestMockPipelineRunner_RunTaskBranches(t *testing.T) {
 	m := &MockPipelineRunner{}
-	result, err := m.RunTask(context.Background(), model.Project{}, "lint", domain.RunnerOptions{})
+	result, err := m.RunTask(context.Background(), domain.Project{}, "lint", domain.RunnerOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +381,7 @@ func TestMockPipelineRunner_RunTaskBranches(t *testing.T) {
 	}
 
 	m.TaskResultList = []domain.TaskResult{{Name: "build", Status: "failed"}}
-	result, err = m.RunTask(context.Background(), model.Project{}, "build", domain.RunnerOptions{})
+	result, err = m.RunTask(context.Background(), domain.Project{}, "build", domain.RunnerOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

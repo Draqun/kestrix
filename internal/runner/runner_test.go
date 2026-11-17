@@ -15,7 +15,6 @@ import (
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
 
@@ -53,12 +52,12 @@ func skipOnWindows(t *testing.T) {
 // simpleProject returns a project with one repo and one task — a basic
 // build block for use-cases that don't need dependencies or manual
 // approval.
-func simpleProject(name, trigger, script string) model.Project {
-	return model.Project{
+func simpleProject(name, trigger, script string) domain.Project {
+	return domain.Project{
 		Name:  name,
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
-			{Name: "t", Trigger: trigger, Execute: model.ExecuteSpec{Repo: "repo", Script: script}},
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
+			{Name: "t", Trigger: trigger, Execute: domain.ExecuteSpec{Repo: "repo", Script: script}},
 		},
 	}
 }
@@ -71,12 +70,12 @@ func TestRunExecutesDependenciesInOrder(t *testing.T) {
 		t.Skip("docker not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "local",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
-			{Name: "first", Trigger: "repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo", Script: "printf first"}},
-			{Name: "second", Trigger: "repo.repo.changed", DependsOn: []string{"first"}, Execute: model.ExecuteSpec{Repo: "repo", Script: "printf second"}},
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
+			{Name: "first", Trigger: "repo.repo.changed", Execute: domain.ExecuteSpec{Repo: "repo", Script: "printf first"}},
+			{Name: "second", Trigger: "repo.repo.changed", DependsOn: []string{"first"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: "printf second"}},
 		},
 	}
 	var output bytes.Buffer
@@ -102,10 +101,10 @@ func TestRunSkipsManualTasks(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}
-	project := model.Project{
+	project := domain.Project{
 		Name:  "local",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{{Name: "manual", Trigger: "repo.repo.changed", Manual: true, Execute: model.ExecuteSpec{Repo: "repo", Script: "printf should-not-run"}}},
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{{Name: "manual", Trigger: "repo.repo.changed", Manual: true, Execute: domain.ExecuteSpec{Repo: "repo", Script: "printf should-not-run"}}},
 	}
 	var output bytes.Buffer
 	results, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: t.TempDir(), Stdout: &output})
@@ -124,12 +123,12 @@ func TestRunRejectsTaskWithUntriggeredDependency(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}
-	project := model.Project{
+	project := domain.Project{
 		Name:  "local",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
-			{Name: "dependency", Trigger: "!repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo", Script: ":"}},
-			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"dependency"}, Execute: model.ExecuteSpec{Repo: "repo", Script: ":"}},
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
+			{Name: "dependency", Trigger: "!repo.repo.changed", Execute: domain.ExecuteSpec{Repo: "repo", Script: ":"}},
+			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"dependency"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: ":"}},
 		},
 	}
 	_, err := Run(context.Background(), project, map[string]bool{"repo": true}, Options{WorkDir: t.TempDir()})
@@ -146,12 +145,12 @@ func TestRunReturnsPerTaskResults(t *testing.T) {
 		t.Skip("docker not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "local",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
-			{Name: "pass", Trigger: "repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo", Script: "echo ok"}},
-			{Name: "skip", Trigger: "repo.repo.changed", Manual: true, Execute: model.ExecuteSpec{Repo: "repo", Script: "echo skip"}},
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
+			{Name: "pass", Trigger: "repo.repo.changed", Execute: domain.ExecuteSpec{Repo: "repo", Script: "echo ok"}},
+			{Name: "skip", Trigger: "repo.repo.changed", Manual: true, Execute: domain.ExecuteSpec{Repo: "repo", Script: "echo skip"}},
 		},
 	}
 	var output bytes.Buffer
@@ -179,9 +178,9 @@ func TestRunReturnsPerTaskResults(t *testing.T) {
 func TestOrder_Topological(t *testing.T) {
 	// a → b → c
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "a", DependsOn: nil}},
-		{Task: model.Task{Name: "b", DependsOn: []string{"a"}}},
-		{Task: model.Task{Name: "c", DependsOn: []string{"b"}}},
+		{Task: domain.Task{Name: "a", DependsOn: nil}},
+		{Task: domain.Task{Name: "b", DependsOn: []string{"a"}}},
+		{Task: domain.Task{Name: "c", DependsOn: []string{"b"}}},
 	}
 	got, err := order(nodes)
 	if err != nil {
@@ -201,7 +200,7 @@ func TestOrder_IgnoresUntriggeredDependency(t *testing.T) {
 	// 'a' references 'missing' which isn't in the trigger set
 	// (i.e. wasn't a node). order() must report this clearly.
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "a", DependsOn: []string{"missing"}}},
+		{Task: domain.Task{Name: "a", DependsOn: []string{"missing"}}},
 	}
 	_, err := order(nodes)
 	if err == nil {
@@ -213,7 +212,7 @@ func TestOrder_IgnoresUntriggeredDependency(t *testing.T) {
 }
 
 func TestRepoDir_GitRepo(t *testing.T) {
-	repo := model.Repo{Name: "r", Kind: "git", Path: "r"}
+	repo := domain.Repo{Name: "r", Kind: "git", Path: "r"}
 	_, err := repoDir(t.TempDir(), repo)
 	if err == nil {
 		t.Fatal("expected error for git-kind repo")
@@ -226,7 +225,7 @@ func TestRepoDir_GitRepo(t *testing.T) {
 func TestRepoDir_PathEscape(t *testing.T) {
 	root := t.TempDir()
 	// Create one subdir inside root, point repo at "../foo" which escapes.
-	repo := model.Repo{Name: "r", Kind: "subpath", Path: "../foo"}
+	repo := domain.Repo{Name: "r", Kind: "subpath", Path: "../foo"}
 	_, err := repoDir(root, repo)
 	if err == nil {
 		t.Fatal("expected path-escape error")
@@ -237,7 +236,7 @@ func TestRepoDir_PathEscape(t *testing.T) {
 }
 
 func TestRepoDir_Nonexistent(t *testing.T) {
-	repo := model.Repo{Name: "r", Kind: "subpath", Path: "nope"}
+	repo := domain.Repo{Name: "r", Kind: "subpath", Path: "nope"}
 	_, err := repoDir(t.TempDir(), repo)
 	if err == nil {
 		t.Fatal("expected error for nonexistent path")
@@ -252,7 +251,7 @@ func TestRepoDir_PathIsFileNotDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "afile"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo := model.Repo{Name: "r", Kind: "subpath", Path: "afile"}
+	repo := domain.Repo{Name: "r", Kind: "subpath", Path: "afile"}
 	_, err := repoDir(root, repo)
 	if err == nil {
 		t.Fatal("expected error when path is a file")
@@ -268,7 +267,7 @@ func TestRepoDir_Success(t *testing.T) {
 	if err := os.Mkdir(inner, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	repo := model.Repo{Name: "r", Kind: "subpath", Path: "child"}
+	repo := domain.Repo{Name: "r", Kind: "subpath", Path: "child"}
 	got, err := repoDir(root, repo)
 	if err != nil {
 		t.Fatalf("repoDir: %v", err)
@@ -292,22 +291,22 @@ func TestRunLocal_ReturnsTriggerSkippedTasks(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	proj := model.Project{
+	proj := domain.Project{
 		Name: "test-trigger-skip",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "app", Kind: "subpath", Path: "."},
 			{Name: "other", Kind: "subpath", Path: "."},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{
 				Name:    "t_ran",
 				Trigger: "repo.app.changed",
-				Execute: model.ExecuteSpec{Repo: "app", Script: "echo ran"},
+				Execute: domain.ExecuteSpec{Repo: "app", Script: "echo ran"},
 			},
 			{
 				Name:    "t_skipped",
 				Trigger: "repo.other.changed",
-				Execute: model.ExecuteSpec{Repo: "other", Script: "echo skipped"},
+				Execute: domain.ExecuteSpec{Repo: "other", Script: "echo skipped"},
 			},
 		},
 	}
@@ -492,14 +491,14 @@ func TestRunLocal_CanceledContextRemainingTasksSetsSkipReason(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel context
 
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "t1", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo hello`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo hello`}},
 			{Name: "t2", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo world`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo world`}},
 		},
 	}
 	results, err := RunLocal(ctx, project, map[string]bool{"repo": true}, Options{
@@ -558,16 +557,16 @@ func TestRunLocal_ManualAndDepBlocked(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			{Name: "dependent", Trigger: "repo.repo.changed",
-				DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
+				DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
 			{Name: "manual-ok", Trigger: "repo.repo.changed", Manual: true,
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo manual`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo manual`}},
 		},
 	}
 	var out bytes.Buffer
@@ -599,18 +598,18 @@ func TestRunLocal_ManualGateBlocksDownstream(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo build_done`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo build_done`}},
 			{Name: "deploy", Trigger: "repo.repo.changed", Manual: true,
-				DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
+				DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
 			{Name: "notify", Trigger: "repo.repo.changed",
-				DependsOn: []string{"deploy"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo notify_done`}},
+				DependsOn: []string{"deploy"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo notify_done`}},
 			{Name: "cleanup", Trigger: "repo.repo.changed",
-				DependsOn: []string{"notify"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo cleanup_done`}},
+				DependsOn: []string{"notify"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo cleanup_done`}},
 		},
 	}
 	var out bytes.Buffer
@@ -657,14 +656,14 @@ func TestRunLocal_FailedUpstreamSkipsDownstreamManual(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			{Name: "deploy", Trigger: "repo.repo.changed", Manual: true,
-				DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
+				DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo deploy_done`}},
 		},
 	}
 	var out bytes.Buffer
@@ -736,21 +735,21 @@ func TestRunLocal_TaskTimeoutDownstreamSkipped(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "timeout-proj",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{
 				Name:    "upstream",
 				Trigger: "repo.repo.changed",
 				Timeout: "50ms",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: "sleep 5"},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: "sleep 5"},
 			},
 			{
 				Name:      "downstream",
 				Trigger:   "repo.repo.changed",
 				DependsOn: []string{"upstream"},
-				Execute:   model.ExecuteSpec{Repo: "repo", Script: "echo should-not-run"},
+				Execute:   domain.ExecuteSpec{Repo: "repo", Script: "echo should-not-run"},
 			},
 		},
 	}
@@ -799,12 +798,12 @@ func TestRunLocal_IncludeManual(t *testing.T) {
 	// to /workspace, which only exists in docker mode.
 	results, err := RunLocal(
 		context.Background(),
-		model.Project{
+		domain.Project{
 			Name:  "p1",
-			Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-			Tasks: []model.Task{
+			Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+			Tasks: []domain.Task{
 				{Name: "manual", Trigger: "repo.repo.changed", Manual: true,
-					Execute: model.ExecuteSpec{Repo: "repo", Script: `echo manual && date +%s > ./m.run`}},
+					Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo manual && date +%s > ./m.run`}},
 			},
 		},
 		map[string]bool{"repo": true},
@@ -891,12 +890,12 @@ func TestRunLocal_ResolveFails(t *testing.T) {
 	// pipeline error. We only care that RunLocal surfaces whatever
 	// pipeline-validation error occurs — not which one specifically.
 	dir := t.TempDir()
-	bad := model.Project{
+	bad := domain.Project{
 		Name:  "p",
-		Repos: []model.Repo{{Name: "declared", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "declared", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "t", Trigger: "repo.undeclared.changed",
-				Execute: model.ExecuteSpec{Repo: "declared", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "declared", Script: `:`}},
 		},
 	}
 	_, err := RunLocal(context.Background(), bad,
@@ -916,12 +915,12 @@ func TestRunOne_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	var completionFired bool
 	var out bytes.Buffer
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "first", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo first`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo first`}},
 		},
 	}
 	res, err := RunOne(context.Background(), project, "first",
@@ -965,12 +964,12 @@ func TestRunOne_FailedScript(t *testing.T) {
 	dir := t.TempDir()
 	var completion TaskResult
 	var out bytes.Buffer
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "boom", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 7`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 7`}},
 		},
 	}
 	res, err := RunOne(context.Background(), project, "boom",
@@ -993,7 +992,7 @@ func TestRunOne_FailedScript(t *testing.T) {
 }
 
 // RunOne resolves the task's Execute.Repo against project.Repos. Missing
-// repo entries fall through to a zero-value model.Repo, which forces
+// repo entries fall through to a zero-value domain.Repo, which forces
 // repoDir's "not a directory" branch via Path="." pointing at a file.
 func TestRunOne_MissingRepo(t *testing.T) {
 	skipOnWindows(t)
@@ -1006,12 +1005,12 @@ func TestRunOne_MissingRepo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "block"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "other", Path: ".", Kind: "subpath"}}, // declares "other", not "repo"
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "other", Path: ".", Kind: "subpath"}}, // declares "other", not "repo"
+		Tasks: []domain.Task{
 			{Name: "ghost", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `:`}},
 		},
 	}
 	_, err := RunOne(context.Background(), project, "ghost",
@@ -1032,12 +1031,12 @@ func TestRunOne_GitRepoRejected(t *testing.T) {
 	if !bashAvailable() {
 		t.Skip("bash not available")
 	}
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "remote", Path: ".", Kind: "git"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "remote", Path: ".", Kind: "git"}},
+		Tasks: []domain.Task{
 			{Name: "remote_task", Trigger: "remote.head.changed",
-				Execute: model.ExecuteSpec{Repo: "remote", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "remote", Script: `:`}},
 		},
 	}
 	_, err := RunOne(context.Background(), project, "remote_task",
@@ -1067,12 +1066,12 @@ func TestRunOne_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "t", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `:`}},
 		},
 	}
 	res, err := RunOne(context.Background(), project, "t",
@@ -1147,12 +1146,12 @@ func TestRunLocal_FailPropagatesCompletionCallback(t *testing.T) {
 	var completionFired bool
 	var out bytes.Buffer
 	results, err := RunLocal(context.Background(),
-		model.Project{
+		domain.Project{
 			Name:  "p1",
-			Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-			Tasks: []model.Task{
+			Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+			Tasks: []domain.Task{
 				{Name: "failing", Trigger: "repo.repo.changed",
-					Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+					Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			},
 		},
 		map[string]bool{"repo": true},
@@ -1182,12 +1181,12 @@ func TestRunLocal_ManualSkipFiresCallback(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var fired TaskResult
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "manual", Trigger: "repo.repo.changed", Manual: true,
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo manual`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo manual`}},
 		},
 	}
 	results, err := RunLocal(context.Background(), project,
@@ -1216,14 +1215,14 @@ func TestRunLocal_DependencySkipFiresCallback(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var fired []TaskResult
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"build"},
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
 		},
 	}
 	_, err := RunLocal(context.Background(), project,
@@ -1266,16 +1265,16 @@ func TestRunLocal_SkippedDependentMultiDepAggregation(t *testing.T) {
 	}
 	dir := t.TempDir()
 	var fired []TaskResult
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			{Name: "build1", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			{Name: "build2", Trigger: "repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `exit 1`}},
 			{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"build1", "build2"},
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `echo should_not_run`}},
 		},
 	}
 	_, err := RunLocal(context.Background(), project,
@@ -1322,17 +1321,17 @@ func TestRunLocal_OrderFailureAfterResolve(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name:  "p1",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{
 			// Non-triggered (negated expr is false because repo IS changed) —
 			// Resolve omits it from nodes, but detectCycles sees it exists.
 			{Name: "nontrigger", Trigger: "!repo.repo.changed",
-				Execute: model.ExecuteSpec{Repo: "repo", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "repo", Script: `:`}},
 			{Name: "downstream", Trigger: "repo.repo.changed",
 				DependsOn: []string{"nontrigger"},
-				Execute:   model.ExecuteSpec{Repo: "repo", Script: `:`}},
+				Execute:   domain.ExecuteSpec{Repo: "repo", Script: `:`}},
 		},
 	}
 	_, err := RunLocal(context.Background(), project,
@@ -1359,14 +1358,14 @@ func TestRunLocal_RepoDirFailsInLoop(t *testing.T) {
 		t.Skip("bash not available")
 	}
 	dir := t.TempDir()
-	project := model.Project{
+	project := domain.Project{
 		Name: "p1",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "remote", Path: ".", Kind: "git"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "failme", Trigger: "repo.remote.changed",
-				Execute: model.ExecuteSpec{Repo: "remote", Script: `:`}},
+				Execute: domain.ExecuteSpec{Repo: "remote", Script: `:`}},
 		},
 	}
 	results, err := RunLocal(context.Background(), project,

@@ -18,7 +18,6 @@ import (
 	"kestrix/internal/config"
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
 
@@ -53,13 +52,13 @@ func installFakeCommands(t *testing.T, fail bool) {
 	t.Cleanup(func() { commandContext = old })
 }
 
-func runnerProject(script string) model.Project {
-	return model.Project{
+func runnerProject(script string) domain.Project {
+	return domain.Project{
 		Name:  "unit",
-		Repos: []model.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
-		Tasks: []model.Task{{
+		Repos: []domain.Repo{{Name: "repo", Path: ".", Kind: "subpath"}},
+		Tasks: []domain.Task{{
 			Name: "task", Trigger: "repo.repo.changed",
-			Execute: model.ExecuteSpec{Repo: "repo", Script: script},
+			Execute: domain.ExecuteSpec{Repo: "repo", Script: script},
 		}},
 	}
 }
@@ -69,20 +68,20 @@ type stubExecutor struct {
 	calls  []string
 }
 
-func (e *stubExecutor) RunTask(_ context.Context, task model.Task, _ Options) (string, error) {
+func (e *stubExecutor) RunTask(_ context.Context, task domain.Task, _ Options) (string, error) {
 	e.calls = append(e.calls, task.Name)
 	return "output-" + task.Name, e.errors[task.Name]
 }
 
 func TestUnitTaskLoopBranches(t *testing.T) {
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "pass"}},
-		{Task: model.Task{Name: "fail", DependsOn: []string{"pass"}}},
-		{Task: model.Task{Name: "blocked", DependsOn: []string{"fail"}}},
-		{Task: model.Task{Name: "manual", Manual: true}},
-		{Task: model.Task{Name: "waiting_manual", DependsOn: []string{"manual"}}},
-		{Task: model.Task{Name: "waiting_pending", DependsOn: []string{"waiting_manual"}}},
-		{Task: model.Task{Name: "manual_blocked", Manual: true, DependsOn: []string{"fail"}}},
+		{Task: domain.Task{Name: "pass"}},
+		{Task: domain.Task{Name: "fail", DependsOn: []string{"pass"}}},
+		{Task: domain.Task{Name: "blocked", DependsOn: []string{"fail"}}},
+		{Task: domain.Task{Name: "manual", Manual: true}},
+		{Task: domain.Task{Name: "waiting_manual", DependsOn: []string{"manual"}}},
+		{Task: domain.Task{Name: "waiting_pending", DependsOn: []string{"waiting_manual"}}},
+		{Task: domain.Task{Name: "manual_blocked", Manual: true, DependsOn: []string{"fail"}}},
 	}
 	executor := &stubExecutor{errors: map[string]error{"fail": errors.New("failed")}}
 	starts := []string{}
@@ -101,7 +100,7 @@ func TestUnitTaskLoopBranches(t *testing.T) {
 	}
 
 	fatalExecutor := &stubExecutor{errors: map[string]error{"fatal": taskFatal{err: errors.New("fatal")}}}
-	partial, err := taskLoop(context.Background(), []dag.Node{{Task: model.Task{Name: "fatal"}}}, fatalExecutor, Options{Stdout: &bytes.Buffer{}})
+	partial, err := taskLoop(context.Background(), []dag.Node{{Task: domain.Task{Name: "fatal"}}}, fatalExecutor, Options{Stdout: &bytes.Buffer{}})
 	if err == nil || len(partial) != 0 {
 		t.Fatalf("fatal task results=%+v err=%v", partial, err)
 	}
@@ -114,8 +113,8 @@ func TestTaskFatalAndOrderCycle(t *testing.T) {
 		t.Fatalf("taskFatal does not preserve cause: %v", fatal)
 	}
 	_, err := order([]dag.Node{
-		{Task: model.Task{Name: "a", DependsOn: []string{"b"}}},
-		{Task: model.Task{Name: "b", DependsOn: []string{"a"}}},
+		{Task: domain.Task{Name: "a", DependsOn: []string{"b"}}},
+		{Task: domain.Task{Name: "b", DependsOn: []string{"a"}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("expected cycle error, got %v", err)
@@ -131,7 +130,7 @@ type cancelAfterExecutor struct {
 	cancelAfter string
 }
 
-func (e *cancelAfterExecutor) RunTask(_ context.Context, task model.Task, _ Options) (string, error) {
+func (e *cancelAfterExecutor) RunTask(_ context.Context, task domain.Task, _ Options) (string, error) {
 	e.calls = append(e.calls, task.Name)
 	if task.Name == e.cancelAfter {
 		e.cancel()
@@ -142,9 +141,9 @@ func (e *cancelAfterExecutor) RunTask(_ context.Context, task model.Task, _ Opti
 func TestTaskLoopStopsSchedulingAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "first"}},
-		{Task: model.Task{Name: "second"}},
-		{Task: model.Task{Name: "third"}},
+		{Task: domain.Task{Name: "first"}},
+		{Task: domain.Task{Name: "second"}},
+		{Task: domain.Task{Name: "third"}},
 	}
 	executor := &cancelAfterExecutor{cancel: cancel, cancelAfter: "first"}
 	var out bytes.Buffer
@@ -183,14 +182,14 @@ type cancelDuringExecutor struct {
 	cancel context.CancelFunc
 }
 
-func (e *cancelDuringExecutor) RunTask(_ context.Context, _ model.Task, _ Options) (string, error) {
+func (e *cancelDuringExecutor) RunTask(_ context.Context, _ domain.Task, _ Options) (string, error) {
 	e.cancel()
 	return "", errors.New("signal: terminated")
 }
 
 func TestTaskLoopReclassifiesKilledTaskAsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	nodes := []dag.Node{{Task: model.Task{Name: "victim"}}}
+	nodes := []dag.Node{{Task: domain.Task{Name: "victim"}}}
 	executor := &cancelDuringExecutor{cancel: cancel}
 	var out bytes.Buffer
 	results, err := taskLoop(ctx, nodes, executor, Options{Stdout: &out})
@@ -204,8 +203,8 @@ func TestTaskLoopReclassifiesKilledTaskAsCanceled(t *testing.T) {
 
 func TestTaskLoopPrintsAllowlistOnceBeforeFirstTask(t *testing.T) {
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "one"}},
-		{Task: model.Task{Name: "two"}},
+		{Task: domain.Task{Name: "one"}},
+		{Task: domain.Task{Name: "two"}},
 	}
 	executor := &stubExecutor{}
 	var out bytes.Buffer
@@ -224,7 +223,7 @@ func TestTaskLoopPrintsAllowlistOnceBeforeFirstTask(t *testing.T) {
 }
 
 func TestTaskLoopSkipsAllowlistWhenNoTaskRuns(t *testing.T) {
-	nodes := []dag.Node{{Task: model.Task{Name: "manual", Manual: true}}}
+	nodes := []dag.Node{{Task: domain.Task{Name: "manual", Manual: true}}}
 	executor := &stubExecutor{}
 	var out bytes.Buffer
 	if _, err := taskLoop(context.Background(), nodes, executor, Options{Stdout: &out}); err != nil {
@@ -247,14 +246,14 @@ func TestDockerExecutorHardeningFlags(t *testing.T) {
 	root := t.TempDir()
 	docker := &DockerExecutor{
 		WorkDir: root,
-		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		Repos:   map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
 		PIDs:    128,
 		Memory:  "1g",
 		CPUs:    "1.5",
 		User:    "1000:1000",
 		Network: "bridge",
 	}
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"}}
 	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
@@ -295,10 +294,10 @@ func TestDockerExecutorNetworkNoneAndOmittedUser(t *testing.T) {
 	root := t.TempDir()
 	docker := &DockerExecutor{
 		WorkDir: root,
-		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		Repos:   map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
 		Network: "none",
 	}
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"}}
 	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
@@ -461,8 +460,8 @@ func TestSetCancelViaProcessGroupSendsTermThenKill(t *testing.T) {
 
 func TestLocalExecutorsWireProcessGroupCancel(t *testing.T) {
 	root := t.TempDir()
-	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "true"}}
+	repos := map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "true"}}
 
 	var captured *exec.Cmd
 	old := commandContext
@@ -519,10 +518,10 @@ func TestDockerExecutorCancelStopsContainerByName(t *testing.T) {
 	root := t.TempDir()
 	docker := &DockerExecutor{
 		WorkDir: root,
-		Repos:   map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
+		Repos:   map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}},
 		Grace:   5 * time.Second,
 	}
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"}}
 	if _, err := docker.RunTask(context.Background(), task, Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
@@ -558,8 +557,8 @@ func TestConcreteExecutorsWithFakeCommand(t *testing.T) {
 	store := variables.New()
 	store.SetRepo("repo", "TOKEN", "unit")
 	opts := Options{Variables: store, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
-	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"}}
+	repos := map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
 
 	docker := &DockerExecutor{WorkDir: root, Repos: repos}
 	out, err := docker.RunTask(context.Background(), task, opts)
@@ -593,8 +592,8 @@ func TestRunnerRemotePreparationAndExternalDockerBranches(t *testing.T) {
 
 	root := t.TempDir()
 	external := t.TempDir()
-	docker := &DockerExecutor{WorkDir: root, Repos: map[string]model.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}}
-	_, err := docker.RunTask(context.Background(), model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "app", Script: "true"}}, Options{
+	docker := &DockerExecutor{WorkDir: root, Repos: map[string]domain.Repo{"app": {Name: "app", Path: ".", Kind: "subpath"}}}
+	_, err := docker.RunTask(context.Background(), domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "app", Script: "true"}}, Options{
 		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, RepoPaths: map[string]string{"app": external},
 	})
 	if err != nil {
@@ -604,9 +603,9 @@ func TestRunnerRemotePreparationAndExternalDockerBranches(t *testing.T) {
 
 func TestConcreteExecutorsErrors(t *testing.T) {
 	root := t.TempDir()
-	task := model.Task{Name: "task", Execute: model.ExecuteSpec{Repo: "repo", Script: "run"}}
+	task := domain.Task{Name: "task", Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"}}
 	opts := Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-	badRepos := map[string]model.Repo{"repo": {Name: "repo", Kind: "git"}}
+	badRepos := map[string]domain.Repo{"repo": {Name: "repo", Kind: "git"}}
 	for name, executor := range map[string]Executor{
 		"docker": &DockerExecutor{WorkDir: root, Repos: badRepos},
 		"local":  &LocalExecutor{WorkDir: root, Repos: badRepos},
@@ -619,7 +618,7 @@ func TestConcreteExecutorsErrors(t *testing.T) {
 	}
 
 	installFakeCommands(t, true)
-	goodRepos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	goodRepos := map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
 	for name, executor := range map[string]Executor{
 		"docker": &DockerExecutor{WorkDir: root, Repos: goodRepos, DefaultImage: "alpine"},
 		"local":  &LocalExecutor{WorkDir: root, Repos: goodRepos},
@@ -653,9 +652,9 @@ func TestRunDockerUnitBranches(t *testing.T) {
 		t.Fatal("expected non-directory workdir error")
 	}
 	project := runnerProject("run")
-	project.Tasks = []model.Task{
-		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo"}},
-		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: model.ExecuteSpec{Repo: "repo"}},
+	project.Tasks = []domain.Task{
+		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: domain.ExecuteSpec{Repo: "repo"}},
+		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: domain.ExecuteSpec{Repo: "repo"}},
 	}
 	if _, err := Run(context.Background(), project, changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected dependency validation/order error")
@@ -686,9 +685,9 @@ func TestRunLocalUnitBranches(t *testing.T) {
 		t.Fatal("expected non-directory workdir error")
 	}
 	untriggered := runnerProject("run")
-	untriggered.Tasks = []model.Task{
-		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: model.ExecuteSpec{Repo: "repo"}},
-		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: model.ExecuteSpec{Repo: "repo"}},
+	untriggered.Tasks = []domain.Task{
+		{Name: "not-triggered", Trigger: "!repo.repo.changed", Execute: domain.ExecuteSpec{Repo: "repo"}},
+		{Name: "dependent", Trigger: "repo.repo.changed", DependsOn: []string{"not-triggered"}, Execute: domain.ExecuteSpec{Repo: "repo"}},
 	}
 	if _, err := RunLocal(context.Background(), untriggered, changed, Options{WorkDir: t.TempDir(), SourcesPrepared: true}); err == nil {
 		t.Fatal("expected ordering error")
@@ -856,7 +855,7 @@ func TestRunOneReportsCanceledWhenContextCanceled(t *testing.T) {
 
 func TestRepoDir_DefaultPath(t *testing.T) {
 	root := t.TempDir()
-	got, err := repoDir(root, model.Repo{Name: "repo", Kind: "subpath"})
+	got, err := repoDir(root, domain.Repo{Name: "repo", Kind: "subpath"})
 	if err != nil || got != root {
 		t.Fatalf("repoDir=%q err=%v", got, err)
 	}
@@ -881,7 +880,7 @@ func TestFilesystemErrorSeams(t *testing.T) {
 
 func TestResolveErrorSeam(t *testing.T) {
 	old := resolvePipeline
-	resolvePipeline = func(model.Project, map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
+	resolvePipeline = func(domain.Project, map[string]bool) ([]dag.Node, []domain.TaskResult, error) {
 		return nil, nil, errors.New("resolve")
 	}
 	t.Cleanup(func() { resolvePipeline = old })
@@ -900,15 +899,15 @@ func TestPipelineExecutorDispatchSeams(t *testing.T) {
 	want := []domain.TaskResult{{Name: "fake", Status: "passed"}}
 	called := ""
 	executor := &PipelineExecutor{
-		runLocal: func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error) {
+		runLocal: func(context.Context, domain.Project, map[string]bool, Options) ([]TaskResult, error) {
 			called = "local"
 			return want, nil
 		},
-		runDocker: func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error) {
+		runDocker: func(context.Context, domain.Project, map[string]bool, Options) ([]TaskResult, error) {
 			called = "docker"
 			return want, nil
 		},
-		runOne: func(context.Context, model.Project, string, Options) (TaskResult, error) {
+		runOne: func(context.Context, domain.Project, string, Options) (TaskResult, error) {
 			called = "one"
 			return want[0], nil
 		},
@@ -953,11 +952,11 @@ func TestPipelineExecutorDefaultDispatch(t *testing.T) {
 
 func TestLocalExecutor_Timeout(t *testing.T) {
 	root := t.TempDir()
-	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
-	task := model.Task{
+	repos := map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := domain.Task{
 		Name:    "task",
 		Timeout: "10ms",
-		Execute: model.ExecuteSpec{Repo: "repo", Script: "run"},
+		Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"},
 	}
 
 	oldCmd := commandContext
@@ -989,11 +988,11 @@ func TestLocalExecutor_Timeout(t *testing.T) {
 
 func TestDockerExecutor_Timeout(t *testing.T) {
 	root := t.TempDir()
-	repos := map[string]model.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
-	task := model.Task{
+	repos := map[string]domain.Repo{"repo": {Name: "repo", Path: ".", Kind: "subpath"}}
+	task := domain.Task{
 		Name:    "task",
 		Timeout: "10ms",
-		Execute: model.ExecuteSpec{Repo: "repo", Script: "run"},
+		Execute: domain.ExecuteSpec{Repo: "repo", Script: "run"},
 	}
 
 	type invocation struct {

@@ -9,7 +9,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 )
 
@@ -56,7 +55,7 @@ func newWebhookCipStore() *webhookCipStore {
 	}
 }
 
-func (s *webhookCipStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
+func (s *webhookCipStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++

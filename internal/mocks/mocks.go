@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/source"
 )
 
@@ -256,7 +255,7 @@ type createRunCall struct {
 	Changed        []string
 	RerunTask      string
 	IncludeManual  bool
-	Snap           *model.Project
+	Snap           *domain.Project
 	StartedBy      string
 	InitialSources []domain.AcquiredSource
 }
@@ -280,7 +279,7 @@ type applyTaskCall struct {
 	OutputExtra string
 }
 
-func (m *MockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
+func (m *MockRunStore) CreateRun(p string, c []string, rerunTask string, im bool, snap *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	m.mu.Lock()
 	m.CreateRunCalls = append(m.CreateRunCalls, createRunCall{p, c, rerunTask, im, snap, startedBy, initialSources})
 	m.mu.Unlock()

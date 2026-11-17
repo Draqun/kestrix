@@ -13,7 +13,6 @@ import (
 
 	"kestrix/internal/credentials"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/service"
 	"kestrix/internal/store"
 )
@@ -57,12 +56,12 @@ func testWebPG(t *testing.T) *store.PGStore {
 // the task pending and the run running; approving a skipped gate answers 400.
 func TestHandleApproveManualTask_RemoteGateOnPostgres(t *testing.T) {
 	pg := testWebPG(t)
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "remote-gate-approval-proj",
 		Repos: []domain.Repo{
 			{Name: "app"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 		},

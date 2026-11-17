@@ -14,7 +14,6 @@ import (
 	"kestrix/internal/dag"
 	"kestrix/internal/dispatch"
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/parser"
 	"kestrix/internal/redact"
 	"kestrix/internal/source"
@@ -474,7 +473,7 @@ func (s *Server) resolveOne(ctx context.Context, event *PushEvent, m webhookMatc
 // the pushed repository, so a ci_repo renamed in Git since the sources were
 // last derived is still marked changed under the name the DAG knows. The
 // stored source name is the fallback when the pipeline no longer declares it.
-func pushedRepoName(proj model.Project, m webhookMatch) string {
+func pushedRepoName(proj domain.Project, m webhookMatch) string {
 	wanted := make(map[string]bool, len(m.keys))
 	for _, k := range m.keys {
 		wanted[k] = true
@@ -492,7 +491,7 @@ func pushedRepoName(proj model.Project, m webhookMatch) string {
 
 // resolveAndDispatch evaluates the DAG against changed, dispatches when
 // configured, records the history row, and returns the result entry.
-func (s *Server) resolveAndDispatch(event *PushEvent, proj model.Project, changed []string, dispatchProjectID int, entry domain.WebhookEvent) webhookResult {
+func (s *Server) resolveAndDispatch(event *PushEvent, proj domain.Project, changed []string, dispatchProjectID int, entry domain.WebhookEvent) webhookResult {
 	if changed == nil {
 		changed = []string{}
 	}

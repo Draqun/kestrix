@@ -5,15 +5,14 @@ import (
 	"fmt"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // PipelineExecutor adapts the runner package to the domain PipelineRunner port.
 type PipelineExecutor struct {
 	Mode      string
-	runDocker func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
-	runLocal  func(context.Context, model.Project, map[string]bool, Options) ([]TaskResult, error)
-	runOne    func(context.Context, model.Project, string, Options) (TaskResult, error)
+	runDocker func(context.Context, domain.Project, map[string]bool, Options) ([]TaskResult, error)
+	runLocal  func(context.Context, domain.Project, map[string]bool, Options) ([]TaskResult, error)
+	runOne    func(context.Context, domain.Project, string, Options) (TaskResult, error)
 }
 
 var _ domain.PipelineRunner = (*PipelineExecutor)(nil)

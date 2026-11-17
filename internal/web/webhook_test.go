@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 func TestParseGitLabPushEvent(t *testing.T) {
@@ -492,7 +492,7 @@ func TestFileClassifierMatchRepos(t *testing.T) {
 	tests := []struct {
 		name     string
 		files    map[string]bool
-		repos    []model.Repo
+		repos    []domain.Repo
 		expected []string
 	}{
 		{
@@ -500,18 +500,18 @@ func TestFileClassifierMatchRepos(t *testing.T) {
 			files: map[string]bool{"handler.go": true},
 			// Git repo: Kind != "subpath", Path == "". Whole repo matches
 			// whenever HasCodeChanges returns true.
-			repos:    []model.Repo{{Name: "app", Kind: "git"}},
+			repos:    []domain.Repo{{Name: "app", Kind: "git"}},
 			expected: []string{"app"},
 		},
 		{
 			name:  "git repo with no code changes does not match",
 			files: map[string]bool{"docs/README.md": true},
-			repos: []model.Repo{{Name: "app", Kind: "git"}},
+			repos: []domain.Repo{{Name: "app", Kind: "git"}},
 		},
 		{
 			name:  "subpath repo with code file under prefix matches",
 			files: map[string]bool{"services/auth/main.go": true},
-			repos: []model.Repo{
+			repos: []domain.Repo{
 				{Name: "auth", Kind: "subpath", Path: "services/auth"},
 			},
 			expected: []string{"auth"},
@@ -519,14 +519,14 @@ func TestFileClassifierMatchRepos(t *testing.T) {
 		{
 			name:  "subpath repo with only docs under prefix does not match",
 			files: map[string]bool{"services/auth/README.md": true},
-			repos: []model.Repo{
+			repos: []domain.Repo{
 				{Name: "auth", Kind: "subpath", Path: "services/auth"},
 			},
 		},
 		{
 			name:  "file matching the repo path exactly still wins",
 			files: map[string]bool{"packages/foo": true, "packages/foo/main.go": true},
-			repos: []model.Repo{
+			repos: []domain.Repo{
 				{Name: "foo", Kind: "subpath", Path: "packages/foo"},
 			},
 			expected: []string{"foo"},

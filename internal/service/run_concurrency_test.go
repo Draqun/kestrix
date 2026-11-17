@@ -8,7 +8,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 // TestRunService_Counts_UnlimitedConcurrencyReportsZeroRunning covers the
@@ -40,7 +39,7 @@ func TestRunService_Counts_ReflectsOccupiedSlotsAndDrainsToZero(t *testing.T) {
 		t.Fatalf("before any run: Counts() = (%d, %d), want (0, 0)", running, queued)
 	}
 
-	_, err := svc.Start(context.Background(), "proj", &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
+	_, err := svc.Start(context.Background(), "proj", &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t"}}}, nil, domain.RunnerOptions{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

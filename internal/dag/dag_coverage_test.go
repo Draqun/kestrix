@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 // --- parsePrimary / parsePredicate error paths -----------------------------
@@ -20,12 +20,12 @@ import (
 // badPredEngine returns an engine with one declared repo ("good") so it is
 // possible to drive predicate parsing without Validate exploding first.
 func badPredEngine() *Engine {
-	return New(model.Project{
+	return New(domain.Project{
 		Name:  "bad-pred",
-		Repos: []model.Repo{{Name: "good", Path: "g"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "good", Path: "g"}},
+		Tasks: []domain.Task{
 			{Name: "t", Trigger: "repo.good.changed",
-				Execute: model.ExecuteSpec{Repo: "good", Script: "./x.sh"}},
+				Execute: domain.ExecuteSpec{Repo: "good", Script: "./x.sh"}},
 		},
 	})
 }
@@ -144,17 +144,17 @@ func TestEvaluateTrigger_StopsAtEOF(t *testing.T) {
 // projWith returns an engine whose tasks carry the supplied triggers.
 // Used to drive EvaluateTrigger error paths inside Resolve / Validate.
 func projWith(triggers ...string) *Engine {
-	tasks := make([]model.Task, len(triggers))
+	tasks := make([]domain.Task, len(triggers))
 	for i, trig := range triggers {
-		tasks[i] = model.Task{
+		tasks[i] = domain.Task{
 			Name:    "t" + string(rune('a'+i)),
 			Trigger: trig,
-			Execute: model.ExecuteSpec{Repo: "good", Script: "./x.sh"},
+			Execute: domain.ExecuteSpec{Repo: "good", Script: "./x.sh"},
 		}
 	}
-	return New(model.Project{
+	return New(domain.Project{
 		Name:  "engine-errors",
-		Repos: []model.Repo{{Name: "good", Path: "g"}},
+		Repos: []domain.Repo{{Name: "good", Path: "g"}},
 		Tasks: tasks,
 	})
 }
@@ -184,21 +184,21 @@ func TestValidate_TriggerSyntaxError(t *testing.T) {
 
 func TestValidate_DetectCyclesError(t *testing.T) {
 	// Two tasks depending on each other -> detectCycles must report.
-	e := New(model.Project{
+	e := New(domain.Project{
 		Name:  "cycle-on-validate",
-		Repos: []model.Repo{{Name: "g", Path: "g"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "g", Path: "g"}},
+		Tasks: []domain.Task{
 			{
 				Name:      "a",
 				Trigger:   "repo.g.changed",
 				DependsOn: []string{"b"},
-				Execute:   model.ExecuteSpec{Repo: "g", Script: "./x.sh"},
+				Execute:   domain.ExecuteSpec{Repo: "g", Script: "./x.sh"},
 			},
 			{
 				Name:      "b",
 				Trigger:   "repo.g.changed",
 				DependsOn: []string{"a"},
-				Execute:   model.ExecuteSpec{Repo: "g", Script: "./x.sh"},
+				Execute:   domain.ExecuteSpec{Repo: "g", Script: "./x.sh"},
 			},
 		},
 	})
@@ -215,15 +215,15 @@ func TestDetectCycles_UnknownDependency(t *testing.T) {
 	// Tasks list contains a DependsOn referencing a non-existent task.
 	// detectCycles walks every node, and on the first unknown dep it
 	// returns the "unknown dependency" branch.
-	e := New(model.Project{
+	e := New(domain.Project{
 		Name:  "unknown-dep",
-		Repos: []model.Repo{{Name: "g", Path: "g"}},
-		Tasks: []model.Task{
+		Repos: []domain.Repo{{Name: "g", Path: "g"}},
+		Tasks: []domain.Task{
 			{
 				Name:      "real",
 				Trigger:   "repo.g.changed",
 				DependsOn: []string{"ghost"},
-				Execute:   model.ExecuteSpec{Repo: "g", Script: "./x.sh"},
+				Execute:   domain.ExecuteSpec{Repo: "g", Script: "./x.sh"},
 			},
 		},
 	})

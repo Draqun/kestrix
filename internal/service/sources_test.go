@@ -7,7 +7,6 @@ import (
 
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 )
 
 func names(sources []domain.ProjectSource) []string {
@@ -22,36 +21,36 @@ func TestDeriveSources(t *testing.T) {
 	cfg := &domain.ProjectConfig{Name: "checkout", RepoURL: "https://git.example.test/team/checkout.git"}
 	cases := []struct {
 		name  string
-		repos []model.Repo
+		repos []domain.Repo
 		want  []string
 	}{
-		{"no remote repos", []model.Repo{{Name: "app", Path: "services/app"}}, []string{"checkout"}},
-		{"two remote repos", []model.Repo{
+		{"no remote repos", []domain.Repo{{Name: "app", Path: "services/app"}}, []string{"checkout"}},
+		{"two remote repos", []domain.Repo{
 			{Name: "a", URL: "https://git.example.test/team/a.git", Ref: "main"},
 			{Name: "b", Path: "services/b"},
 			{Name: "c", URL: "ssh://git@git.example.test/team/c.git", Ref: "main"},
 		}, []string{"checkout", "a", "c"}},
-		{"duplicate URL collapses", []model.Repo{
+		{"duplicate URL collapses", []domain.Repo{
 			{Name: "shared", URL: "https://git.example.test/team/shared.git"},
 			{Name: "shared-ssh", URL: "git@git.example.test:team/shared.git"},
 		}, []string{"checkout", "shared"}},
-		{"primary declared again is not duplicated", []model.Repo{
+		{"primary declared again is not duplicated", []domain.Repo{
 			{Name: "self", URL: "git@git.example.test:team/checkout.git"},
 		}, []string{"checkout"}},
-		{"unroutable URL is skipped", []model.Repo{
+		{"unroutable URL is skipped", []domain.Repo{
 			{Name: "bad", URL: "https://user:pw@git.example.test/team/bad.git"},
 		}, []string{"checkout"}},
 		// Declaration order must not leak into the derived set: the store
 		// returns primary first then by name, and refreshSources compares the
 		// two directly.
-		{"declaration order is canonicalized", []model.Repo{
+		{"declaration order is canonicalized", []domain.Repo{
 			{Name: "zebra", URL: "https://git.example.test/team/z.git"},
 			{Name: "alpha", URL: "https://git.example.test/team/a.git"},
 		}, []string{"checkout", "alpha", "zebra"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DeriveSources(cfg, model.Project{Repos: tc.repos})
+			got := DeriveSources(cfg, domain.Project{Repos: tc.repos})
 			if len(got) != len(tc.want) {
 				t.Fatalf("sources = %v, want %v", names(got), tc.want)
 			}
@@ -73,7 +72,7 @@ func TestDeriveSources(t *testing.T) {
 func TestDeriveSourcesOrdersSameNameByURL(t *testing.T) {
 	got := DeriveSources(
 		&domain.ProjectConfig{Name: "checkout", RepoURL: "https://git.example.test/team/checkout.git"},
-		model.Project{Repos: []model.Repo{
+		domain.Project{Repos: []domain.Repo{
 			{Name: "dup", URL: "https://git.example.test/team/b.git"},
 			{Name: "dup", URL: "https://git.example.test/team/a.git"},
 		}})
@@ -88,8 +87,8 @@ func TestDeriveSourcesOrdersSameNameByURL(t *testing.T) {
 func TestProjectServiceRecordsDerivedSourcesOnCreateAndUpdate(t *testing.T) {
 	store := &mocks.MockProjectStore{}
 	svc := NewProjectService(store)
-	parsed := model.Project{Repos: []model.Repo{{Name: "shared", URL: "https://git.test/shared.git", Ref: "main"}}}
-	validate := func(*domain.ProjectConfig) (model.Project, error) { return parsed, nil }
+	parsed := domain.Project{Repos: []domain.Repo{{Name: "shared", URL: "https://git.test/shared.git", Ref: "main"}}}
+	validate := func(*domain.ProjectConfig) (domain.Project, error) { return parsed, nil }
 
 	// A client-supplied sources list is ignored in favour of the derived set.
 	cfg := &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.test/demo.git", RepoRef: "main",
@@ -118,7 +117,7 @@ func TestProjectServiceRecordsDerivedSourcesOnCreateAndUpdate(t *testing.T) {
 
 	// A failed validation leaves sources untouched.
 	calls := len(store.ReplaceSourcesCalls)
-	failing := func(*domain.ProjectConfig) (model.Project, error) { return model.Project{}, errors.New("denied") }
+	failing := func(*domain.ProjectConfig) (domain.Project, error) { return domain.Project{}, errors.New("denied") }
 	if err := svc.UpdateValidated("demo", &domain.ProjectConfig{RepoURL: "https://git.test/x.git", RepoRef: "main"}, failing); !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
 	}
@@ -156,10 +155,10 @@ func newTestCIRepoCredentialCase(t *testing.T, ciRepoRef string) (*mocks.MockPro
 	svc.SetCredentialLookup(ciRepoCredentialLookup)
 
 	cfg := &domain.ProjectConfig{Name: "demo", RepoURL: "https://git.test/demo.git", RepoRef: "main"}
-	parsed := model.Project{Repos: []model.Repo{
+	parsed := domain.Project{Repos: []domain.Repo{
 		{Name: "shared", URL: "https://git.test/shared.git", Ref: "main", CredentialRef: ciRepoRef},
 	}}
-	validate := func(*domain.ProjectConfig) (model.Project, error) { return parsed, nil }
+	validate := func(*domain.ProjectConfig) (domain.Project, error) { return parsed, nil }
 	return store, svc, cfg, validate
 }
 

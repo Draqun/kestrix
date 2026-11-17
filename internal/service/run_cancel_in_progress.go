@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 )
 
 // CancelActorSystemCancelInProgress is recorded as canceled_by when a run
@@ -24,7 +23,7 @@ func primarySourceRef(opts domain.RunnerOptions) string {
 
 // cancelSupersededRuns finds active and queued runs on the same branch and
 // cancels them before the new run starts.
-func (s *RunService) cancelSupersededRuns(ctx context.Context, projectName string, proj *model.Project, opts domain.RunnerOptions) {
+func (s *RunService) cancelSupersededRuns(ctx context.Context, projectName string, proj *domain.Project, opts domain.RunnerOptions) {
 	if proj == nil || !proj.CancelInProgress || s.runStore == nil {
 		return
 	}

@@ -8,11 +8,10 @@ import (
 	"strings"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/redact"
 )
 
-func (s *PGStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *model.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
+func (s *PGStore) CreateRun(projectName string, changed []string, rerunTask string, includeManual bool, snap *domain.Project, startedBy string, initialSources []domain.AcquiredSource) (int, error) {
 	changedJSON := "[]"
 	if len(changed) > 0 {
 		b, _ := json.Marshal(changed)
@@ -303,7 +302,7 @@ func (s *PGStore) CancelRun(id int, canceledBy string) (bool, error) {
 	var snapJSON sql.NullString
 	_ = tx.QueryRow(`SELECT pipeline_def FROM runs WHERE id = $1`, id).Scan(&snapJSON)
 	if snapJSON.Valid {
-		var snap model.Project
+		var snap domain.Project
 		if json.Unmarshal([]byte(snapJSON.String), &snap) == nil {
 			for _, t := range snap.Tasks {
 				depMap[t.Name] = t.DependsOn
@@ -641,7 +640,7 @@ func (s *PGStore) GetRun(id int) (*Run, error) {
 	json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 	json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 	if pipelineDefJSON.Valid {
-		var snap model.Project
+		var snap domain.Project
 		if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 			r.PipelineDef = &snap
 		}
@@ -692,7 +691,7 @@ func (s *PGStore) ListRuns(projectName string, limit int, offset int) ([]Run, er
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 		if pipelineDefJSON.Valid {
-			var snap model.Project
+			var snap domain.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 				r.PipelineDef = &snap
 			}
@@ -732,7 +731,7 @@ func (s *PGStore) ListAllRuns(limit int) ([]Run, error) {
 		json.Unmarshal([]byte(taskResultsJSON), &r.TaskResults)
 		json.Unmarshal([]byte(sourcesJSON), &r.Sources)
 		if pipelineDefJSON.Valid {
-			var snap model.Project
+			var snap domain.Project
 			if err := json.Unmarshal([]byte(pipelineDefJSON.String), &snap); err == nil {
 				r.PipelineDef = &snap
 			}

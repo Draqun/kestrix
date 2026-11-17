@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/runner"
 	"kestrix/internal/service"
 )
@@ -266,10 +265,10 @@ func TestPG_RemoteArtifacts_RemoteMode_BuildDeployEndToEnd(t *testing.T) {
 
 	specBuild := domain.ExecuteSpec{Repo: "app", Script: "mkdir -p dist && echo 'built-app-v1' > dist/app.txt"}
 	specDeploy := domain.ExecuteSpec{Repo: "app", Script: "cat dist/app.txt"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  projName,
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Artifacts: []string{"dist/"}, Execute: specBuild},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: specDeploy},
 		},
@@ -351,10 +350,10 @@ func TestPG_RemoteArtifacts_LocalMode_BuildDeployEndToEnd(t *testing.T) {
 
 	specBuild := domain.ExecuteSpec{Repo: "app", Script: "mkdir -p dist && echo 'built-local-app-v1' > dist/app.txt"}
 	specDeploy := domain.ExecuteSpec{Repo: "app", Script: "cat dist/app.txt"}
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  projName,
 		Repos: []domain.Repo{{Name: "app", Path: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Artifacts: []string{"dist/"}, Execute: specBuild},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: specDeploy},
 		},

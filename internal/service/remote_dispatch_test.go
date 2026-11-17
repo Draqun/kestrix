@@ -13,7 +13,6 @@ import (
 	"kestrix/internal/dag"
 	"kestrix/internal/domain"
 	"kestrix/internal/mocks"
-	"kestrix/internal/model"
 	"kestrix/internal/variables"
 )
 
@@ -118,7 +117,7 @@ func TestArchiveWorkDir_MissingDirectory(t *testing.T) {
 func TestBuildRemoteJobPayload_ExcludesControlPlaneVariables(t *testing.T) {
 	vs := variables.New()
 	vs.SetProject("REGISTRY_PASSWORD", "resolved-secret-value")
-	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	task := domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 
 	payload := buildRemoteJobPayload(task, nil, "", vs, nil, nil)
 
@@ -133,7 +132,7 @@ func TestBuildRemoteJobPayload_ExcludesControlPlaneVariables(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_CarriesSecretValues(t *testing.T) {
-	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	task := domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	payload := buildRemoteJobPayload(task, nil, "", nil, nil, []string{"resolved-secret-value"})
 	if len(payload.SecretValues) != 1 || payload.SecretValues[0] != "resolved-secret-value" {
 		t.Fatalf("SecretValues = %q, want the argument", payload.SecretValues)
@@ -144,7 +143,7 @@ func TestBuildRemoteJobPayload_ExcludesRepositoryCredentialValue(t *testing.T) {
 	// The payload takes no credential parameter at all - archiveWorkDir
 	// packages only the checkout's file contents, and buildRemoteJobPayload
 	// has no field for a credential, so there is no way for one to appear.
-	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	task := domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	payload := buildRemoteJobPayload(task, nil, "", nil, []byte("archive-bytes"), nil)
 	if payload.Task.Execute.Repo != "app" {
 		t.Fatalf("unexpected task in payload: %+v", payload.Task)
@@ -159,7 +158,7 @@ func TestBuildRemoteJobPayload_ExcludesRepositoryCredentialValue(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_CarriesReposForWorkdirResolution(t *testing.T) {
-	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	task := domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	repos := []domain.Repo{{Name: "app", Path: "services/app"}}
 	payload := buildRemoteJobPayload(task, repos, "golang:1.26", nil, nil, nil)
 	if len(payload.Repos) != 1 || payload.Repos[0].Path != "services/app" {
@@ -171,7 +170,7 @@ func TestBuildRemoteJobPayload_CarriesReposForWorkdirResolution(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_SanitizesRepoURLAndCredentialRef(t *testing.T) {
-	task := model.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
+	task := domain.Task{Name: "build", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}
 	repos := []domain.Repo{{Name: "app", Path: ".", URL: "https://git.example/app.git", CredentialRef: "cred_secret"}}
 	payload := buildRemoteJobPayload(task, repos, "", nil, nil, nil)
 	if len(payload.Repos) != 1 {
@@ -186,7 +185,7 @@ func TestBuildRemoteJobPayload_SanitizesRepoURLAndCredentialRef(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_NamesNoEngineOrImageSelector(t *testing.T) {
-	task := model.Task{
+	task := domain.Task{
 		Name: "build",
 		Execute: domain.ExecuteSpec{
 			Repo:   "app",
@@ -207,7 +206,7 @@ func TestBuildRemoteJobPayload_NamesNoEngineOrImageSelector(t *testing.T) {
 }
 
 func TestBuildRemoteJobPayload_PreservesTaskTimeout(t *testing.T) {
-	task := model.Task{
+	task := domain.Task{
 		Name:    "build",
 		Timeout: "15m",
 		Execute: domain.ExecuteSpec{Repo: "app", Script: "make build"},
@@ -221,10 +220,10 @@ func TestBuildRemoteJobPayload_PreservesTaskTimeout(t *testing.T) {
 // ── startRemote / RunService.Start remote branch ───────────────────
 
 func TestRunService_Start_RemoteMode_DispatchesEligibleTasksNoInProcessCall(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo a"}},
 			{Name: "b", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo b"}},
 		},
@@ -261,10 +260,10 @@ func TestRunService_Start_RemoteMode_DispatchesEligibleTasksNoInProcessCall(t *t
 }
 
 func TestRunService_Start_RemoteMode_DependentTaskNotDispatchedYet(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 		},
@@ -290,7 +289,7 @@ func TestRunService_Start_RemoteMode_DependentTaskNotDispatchedYet(t *testing.T)
 // dispatch immediately even with every in-process concurrency slot
 // occupied - remote dispatch never touches s.slots at all.
 func TestRunService_Start_RemoteMode_BypassesConcurrencySlots(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 9}
@@ -323,7 +322,7 @@ func TestRunService_Start_RemoteMode_BypassesConcurrencySlots(t *testing.T) {
 // ── RunTask / StartTask / ApproveManualTask remote branch (tasks.md 2.4) ──
 
 func TestRunService_RunTask_RemoteMode_DispatchesJobReturnsDispatchedTrue(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{
 		{Name: "deploy", Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 	}}
 	runStore := &mocks.MockRunStore{}
@@ -364,7 +363,7 @@ func TestRunService_RunTask_RemoteMode_DispatchesJobReturnsDispatchedTrue(t *tes
 }
 
 func TestRunService_RunTask_RemoteMode_LocalNonRemoteStillReturnsDispatchedFalse(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
 	runStore := &mocks.MockRunStore{}
 	pipeline := &mocks.MockPipelineRunner{}
 	svc := newTestRunService(runStore, pipeline, pipeline)
@@ -384,7 +383,7 @@ func TestRunService_RunTask_RemoteMode_LocalNonRemoteStillReturnsDispatchedFalse
 }
 
 func TestRunService_RunTask_RemoteMode_UnknownTaskErrors(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{}}
 	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "missing", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()})
@@ -397,7 +396,7 @@ func TestRunService_RunTask_RemoteMode_UnknownTaskErrors(t *testing.T) {
 }
 
 func TestRunService_RunTask_RemoteMode_ArchiveErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t"}}}
 	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{
@@ -412,7 +411,7 @@ func TestRunService_RunTask_RemoteMode_ArchiveErrorPropagates(t *testing.T) {
 }
 
 func TestRunService_RunTask_RemoteMode_CreateRemoteJobErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t"}}}
 	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
 	_, dispatched, err := svc.RunTask(context.Background(), 1, "proj", proj, "t", domain.RunnerOptions{Mode: "remote", WorkDir: t.TempDir()})
@@ -425,7 +424,7 @@ func TestRunService_RunTask_RemoteMode_CreateRemoteJobErrorPropagates(t *testing
 }
 
 func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo hi"}}}}
 	runStore := &mocks.MockRunStore{CreateRunID: 4}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
@@ -452,7 +451,7 @@ func TestRunService_StartTask_RemoteMode_DispatchesSynchronouslyNoQueueing(t *te
 }
 
 func TestRunService_StartTask_RemoteMode_DispatchErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t"}}}
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{CreateRemoteJobErr: context.DeadlineExceeded})
@@ -473,7 +472,7 @@ func TestRunService_StartTask_RemoteMode_DispatchErrorPropagates(t *testing.T) {
 }
 
 func TestRunService_ApproveManualTask_RemoteMode_DispatchesInsteadOfExecuting(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{
 		{Name: "deploy", Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 	}}
 	run := &domain.Run{ID: 5, ProjectName: "proj", PipelineDef: proj, TaskResults: []domain.TaskResult{{Name: "deploy", Status: "manual"}}}
@@ -530,7 +529,7 @@ func TestRunService_ActiveRunIDsForProject_RemoteJobStoreErrorFailsClosed(t *tes
 }
 
 func TestRunService_ActiveRunIDsForProject_NoDuplicateWhenBothSourcesAgree(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{{Name: "t"}}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{{Name: "t"}}}
 	runStore := &mocks.MockRunStore{CreateRunID: 20}
 	remoteJobs := &mocks.MockRemoteJobStore{OutstandingJobRunIDsResult: []int{20}}
 	pipeline := &blockingPipelineRunner{startedCh: make(chan struct{}), releaseCh: make(chan struct{})}
@@ -552,7 +551,7 @@ func TestRunService_ActiveRunIDsForProject_NoDuplicateWhenBothSourcesAgree(t *te
 }
 
 func TestRunService_Start_RemoteMode_RegistersNoActiveEntry(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{}}
 	runStore := &mocks.MockRunStore{CreateRunID: 1}
 	remoteJobs := &mocks.MockRemoteJobStore{}
 	svc := newTestRunService(runStore, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
@@ -569,7 +568,7 @@ func TestRunService_Start_RemoteMode_RegistersNoActiveEntry(t *testing.T) {
 }
 
 func TestRunService_Start_RemoteMode_InvalidTriggerExpressionErrors(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.(unclosed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	svc := newTestRunService(&mocks.MockRunStore{}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
@@ -580,7 +579,7 @@ func TestRunService_Start_RemoteMode_InvalidTriggerExpressionErrors(t *testing.T
 }
 
 func TestRunService_Start_RemoteMode_CreateRunErrorPropagates(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{}}
 	svc := newTestRunService(&mocks.MockRunStore{CreateRunErr: context.DeadlineExceeded}, &mocks.MockPipelineRunner{}, &mocks.MockPipelineRunner{})
 	svc.SetRemoteJobStore(&mocks.MockRemoteJobStore{})
 	if _, err := svc.Start(context.Background(), "proj", proj, nil, domain.RunnerOptions{Mode: "remote"}); err == nil {
@@ -590,7 +589,7 @@ func TestRunService_Start_RemoteMode_CreateRunErrorPropagates(t *testing.T) {
 
 func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesAndFinishesRunFailed(t *testing.T) {
 	secret := "secret-to-redact-12345"
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 7}
@@ -624,7 +623,7 @@ func TestRunService_Start_RemoteMode_ArchiveErrorPropagatesAndFinishesRunFailed(
 // 2.2: startRemote finishes a run whose first pass dispatches nothing passed (D2).
 // Unit test with a store whose FinishRun fails returns that error.
 func TestRunService_Start_RemoteMode_NothingTriggeredFinishRunFails(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	expectedErr := errors.New("finish error")
@@ -644,7 +643,7 @@ func TestRunService_Start_RemoteMode_NothingTriggeredFinishRunFails(t *testing.T
 
 func TestRunService_Start_RemoteMode_AppendSkippedTaskFailsMarksRunFailed(t *testing.T) {
 	secret := "secret-db-fail-token"
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 11, AppendTaskErr: fmt.Errorf("db disk full %s", secret)}
@@ -685,7 +684,7 @@ func TestRunService_Start_RemoteMode_AppendSkippedTaskFailsMarksRunFailed(t *tes
 }
 
 func TestRunService_Start_RemoteMode_AppendSkippedTaskFails_FinishRunErrorLogged(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{
@@ -710,10 +709,10 @@ func TestRunService_Start_RemoteMode_AppendSkippedTaskFails_FinishRunErrorLogged
 }
 
 func TestRunService_Start_RemoteMode_ResolveError(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "bad-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "t1", Trigger: "repo.app.changed && @invalid"},
 		},
 	}
@@ -738,10 +737,10 @@ func TestRunService_Start_RemoteMode_ResolveError(t *testing.T) {
 }
 
 func TestRunService_Start_RemoteMode_AllTasksTriggerSkippedSuccess(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "proj",
 		Repos: []domain.Repo{{Name: "app"}, {Name: "docs"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build_docs", Trigger: "repo.docs.changed", Execute: domain.ExecuteSpec{Repo: "docs", Script: "x"}},
 		},
 	}
@@ -784,7 +783,7 @@ func TestRunService_Start_RemoteMode_AllTasksTriggerSkippedSuccess(t *testing.T)
 // 2.3: startRemote finishes the run failed when the snapshot fails (D3), the error redacted.
 func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotFailsRun(t *testing.T) {
 	secret := "secret-snapshot-fail"
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
 	runStore := &mocks.MockRunStore{CreateRunID: 15}
@@ -820,7 +819,7 @@ func TestRunService_Start_RemoteMode_SetRemoteRunSnapshotFailsRun(t *testing.T) 
 // 2.3: Unit test with mocks that fail CreateRemoteJob: the first job failing gives a failed run at once.
 func TestRunService_Start_RemoteMode_CreateRemoteJobFailsFirstJobGivesFailedRunAtOnce(t *testing.T) {
 	secret := "secret-job-fail"
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "b", Trigger: "repo.app.changed", DependsOn: []string{"a"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
@@ -865,7 +864,7 @@ func TestRunService_Start_RemoteMode_CreateRemoteJobFailsFirstJobGivesFailedRunA
 // 2.3: Unit test with mocks that fail CreateRemoteJob: the second failing while the first is pending
 // leaves the run running until the first completes, then failed.
 func TestRunService_Start_RemoteMode_CreateRemoteJobFailsSecondJobWhileFirstPending(t *testing.T) {
-	proj := &model.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []model.Task{
+	proj := &domain.Project{Name: "proj", Repos: []domain.Repo{{Name: "app"}}, Tasks: []domain.Task{
 		{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 		{Name: "b", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "x"}},
 	}}
@@ -905,7 +904,7 @@ func TestRunService_Start_RemoteMode_CreateRemoteJobFailsSecondJobWhileFirstPend
 }
 
 func TestRunService_Start_RemoteMode_NoRemoteJobStoreFallsThroughToInProcess(t *testing.T) {
-	proj := &model.Project{Name: "proj", Tasks: []model.Task{}}
+	proj := &domain.Project{Name: "proj", Tasks: []domain.Task{}}
 	finishCh := make(chan struct{})
 	runStore := &mocks.MockRunStore{CreateRunID: 1, FinishRunCh: finishCh}
 	pipeline := &mocks.MockPipelineRunner{}
@@ -935,10 +934,10 @@ func TestRunService_Start_RemoteMode_NoRemoteJobStoreFallsThroughToInProcess(t *
 
 func TestEligibleForDispatch_DiamondBlockedBranchSkipsInOnePass(t *testing.T) {
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "root"}},
-		{Task: model.Task{Name: "left", DependsOn: []string{"root"}}},
-		{Task: model.Task{Name: "right", DependsOn: []string{"root"}}},
-		{Task: model.Task{Name: "join", DependsOn: []string{"left", "right"}}},
+		{Task: domain.Task{Name: "root"}},
+		{Task: domain.Task{Name: "left", DependsOn: []string{"root"}}},
+		{Task: domain.Task{Name: "right", DependsOn: []string{"root"}}},
+		{Task: domain.Task{Name: "join", DependsOn: []string{"left", "right"}}},
 	}
 	// Only root has been decided (failed); left/right/join have no entry at
 	// all yet - "not seeded" is what "not yet dispatched" means under the
@@ -1014,10 +1013,10 @@ func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) 
 			// ignored (remote-run-start-never-hangs design.md D1), while
 			// an undecided one inside the run holds the task back. "gate"
 			// has no result at all, so it is a manual task.
-			nodes := []dag.Node{{Task: model.Task{Name: "task", DependsOn: tc.dependsOn}}}
+			nodes := []dag.Node{{Task: domain.Task{Name: "task", DependsOn: tc.dependsOn}}}
 			for _, dep := range tc.dependsOn {
 				_, decided := tc.latest[dep]
-				nodes = append(nodes, dag.Node{Task: model.Task{Name: dep, Manual: !decided}})
+				nodes = append(nodes, dag.Node{Task: domain.Task{Name: dep, Manual: !decided}})
 			}
 			eligible, skipped, _ := eligibleForDispatch(nodes, tc.latest, false)
 			if len(eligible) != 0 || len(skipped) != 0 {
@@ -1031,7 +1030,7 @@ func TestEligibleForDispatch_AnUndecidedDependencyBeatsAFailedOne(t *testing.T) 
 }
 
 func TestEligibleForDispatch_ManualTaskNeverAutoDispatched(t *testing.T) {
-	nodes := []dag.Node{{Task: model.Task{Name: "gate", Manual: true}}}
+	nodes := []dag.Node{{Task: domain.Task{Name: "gate", Manual: true}}}
 	latest := map[string]domain.TaskResult{"gate": {Name: "gate", Status: "pending"}}
 	eligible, skipped, _ := eligibleForDispatch(nodes, latest, false)
 	if len(eligible) != 0 || len(skipped) != 0 {
@@ -1051,7 +1050,7 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 		{
 			name: "a dependency outside the run is ignored",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint"}}},
+				{Task: domain.Task{Name: "deploy", DependsOn: []string{"lint"}}},
 			},
 			latest:       map[string]domain.TaskResult{},
 			wantEligible: []string{"deploy"},
@@ -1060,8 +1059,8 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 		{
 			name: "one inside still holds",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "lint"}},
-				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint"}}},
+				{Task: domain.Task{Name: "lint"}},
+				{Task: domain.Task{Name: "deploy", DependsOn: []string{"lint"}}},
 			},
 			latest:       map[string]domain.TaskResult{},
 			wantEligible: []string{"lint"},
@@ -1070,9 +1069,9 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 		{
 			name: "a diamond whose root is outside the run",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "left", DependsOn: []string{"root"}}},
-				{Task: model.Task{Name: "right", DependsOn: []string{"root"}}},
-				{Task: model.Task{Name: "join", DependsOn: []string{"left", "right"}}},
+				{Task: domain.Task{Name: "left", DependsOn: []string{"root"}}},
+				{Task: domain.Task{Name: "right", DependsOn: []string{"root"}}},
+				{Task: domain.Task{Name: "join", DependsOn: []string{"left", "right"}}},
 			},
 			latest:       map[string]domain.TaskResult{},
 			wantEligible: []string{"left", "right"},
@@ -1081,8 +1080,8 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 		{
 			name: "an outside dependency next to a failed inside one is blocked by the failed one",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "lint"}},
-				{Task: model.Task{Name: "deploy", DependsOn: []string{"lint", "outside"}}},
+				{Task: domain.Task{Name: "lint"}},
+				{Task: domain.Task{Name: "deploy", DependsOn: []string{"lint", "outside"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"lint": {Name: "lint", Status: "failed"},
@@ -1128,10 +1127,10 @@ func TestEligibleForDispatch_OutsideDependencies(t *testing.T) {
 // resumed - carries the run's resolved secret values, so the runner and the
 // server can redact them.
 func TestRunService_RemoteMode_SecretValuesReachEveryJob(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "a", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo a"}},
 			{Name: "b", Trigger: "repo.app.changed", DependsOn: []string{"a"}, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo b"}},
 		},
@@ -1180,8 +1179,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "a gate is recorded whatever the state of its dependencies",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest:        map[string]domain.TaskResult{},
 			includeManual: false,
@@ -1196,7 +1195,7 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "it is never returned as eligible",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "gate", Manual: true}},
+				{Task: domain.Task{Name: "gate", Manual: true}},
 			},
 			latest: map[string]domain.TaskResult{
 				"gate": {Name: "gate", Status: "manual"},
@@ -1212,8 +1211,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "with a failed dependency it is skipped",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "failed"},
@@ -1230,8 +1229,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "with a canceled dependency it is skipped",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "canceled"},
@@ -1248,8 +1247,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "with a skipped dependency it is skipped",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "skipped"},
@@ -1266,8 +1265,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "with a pending dependency it stays manual",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "pending"},
@@ -1284,8 +1283,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "with a passed dependency it stays manual",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "passed"},
@@ -1302,8 +1301,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "dependents of a gate wait",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "gate", Manual: true}},
-				{Task: model.Task{Name: "worker", DependsOn: []string{"gate"}}},
+				{Task: domain.Task{Name: "gate", Manual: true}},
+				{Task: domain.Task{Name: "worker", DependsOn: []string{"gate"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"gate": {Name: "gate", Status: "manual"},
@@ -1316,8 +1315,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "a gate behind another gate",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "gate1", Manual: true}},
-				{Task: model.Task{Name: "gate2", Manual: true, DependsOn: []string{"gate1"}}},
+				{Task: domain.Task{Name: "gate1", Manual: true}},
+				{Task: domain.Task{Name: "gate2", Manual: true, DependsOn: []string{"gate1"}}},
 			},
 			latest:        map[string]domain.TaskResult{},
 			includeManual: false,
@@ -1332,8 +1331,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "a gate declared before its dependency",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
-				{Task: model.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
 			},
 			latest:        map[string]domain.TaskResult{},
 			includeManual: false,
@@ -1348,7 +1347,7 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "a gate with an outside dependency ignores it",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"outside"}}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"outside"}}},
 			},
 			latest:        map[string]domain.TaskResult{},
 			includeManual: false,
@@ -1362,8 +1361,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "includeManual makes it an ordinary task (passed dependency dispatches)",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "passed"},
@@ -1379,8 +1378,8 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 		{
 			name: "includeManual makes it an ordinary task (failed dependency skips)",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"build"}}},
 			},
 			latest: map[string]domain.TaskResult{
 				"build": {Name: "build", Status: "failed"},
@@ -1466,9 +1465,9 @@ func TestEligibleForDispatch_ManualGates(t *testing.T) {
 func TestEligibleForDispatch_MultiDepAggregationAndSkipReason(t *testing.T) {
 	// 1. Manual gate with multiple failed dependencies
 	nodes := []dag.Node{
-		{Task: model.Task{Name: "b1"}},
-		{Task: model.Task{Name: "b2"}},
-		{Task: model.Task{Name: "gate", Manual: true, DependsOn: []string{"b1", "b2"}}},
+		{Task: domain.Task{Name: "b1"}},
+		{Task: domain.Task{Name: "b2"}},
+		{Task: domain.Task{Name: "gate", Manual: true, DependsOn: []string{"b1", "b2"}}},
 	}
 	latest := map[string]domain.TaskResult{
 		"b1":   {Name: "b1", Status: "failed"},
@@ -1495,9 +1494,9 @@ func TestEligibleForDispatch_MultiDepAggregationAndSkipReason(t *testing.T) {
 
 	// 2. Regular task with one failed and one canceled dependency
 	regularNodes := []dag.Node{
-		{Task: model.Task{Name: "b1"}},
-		{Task: model.Task{Name: "b2"}},
-		{Task: model.Task{Name: "worker", DependsOn: []string{"b1", "b2"}}},
+		{Task: domain.Task{Name: "b1"}},
+		{Task: domain.Task{Name: "b2"}},
+		{Task: domain.Task{Name: "worker", DependsOn: []string{"b1", "b2"}}},
 	}
 	regularLatest := map[string]domain.TaskResult{
 		"b1": {Name: "b1", Status: "failed"},
@@ -1523,8 +1522,8 @@ func TestEligibleForDispatch_MultiDepAggregationAndSkipReason(t *testing.T) {
 
 	// 3. Chained dependency: dep was skipped with category dependency_canceled
 	chainNodes := []dag.Node{
-		{Task: model.Task{Name: "b2"}},
-		{Task: model.Task{Name: "worker", DependsOn: []string{"b2"}}},
+		{Task: domain.Task{Name: "b2"}},
+		{Task: domain.Task{Name: "worker", DependsOn: []string{"b2"}}},
 	}
 	chainLatest := map[string]domain.TaskResult{
 		"b2": {
@@ -1567,10 +1566,10 @@ func (r *recordingJobStore) CreateRemoteJob(runID int, taskName string, payload 
 
 // remote-manual-gates 2.2: Unit test with a recording mock that the gate is appended before the first CreateRemoteJob.
 func TestRunService_StartRemote_GateAppendedBeforeFirstCreateRemoteJob(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "test-order-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 		},
@@ -1624,10 +1623,10 @@ func TestRunService_StartRemote_GateAppendedBeforeFirstCreateRemoteJob(t *testin
 
 // atomic-run-sources: startRemote passes initial sources atomically to CreateRun.
 func TestRunService_StartRemote_PersistsInitialSourcesAtCreation(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "test-remote-sources-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 		},
 	}
@@ -1660,10 +1659,10 @@ func TestRunService_StartRemote_PersistsInitialSourcesAtCreation(t *testing.T) {
 
 // remote-manual-gates 2.2: resumeRemoteRun records an unrecorded gate it finds, and propagates append error.
 func TestResumeRemoteRun_RecordsUnrecordedGate(t *testing.T) {
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "test-unrecorded-gate-proj",
 		Repos: []domain.Repo{{Name: "app"}},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{Name: "build", Trigger: "repo.app.changed", Execute: domain.ExecuteSpec{Repo: "app", Script: "echo build"}},
 			{Name: "deploy", Trigger: "repo.app.changed", DependsOn: []string{"build"}, Manual: true, Execute: domain.ExecuteSpec{Repo: "app", Script: "echo deploy"}},
 		},

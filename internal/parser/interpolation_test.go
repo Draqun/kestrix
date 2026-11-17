@@ -10,20 +10,20 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 func TestCheckVariableEligibility(t *testing.T) {
 	tests := []struct {
 		name      string
-		v         model.Variable
+		v         domain.Variable
 		field     string
 		wantErr   string
 		isSuccess bool
 	}{
 		{
 			name: "secret_ref with field",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:       "TOKEN",
 				SecretRef: "sec-1",
 				Masked:    true,
@@ -33,7 +33,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "secret_ref without field",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:       "TOKEN",
 				SecretRef: "sec-1",
 			},
@@ -42,7 +42,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "masked variable",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:    "API_KEY",
 				Masked: true,
 			},
@@ -51,7 +51,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "protected variable",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:       "PROT",
 				Protected: true,
 			},
@@ -60,7 +60,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "job-scoped variable",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:   "JOB_V",
 				Scope: "job",
 				Repo:  "r",
@@ -72,7 +72,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "repo-scoped variable",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:   "REPO_V",
 				Scope: "repo",
 				Repo:  "r",
@@ -83,7 +83,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "custom-scoped variable",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:   "CUSTOM_V",
 				Scope: "stage",
 				Value: "val",
@@ -93,7 +93,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "empty value and default",
-			v: model.Variable{
+			v: domain.Variable{
 				Key: "EMPTY_V",
 			},
 			field:   "image",
@@ -101,7 +101,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "eligible with value",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:   "NODE",
 				Value: "22",
 			},
@@ -110,7 +110,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "eligible with default",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:     "GO_VER",
 				Default: "1.26",
 			},
@@ -119,7 +119,7 @@ func TestCheckVariableEligibility(t *testing.T) {
 		},
 		{
 			name: "eligible with explicit project scope",
-			v: model.Variable{
+			v: domain.Variable{
 				Key:   "ARCH",
 				Scope: "project",
 				Value: "arm64",
@@ -156,7 +156,7 @@ func TestBuildVarEvalContext(t *testing.T) {
 	}
 
 	// Variables with mixed eligibility
-	vars := []model.Variable{
+	vars := []domain.Variable{
 		{Key: "NODE", Value: "22"},
 		{Key: "ALPINE", Default: "3.20"},
 		{Key: "SECRET", SecretRef: "sec-ref"},

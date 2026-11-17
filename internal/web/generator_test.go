@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"kestrix/internal/dag"
-	"kestrix/internal/model"
+	"kestrix/internal/domain"
 )
 
 func TestGenerateGitLabCIBasic(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:         "test",
 		DefaultImage: "golang:1.22",
-		Repos:        []model.Repo{{Name: "a", Path: "a"}},
-		Tasks: []model.Task{
-			{Name: "build", Trigger: "repo.a.changed", Execute: model.ExecuteSpec{Repo: "a", Script: "./build.sh", Image: "golang:1.22"}},
+		Repos:        []domain.Repo{{Name: "a", Path: "a"}},
+		Tasks: []domain.Task{
+			{Name: "build", Trigger: "repo.a.changed", Execute: domain.ExecuteSpec{Repo: "a", Script: "./build.sh", Image: "golang:1.22"}},
 		},
 	}
 	nodes := []dag.Node{
@@ -38,12 +38,12 @@ func TestGenerateGitLabCIBasic(t *testing.T) {
 }
 
 func TestGenerateGitLabCIWithDeps(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:  "test",
-		Repos: []model.Repo{{Name: "a", Path: "a"}},
-		Tasks: []model.Task{
-			{Name: "build", Trigger: "repo.a.changed", Execute: model.ExecuteSpec{Repo: "a"}},
-			{Name: "test", Trigger: "repo.a.changed", DependsOn: []string{"build"}, Execute: model.ExecuteSpec{Repo: "a"}},
+		Repos: []domain.Repo{{Name: "a", Path: "a"}},
+		Tasks: []domain.Task{
+			{Name: "build", Trigger: "repo.a.changed", Execute: domain.ExecuteSpec{Repo: "a"}},
+			{Name: "test", Trigger: "repo.a.changed", DependsOn: []string{"build"}, Execute: domain.ExecuteSpec{Repo: "a"}},
 		},
 	}
 	nodes := []dag.Node{
@@ -62,11 +62,11 @@ func TestGenerateGitLabCIWithDeps(t *testing.T) {
 }
 
 func TestGenerateGitLabCIManual(t *testing.T) {
-	proj := model.Project{
+	proj := domain.Project{
 		Name:  "test",
-		Repos: []model.Repo{{Name: "a", Path: "a"}},
-		Tasks: []model.Task{
-			{Name: "deploy", Trigger: "repo.a.changed", Manual: true, Execute: model.ExecuteSpec{Repo: "a", Script: "./deploy.sh"}},
+		Repos: []domain.Repo{{Name: "a", Path: "a"}},
+		Tasks: []domain.Task{
+			{Name: "deploy", Trigger: "repo.a.changed", Manual: true, Execute: domain.ExecuteSpec{Repo: "a", Script: "./deploy.sh"}},
 		},
 	}
 	nodes := []dag.Node{
@@ -88,23 +88,23 @@ func TestDeriveStages(t *testing.T) {
 	}{
 		{
 			name:     "single build",
-			nodes:    []dag.Node{{Task: model.Task{Name: "build"}}},
+			nodes:    []dag.Node{{Task: domain.Task{Name: "build"}}},
 			expected: []string{"build"},
 		},
 		{
 			name: "build + test",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "test", DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "test", DependsOn: []string{"build"}}},
 			},
 			expected: []string{"build", "test"},
 		},
 		{
 			name: "full pipeline",
 			nodes: []dag.Node{
-				{Task: model.Task{Name: "build"}},
-				{Task: model.Task{Name: "test", DependsOn: []string{"build"}}},
-				{Task: model.Task{Name: "deploy", DependsOn: []string{"test"}, Manual: true}},
+				{Task: domain.Task{Name: "build"}},
+				{Task: domain.Task{Name: "test", DependsOn: []string{"build"}}},
+				{Task: domain.Task{Name: "deploy", DependsOn: []string{"test"}, Manual: true}},
 			},
 			expected: []string{"build", "test", "deploy"},
 		},
@@ -137,13 +137,13 @@ func TestDeriveStages(t *testing.T) {
 func TestAssignStage(t *testing.T) {
 	tests := []struct {
 		name     string
-		task     model.Task
+		task     domain.Task
 		expected string
 	}{
-		{"no deps → build", model.Task{Name: "build"}, "build"},
-		{"has deps → test", model.Task{Name: "test", DependsOn: []string{"build"}}, "test"},
-		{"manual → deploy", model.Task{Name: "deploy", Manual: true}, "deploy"},
-		{"deps on test → deploy", model.Task{Name: "deploy", DependsOn: []string{"test_integration"}}, "deploy"},
+		{"no deps → build", domain.Task{Name: "build"}, "build"},
+		{"has deps → test", domain.Task{Name: "test", DependsOn: []string{"build"}}, "test"},
+		{"manual → deploy", domain.Task{Name: "deploy", Manual: true}, "deploy"},
+		{"deps on test → deploy", domain.Task{Name: "deploy", DependsOn: []string{"test_integration"}}, "deploy"},
 	}
 
 	for _, tt := range tests {

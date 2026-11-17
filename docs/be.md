@@ -12,9 +12,8 @@ The Kestrix backend is a Go HTTP server that serves as the CI/CD control plane. 
 | `internal/credentials` | Master-key encryption custody and write-only Git credentials store |
 | `internal/dag` | Trigger expression evaluation + task dependency ordering |
 | `internal/dispatch` | GitLab CI pipeline dispatch client |
-| `internal/domain` | Hexagonal architecture ports, models, and shared interfaces |
-| `internal/model` | Shared pipeline, task, and project data types |
-| `internal/parser` | HCL parsing (hclsyntax) → model.Project |
+| `internal/domain` | Hexagonal architecture ports, domain entities (`Project`, `Task`, `Run`), and shared interfaces |
+| `internal/parser` | HCL parsing (hclsyntax) → domain.Project |
 | `internal/runner` | Task execution engines: local bash, hardened Docker, and remote runners |
 | `internal/service` | Project, run lifecycle, credential, and runner management services |
 | `internal/source` | Remote Git repository acquisition, shallow cloning, and bare cache |

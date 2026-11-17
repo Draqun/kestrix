@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"kestrix/internal/domain"
-	"kestrix/internal/model"
 	"kestrix/internal/runner"
 	"kestrix/internal/service"
 )
@@ -223,7 +222,7 @@ type binaryOutputPipelineRunner struct {
 	output string
 }
 
-func (r *binaryOutputPipelineRunner) Run(_ context.Context, _ model.Project, _ map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
+func (r *binaryOutputPipelineRunner) Run(_ context.Context, _ domain.Project, _ map[string]bool, opts domain.RunnerOptions) ([]domain.TaskResult, error) {
 	if opts.Stdout != nil {
 		_, _ = opts.Stdout.Write([]byte(r.output))
 	}
@@ -234,7 +233,7 @@ func (r *binaryOutputPipelineRunner) Run(_ context.Context, _ model.Project, _ m
 	return []domain.TaskResult{tr}, nil
 }
 
-func (r *binaryOutputPipelineRunner) RunTask(_ context.Context, _ model.Project, taskName string, _ domain.RunnerOptions) (domain.TaskResult, error) {
+func (r *binaryOutputPipelineRunner) RunTask(_ context.Context, _ domain.Project, taskName string, _ domain.RunnerOptions) (domain.TaskResult, error) {
 	return domain.TaskResult{Name: taskName, Status: "passed", Output: r.output}, nil
 }
 
@@ -248,9 +247,9 @@ func TestPG_BinarySafe_ServiceRunStart(t *testing.T) {
 	svc := service.NewRunService(pg, runner, runner)
 	svc.SetLocalExecutionPolicy(true, "local")
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name:  "proj-bin-svc",
-		Tasks: []model.Task{{Name: "build"}},
+		Tasks: []domain.Task{{Name: "build"}},
 	}
 
 	runID, err := svc.Start(context.Background(), proj.Name, proj, nil, domain.RunnerOptions{})
@@ -302,16 +301,16 @@ func TestPG_BinarySafe_LocalMode_PrintfInvalidBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "proj-manual-1",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "app", Path: "app"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{
 				Name:    "print-task",
 				Trigger: "repo.app.changed",
-				Execute: model.ExecuteSpec{
+				Execute: domain.ExecuteSpec{
 					Repo:   "app",
 					Script: `printf 'caf\351\000x\n'`,
 				},
@@ -369,16 +368,16 @@ func TestPG_BinarySafe_LocalMode_MaxOutputBytesTruncateMultiByte(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proj := &model.Project{
+	proj := &domain.Project{
 		Name: "proj-manual-2",
-		Repos: []model.Repo{
+		Repos: []domain.Repo{
 			{Name: "app", Path: "app"},
 		},
-		Tasks: []model.Task{
+		Tasks: []domain.Task{
 			{
 				Name:    "yes-task",
 				Trigger: "repo.app.changed",
-				Execute: model.ExecuteSpec{
+				Execute: domain.ExecuteSpec{
 					Repo:   "app",
 					Script: `yes é | head -n 2000`,
 				},
