@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v1.1.0] - 2026-11-17
+### Added
+- Complete Swagger/OpenAPI documentation for all HTTP routes and add automated route-parity test
+
 ## [v1.0.0] - 2026-11-17
 ### Removed
 - Remove legacy internal/model compatibility type-alias shim in favor of internal/domain.
