@@ -15,6 +15,51 @@ definitions:
       url:
         type: string
     type: object
+  domain.CredentialInput:
+    properties:
+      host:
+        type: string
+      known_hosts:
+        type: string
+      name:
+        type: string
+      password:
+        type: string
+      private_key:
+        type: string
+      provider:
+        type: string
+      token:
+        type: string
+      type:
+        type: string
+      username:
+        type: string
+      value:
+        description: |-
+          Value is the opaque payload of a `secret` credential (see
+          runtime-secrets). It is unused by every Git credential type.
+        type: string
+    type: object
+  domain.CredentialMetadata:
+    properties:
+      created_at:
+        type: string
+      host:
+        type: string
+      name:
+        type: string
+      provider:
+        type: string
+      ref:
+        type: string
+      revoked:
+        type: boolean
+      type:
+        type: string
+      updated_at:
+        type: string
+    type: object
   domain.ExecuteSpec:
     properties:
       image:
@@ -110,6 +155,80 @@ definitions:
         type: boolean
       url:
         type: string
+    type: object
+  domain.RemoteJob:
+    properties:
+      claim_epoch:
+        type: integer
+      claimed_at:
+        type: string
+      id:
+        type: integer
+      payload:
+        $ref: '#/definitions/domain.RemoteJobPayload'
+      run_id:
+        type: integer
+      runner_id:
+        type: integer
+      status:
+        type: string
+      task_name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  domain.RemoteJobPayload:
+    properties:
+      archive:
+        items:
+          type: integer
+        type: array
+      artifacts:
+        description: |-
+          Artifacts carries the archives of every passed ancestor of the task,
+          ordered topologically with ties broken by declaration order (remote-task-artifacts design D4).
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
+      default_image:
+        description: |-
+          DefaultImage is the project's own default, for a docker-mode runner
+          resolving an image when the task names none - the same fallback
+          RunOne applies in-process. It is data already public in the pipeline
+          definition, not an engine selector Kestrix is choosing on the
+          runner's behalf (design.md D3): the runner's own configuration alone
+          decides whether it runs docker or local at all.
+        type: string
+      repos:
+        description: |-
+          Repos carries the project's declared repositories - Name, Path, and
+          Kind only (never URL/CredentialRef, which name a live source the
+          runner never touches: D6 already shipped the checkout as Archive).
+          The runner needs this to resolve task.Execute.Repo's working
+          directory within the extracted archive the same way internal/runner's
+          repoDir does in-process.
+        items:
+          $ref: '#/definitions/domain.Repo'
+        type: array
+      secret_values:
+        description: |-
+          SecretValues are the resolved runtime-secret values among Variables,
+          so the runner can redact its own streamed output across chunk
+          boundaries (remote-runner-fixes design.md D1). The runner already
+          holds every value as a variable; this only says which ones to hide.
+          Variables and SecretValues are stored encrypted; the store's payload
+          column uses its own type that has neither field (D2).
+        items:
+          type: string
+        type: array
+      task:
+        $ref: '#/definitions/domain.Task'
+      variables:
+        additionalProperties:
+          type: string
+        type: object
     type: object
   domain.Repo:
     properties:
@@ -332,6 +451,26 @@ definitions:
       role:
         type: string
     type: object
+  web.runProjectRequest:
+    properties:
+      changed:
+        items:
+          type: string
+        type: array
+      include_manual:
+        type: boolean
+    type: object
+  web.runnerCompleteRequest:
+    properties:
+      epoch:
+        type: integer
+      error:
+        type: string
+      output:
+        type: string
+      status:
+        type: string
+    type: object
   web.runnerCreateRequest:
     properties:
       name:
@@ -353,6 +492,15 @@ definitions:
         type: array
       token:
         type: string
+    type: object
+  web.runnerTraceRequest:
+    properties:
+      chunk:
+        type: string
+      epoch:
+        type: integer
+      offset:
+        type: integer
     type: object
   web.setGrantsRequest:
     properties:
@@ -460,6 +608,164 @@ paths:
       summary: Current session
       tags:
       - auth
+  /api/credentials:
+    get:
+      description: Returns metadata for all registered credentials without revealing
+        secret values.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List stored credentials metadata
+      tags:
+      - credentials
+    post:
+      consumes:
+      - application/json
+      description: Encrypts and stores a new credential, returning its safe metadata.
+      parameters:
+      - description: Credential definition and secret material
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.CredentialInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.CredentialMetadata'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a credential
+      tags:
+      - credentials
+  /api/credentials/{ref}:
+    get:
+      description: Returns safe metadata for a credential by its reference without
+        revealing secret values.
+      parameters:
+      - description: Credential reference
+        in: path
+        name: ref
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.CredentialMetadata'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get credential metadata by ref
+      tags:
+      - credentials
+    put:
+      consumes:
+      - application/json
+      description: Updates the secret material of an existing credential.
+      parameters:
+      - description: Credential reference
+        in: path
+        name: ref
+        required: true
+        type: string
+      - description: Updated credential secret material
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.CredentialInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.CredentialMetadata'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Rotate credential secret material
+      tags:
+      - credentials
+  /api/credentials/{ref}/revoke:
+    post:
+      description: Revokes a credential reference so it cannot be used for subsequent
+        runs.
+      parameters:
+      - description: Credential reference
+        in: path
+        name: ref
+        required: true
+        type: string
+      responses:
+        "204":
+          description: Credential revoked
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke a credential
+      tags:
+      - credentials
   /api/dashboard:
     get:
       produces:
@@ -709,6 +1015,38 @@ paths:
       summary: Update a project config
       tags:
       - projects
+  /api/projects/{name}/definition:
+    get:
+      description: Returns the parsed configured pipeline file including repos and
+        tasks.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Project'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get parsed pipeline definition for a project
+      tags:
+      - projects
   /api/projects/{name}/pipeline:
     get:
       parameters:
@@ -774,6 +1112,52 @@ paths:
       summary: Resolve a project's triggers against changed repos
       tags:
       - projects
+  /api/projects/{name}/run:
+    post:
+      consumes:
+      - application/json
+      description: Accepts the run and returns at once; the run executes in the background.
+        Read the outcome from GET /api/projects/{name}/runs/{runID}.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Run parameters
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/web.runProjectRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: project, run_id, status, and changed repos
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start a pipeline run for a project
+      tags:
+      - runs
   /api/projects/{name}/runs:
     get:
       parameters:
@@ -824,6 +1208,58 @@ paths:
       summary: Get a pipeline run by ID
       tags:
       - runs
+  /api/projects/{name}/runs/{runID}/cancel:
+    post:
+      description: Terminates an active pipeline run and marks it canceled. If the
+        run is actively executing, Cancel terminates its task before the store records
+        it as canceled.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: runID
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'status: canceled'
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "504":
+          description: Gateway Timeout
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Cancel a pipeline run
+      tags:
+      - runs
   /api/projects/{name}/runs/{runID}/events:
     get:
       description: 'Streams status, task, trace, and complete events as they happen
@@ -867,6 +1303,54 @@ paths:
               type: string
             type: object
       summary: Stream pipeline run events via SSE
+      tags:
+      - runs
+  /api/projects/{name}/runs/{runID}/tasks/{task}/run:
+    post:
+      description: Approves a manual task in a run and executes it in the background.
+      parameters:
+      - description: Project name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: runID
+        required: true
+        type: integer
+      - description: Task name
+        in: path
+        name: task
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: run_id, task, status, and project
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Approve and execute a manual task waiting for approval
       tags:
       - runs
   /api/projects/{name}/tasks/{task}/run:
@@ -939,6 +1423,220 @@ paths:
       summary: Resolve trigger expressions against changed repos
       tags:
       - pipeline
+  /api/runner-jobs/{id}/artifacts:
+    put:
+      consumes:
+      - application/octet-stream
+      description: 'Accepts a gzip tar archive of declared task artifacts. Requires
+        Authorization: Bearer <runner-token>.'
+      parameters:
+      - description: Bearer <runner-token>
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Claim epoch
+        in: query
+        name: epoch
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Artifacts accepted
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Upload artifact archive for a remote job
+      tags:
+      - runner-jobs
+  /api/runner-jobs/{id}/complete:
+    put:
+      consumes:
+      - application/json
+      description: 'Reports final execution status and output for a remote job. Requires
+        Authorization: Bearer <runner-token>.'
+      parameters:
+      - description: Bearer <runner-token>
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Completion report
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.runnerCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Complete a remote job
+      tags:
+      - runner-jobs
+  /api/runner-jobs/{id}/trace:
+    patch:
+      consumes:
+      - application/json
+      description: 'Appends an offset-based stdout/stderr log trace chunk to a running
+        job. Requires Authorization: Bearer <runner-token>.'
+      parameters:
+      - description: Bearer <runner-token>
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Trace chunk details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/web.runnerTraceRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Trace accepted
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Append log trace chunk to a remote job
+      tags:
+      - runner-jobs
+  /api/runner-jobs/next:
+    get:
+      description: 'Bounded long-poll that claims the oldest pending job for the authenticated
+        runner. Requires Authorization: Bearer <runner-token>. Returns 204 when no
+        job arrives before timeout.'
+      parameters:
+      - description: Bearer <runner-token>
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.RemoteJob'
+        "204":
+          description: No job available
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Poll and claim next remote job
+      tags:
+      - runner-jobs
   /api/runners:
     get:
       produces:
@@ -976,6 +1674,39 @@ paths:
               type: string
             type: object
       summary: Register a runner
+      tags:
+      - runners
+  /api/runners/{id}:
+    delete:
+      description: Marks a registered runner as revoked so it can no longer claim
+        jobs.
+      parameters:
+      - description: Runner ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Revoke a registered runner
       tags:
       - runners
   /api/runs:
@@ -1147,6 +1878,20 @@ paths:
       summary: Validate pipeline definition
       tags:
       - pipeline
+  /api/version:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get server version
+      tags:
+      - system
   /webhook:
     post:
       consumes:

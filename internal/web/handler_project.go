@@ -345,7 +345,16 @@ func (s *Server) handleGetProjectPipeline(w http.ResponseWriter, r *http.Request
 	w.Write(data)
 }
 
-// handleGetProjectDefinition returns the parsed configured pipeline file.
+// handleGetProjectDefinition godoc
+// @Summary Get parsed pipeline definition for a project
+// @Description Returns the parsed configured pipeline file including repos and tasks.
+// @Tags projects
+// @Produce json
+// @Param name path string true "Project name"
+// @Success 200 {object} domain.Project
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/projects/{name}/definition [get]
 func (s *Server) handleGetProjectDefinition(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := s.projectStore.Get(name)

@@ -23,8 +23,24 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// handleRunProject executes a registered project's selected tasks from one
-// immutable remote source session.
+type runProjectRequest struct {
+	Changed       []string `json:"changed"`
+	IncludeManual bool     `json:"include_manual"`
+}
+
+// handleRunProject godoc
+// @Summary Start a pipeline run for a project
+// @Description Accepts the run and returns at once; the run executes in the background. Read the outcome from GET /api/projects/{name}/runs/{runID}.
+// @Tags runs
+// @Accept json
+// @Produce json
+// @Param name path string true "Project name"
+// @Param request body runProjectRequest false "Run parameters"
+// @Success 200 {object} map[string]interface{} "project, run_id, status, and changed repos"
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/projects/{name}/run [post]
 func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	p, err := s.projectStore.Get(name)
@@ -41,10 +57,7 @@ func (s *Server) handleRunProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var req struct {
-		Changed       []string `json:"changed"`
-		IncludeManual bool     `json:"include_manual"`
-	}
+	var req runProjectRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -416,7 +429,19 @@ func waitingReason(tags []string, hasRunners bool) string {
 	return fmt.Sprintf("no registered runner has tags: %s", strings.Join(sorted, ", "))
 }
 
-// handleApproveManualTask runs a manual task that is waiting for approval on a run.
+// handleApproveManualTask godoc
+// @Summary Approve and execute a manual task waiting for approval
+// @Description Approves a manual task in a run and executes it in the background.
+// @Tags runs
+// @Produce json
+// @Param name path string true "Project name"
+// @Param runID path int true "Run ID"
+// @Param task path string true "Task name"
+// @Success 200 {object} map[string]interface{} "run_id, task, status, and project"
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/projects/{name}/runs/{runID}/tasks/{task}/run [post]
 func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	taskName := chi.URLParam(r, "task")
@@ -503,10 +528,19 @@ func (s *Server) handleApproveManualTask(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// handleCancelRun cancels a running pipeline run. If the run is actively
-// executing, Cancel terminates its task before the store records it as
-// canceled; a run stuck beyond its grace period stays "running" and this
-// reports 504 rather than falsely claiming the run stopped.
+// handleCancelRun godoc
+// @Summary Cancel a pipeline run
+// @Description Terminates an active pipeline run and marks it canceled. If the run is actively executing, Cancel terminates its task before the store records it as canceled.
+// @Tags runs
+// @Produce json
+// @Param name path string true "Project name"
+// @Param runID path int true "Run ID"
+// @Success 200 {object} map[string]string "status: canceled"
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 504 {object} map[string]string
+// @Router /api/projects/{name}/runs/{runID}/cancel [post]
 func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	runID := 0
 	fmt.Sscanf(chi.URLParam(r, "runID"), "%d", &runID)

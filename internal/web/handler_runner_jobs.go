@@ -121,6 +121,18 @@ func (s *Server) requireRunnerAuth(next http.Handler) http.Handler {
 // handleRunnerJobNext is a bounded long-poll: it claims the oldest pending
 // job for the authenticated runner, blocking up to runnerLongPollInterval
 // before answering 204 when none arrives - never an error (tasks.md 3.2).
+//
+// @Summary Poll and claim next remote job
+// @Description Bounded long-poll that claims the oldest pending job for the authenticated runner. Requires Authorization: Bearer <runner-token>. Returns 204 when no job arrives before timeout.
+// @Tags runner-jobs
+// @Produce json
+// @Param Authorization header string true "Bearer <runner-token>"
+// @Success 200 {object} domain.RemoteJob
+// @Success 204 "No job available"
+// @Failure 401 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/runner-jobs/next [get]
 func (s *Server) handleRunnerJobNext(w http.ResponseWriter, r *http.Request) {
 	runnerID, ok := runnerIDFromContext(r.Context())
 	if !ok || s.remoteJobStore == nil || s.runService == nil {
@@ -173,6 +185,21 @@ type runnerTraceRequest struct {
 // handleRunnerJobTrace implements PATCH /api/runner-jobs/{id}/trace
 // (tasks.md 3.3): offset-based, redacted before storage, rejected as a
 // no-op when the epoch no longer matches or the job is not this runner's own.
+//
+// @Summary Append log trace chunk to a remote job
+// @Description Appends an offset-based stdout/stderr log trace chunk to a running job. Requires Authorization: Bearer <runner-token>.
+// @Tags runner-jobs
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer <runner-token>"
+// @Param id path int true "Job ID"
+// @Param body body runnerTraceRequest true "Trace chunk details"
+// @Success 204 "Trace accepted"
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/runner-jobs/{id}/trace [patch]
 func (s *Server) handleRunnerJobTrace(w http.ResponseWriter, r *http.Request) {
 	jobID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -240,6 +267,21 @@ type runnerCompleteRequest struct {
 // (tasks.md 3.4): a thin adapter into RunService.CompleteRemoteJob, which
 // owns the epoch/ownership/terminal-run fencing and the dependency-resumption
 // step.
+//
+// @Summary Complete a remote job
+// @Description Reports final execution status and output for a remote job. Requires Authorization: Bearer <runner-token>.
+// @Tags runner-jobs
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer <runner-token>"
+// @Param id path int true "Job ID"
+// @Param body body runnerCompleteRequest true "Completion report"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/runner-jobs/{id}/complete [put]
 func (s *Server) handleRunnerJobComplete(w http.ResponseWriter, r *http.Request) {
 	jobID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -392,6 +434,16 @@ func (s *Server) handleListRunners(w http.ResponseWriter, _ *http.Request) {
 
 // handleRevokeRunner implements DELETE /api/runners/{id} (tasks.md 3.5):
 // admin-only.
+//
+// @Summary Revoke a registered runner
+// @Description Marks a registered runner as revoked so it can no longer claim jobs.
+// @Tags runners
+// @Produce json
+// @Param id path int true "Runner ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/runners/{id} [delete]
 func (s *Server) handleRevokeRunner(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -413,6 +465,22 @@ func (s *Server) handleRevokeRunner(w http.ResponseWriter, r *http.Request) {
 // handleRunnerJobArtifacts implements PUT /api/runner-jobs/{id}/artifacts?epoch=N
 // (remote-task-artifacts design D3): accepts a gzip tar archive of declared paths,
 // epoch- and ownership-fenced, capped by KESTRIX_RUNNER_ARTIFACT_MAX_BYTES (default 50 MiB).
+//
+// @Summary Upload artifact archive for a remote job
+// @Description Accepts a gzip tar archive of declared task artifacts. Requires Authorization: Bearer <runner-token>.
+// @Tags runner-jobs
+// @Accept octet-stream
+// @Produce json
+// @Param Authorization header string true "Bearer <runner-token>"
+// @Param id path int true "Job ID"
+// @Param epoch query int true "Claim epoch"
+// @Success 204 "Artifacts accepted"
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 413 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/runner-jobs/{id}/artifacts [put]
 func (s *Server) handleRunnerJobArtifacts(w http.ResponseWriter, r *http.Request) {
 	jobID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
