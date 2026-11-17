@@ -3,6 +3,10 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v0.11.1] - 2026-11-17
+### Fixed
+- Fix GitHub Actions GoReleaser release workflow failure on Windows targets, clean up legacy repository artifacts, synchronize AGENTS.md and OpenSpec roadmap, and deduplicate remote_artifacts schema migration
+
 ## [v0.11.0] - 2026-11-17
 ### Added
 - Add configurable CORS support for API routes via KESTRIX_HTTP_CORS_ALLOWED_ORIGINS

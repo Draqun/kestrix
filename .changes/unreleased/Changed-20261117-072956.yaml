@@ -1,3 +1,0 @@
-kind: Fixed
-body: Fix GitHub Actions GoReleaser release workflow failure on Windows targets, clean up legacy repository artifacts, synchronize AGENTS.md and OpenSpec roadmap, and deduplicate remote_artifacts schema migration
-time: 2026-11-17T07:29:56.149618221+01:00
