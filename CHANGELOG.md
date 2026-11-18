@@ -3,6 +3,11 @@
 All notable changes to Kestrix are documented here.
 
 
+## [v1.3.0] - 2026-11-18
+### Changed
+- Achieve strict OpenSpec validation compliance across all capability specifications
+- Archive the openspec-specs-strict-compliance change and sync its requirement into the project-docs spec
+
 ## [v1.2.0] - 2026-11-17
 ### Changed
 - Modularize internal/service package and UI Pipelines run detail into cohesive subcomponents
