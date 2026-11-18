@@ -33,3 +33,10 @@ The documentation system SHALL include OpenAPI (`docs/swagger.yaml` and `docs/sw
 #### Scenario: Undocumented route fails route-parity test
 - **WHEN** a new `/api/*` route is registered in `internal/web/server.go` without regenerating `docs/swagger.yaml`
 - **THEN** `go test ./docs/...` fails reporting the undocumented HTTP method and path
+
+### Requirement: Strict OpenSpec validation compliance for all canonical specs
+All canonical capability specifications under `openspec/specs/*/spec.md` SHALL define a non-placeholder `## Purpose` section and concise normative requirements that pass `openspec validate --all --strict` without errors or warnings.
+
+#### Scenario: Full specification suite passes strict validation
+- **WHEN** `openspec validate --all --strict` is executed against the repository
+- **THEN** every specification in `openspec/specs/` passes strict validation with zero `TBD` purpose placeholders and zero requirement-length warnings
