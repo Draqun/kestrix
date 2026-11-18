@@ -7,24 +7,24 @@ Project registration enables storing GitLab project metadata and linking webhook
 Register GitLab projects with Kestrix so the webhook handler knows which pipeline to run, which GitLab project to trigger, and which secret to verify.
 ## Requirements
 ### Requirement: REQ-1: Project config includes GitLab binding (implemented)
-Each project configuration SHALL include its existing GitLab binding fields and
-MAY include a provider-neutral `repo_url`, `repo_ref`, and
-`repo_credential_ref` for a remote source. A remote project SHALL provide both
-`repo_url` and a non-empty `repo_ref`; local projects SHALL continue to use
-`repo_path`. Credential values SHALL NOT be accepted in project definitions.
 
-`repo_url` SHALL be accepted only in one of three forms: an `https://` URL, an
-`ssh://` URL, or an scp-like `user@host:path` address. Any other scheme
-(including plaintext `http://`, `file://`, `git://`, and transport helpers such
-as `ext::`) SHALL be rejected. The host SHALL be rejected when it is a literal
-loopback address (`127.0.0.0/8`, `::1`, the name `localhost`), a literal
-link-local address (`169.254.0.0/16`, `fe80::/10`), or the unspecified address —
-including any of those addresses written in a non-canonical literal form
-(decimal, hexadecimal, octal, or short-form IPv4, e.g. `2130706433` or
-`0x7f000001` for `127.0.0.1`). These checks SHALL run before any network
-access and SHALL apply to both project creation and project update. A rejected `repo_url` SHALL fail with a
-validation error that names the rule, not the address class table.
+Each project configuration SHALL include its existing GitLab binding fields and MAY include a provider-neutral `repo_url`, `repo_ref`, and `repo_credential_ref` for a remote source. A remote project SHALL provide both `repo_url` and a non-empty `repo_ref`; local projects SHALL continue to use `repo_path`. Credential values SHALL NOT be accepted in project definitions.
 
+#### Scenario: Remote project configuration
+- **WHEN** a project is registered with `repo_url = "https://example.com/repo.git"` and `repo_ref = "main"`
+- **THEN** the project SHALL be created with remote source fields persisted
+
+### Requirement: REQ-1b: Repository URL scheme and address validation
+
+`repo_url` SHALL be accepted only in one of three forms: an `https://` URL, an `ssh://` URL, or an scp-like `user@host:path` address. Any other scheme (including plaintext `http://`, `file://`, `git://`, and transport helpers such as `ext::`) SHALL be rejected.
+
+#### Scenario: Plaintext HTTP scheme rejected
+- **WHEN** a project is registered with `repo_url = "http://example.com/repo.git"`
+- **THEN** the registration SHALL be rejected with a validation error
+
+### Requirement: REQ-1c: Repository URL IP literal restrictions
+
+The host SHALL be rejected when it is a literal loopback address (`127.0.0.0/8`, `::1`, the name `localhost`), a literal link-local address (`169.254.0.0/16`, `fe80::/10`), or the unspecified address — including any in non-canonical forms (decimal, hexadecimal, octal, or short-form IPv4). These checks SHALL run before network access on project creation and update, failing with an error naming the rule.
 #### Scenario: Project config includes required fields
 - **WHEN** a project is created via API or config file
 - **THEN** it SHALL have:
@@ -142,17 +142,16 @@ The server SHALL NOT create or update a registered project as a side effect of s
 - **THEN** the server SHALL persist the project and expose it through the project API
 
 ### Requirement: REQ-5: API CRUD for projects (implemented)
-Existing project CRUD endpoints SHALL accept and expose non-secret remote
-source metadata, including `repo_url`, `repo_ref`, and `repo_credential_ref`.
-Credential values SHALL be write-only through dedicated credential operations
-and SHALL never appear in project or run responses.
 
-The per-project `webhook_secret` SHALL likewise be write-only: it MAY be
-supplied on create and update, SHALL be stored, and SHALL NOT appear in any
-project list, detail, create, or update response. Each project response SHALL
-instead carry a boolean `has_webhook_secret`. An update whose `webhook_secret`
-is absent or empty SHALL keep the stored secret unchanged.
+Existing project CRUD endpoints SHALL accept and expose non-secret remote source metadata, including `repo_url`, `repo_ref`, and `repo_credential_ref`. Credential values SHALL be write-only through dedicated credential operations and SHALL never appear in project or run responses.
 
+#### Scenario: Remote metadata exposed without secrets
+- **WHEN** a project is queried via `GET /api/projects/{name}`
+- **THEN** response SHALL include `repo_url` and `repo_ref` and omit credential secrets
+
+### Requirement: REQ-5b: Write-only per-project webhook secret
+
+The per-project `webhook_secret` SHALL likewise be write-only: it MAY be supplied on create and update, SHALL be stored, and SHALL NOT appear in any project list, detail, create, or update response. Each project response SHALL instead carry a boolean `has_webhook_secret`. An update whose `webhook_secret` is absent or empty SHALL keep the stored secret unchanged.
 #### Scenario: API CRUD for projects
 - **WHEN** `POST /api/projects` receives a payload with `name`, `repo_path`, and `gitlab_project_id`
 - **THEN** the project SHALL be created with all fields persisted
@@ -191,18 +190,15 @@ is absent or empty SHALL keep the stored secret unchanged.
 
 ### Requirement: REQ-6: Project deletion guards against an active run (implemented)
 
-Deleting a project whose run is currently executing SHALL be refused with
-`409 Conflict` naming the run(s) still active, rather than deleting the
-project and letting the run's underlying process continue against rows that
-no longer exist. "Currently executing" means a run with a live execution
-goroutine, or a `remote`-mode run with at least one outstanding
-(`pending`, `claimed` or `running`) job — a remote run has no goroutine by
-design, but a runner is still executing against its rows. A run waiting for
-manual approval has neither and SHALL NOT block the delete. When Kestrix
-cannot determine whether a run has outstanding remote jobs, the delete SHALL
-be refused rather than allowed. A project with no active run SHALL delete
-exactly as before, cascading its runs and their task results.
+Deleting a project whose run is currently executing SHALL be refused with `409 Conflict` naming the run(s) still active, rather than deleting the project and letting the run's underlying process continue against rows that no longer exist. "Currently executing" means a run with a live execution goroutine, or a `remote`-mode run with at least one outstanding (`pending`, `claimed` or `running`) job.
 
+#### Scenario: Delete blocked by live goroutine
+- **WHEN** a run is actively executing on the local server and `DELETE /api/projects/{name}` is called
+- **THEN** the request SHALL return HTTP 409 Conflict
+
+### Requirement: REQ-6b: Project deletion unblocked states and determination failures
+
+A run waiting for manual approval has no live goroutine or outstanding job and SHALL NOT block the delete. When Kestrix cannot determine whether a run has outstanding remote jobs, the delete SHALL be refused rather than allowed. A project with no active run SHALL delete exactly as before, cascading its runs and their task results.
 #### Scenario: Delete refused while a run is active
 
 - **WHEN** a client sends `DELETE /api/projects/{name}` and a run for that project is currently executing

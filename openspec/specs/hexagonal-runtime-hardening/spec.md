@@ -1,7 +1,7 @@
 # hexagonal-runtime-hardening Specification
 
 ## Purpose
-TBD - created by archiving change hexagonal-runtime-hardening. Update Purpose after archive.
+Hardens application runtime initialization by enforcing explicit dependency injection and composition root ownership in `cmd/kestrix`.
 ## Requirements
 ### Requirement: Composition root SHALL live in cmd
 The application composition root SHALL be owned by `cmd/kestrix/main.go`. HTTP server code SHALL receive already-built dependencies and SHALL NOT rebuild or repair them at runtime.

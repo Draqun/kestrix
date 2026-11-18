@@ -1,7 +1,7 @@
 # binary-identity Specification
 
 ## Purpose
-TBD - created by archiving change rename-binary-to-kestrix. Update Purpose after archive.
+Defines the binary artifact identity and naming conventions ensuring Kestrix compiles and distributes a single executable named `kestrix`.
 ## Requirements
 ### Requirement: User-facing binary name is Kestrix
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - Update Purpose after archive.
+Enforces explicit, secure configuration of master encryption key paths for encrypting and decrypting stored secrets.
 
 ## Requirements
 
@@ -59,29 +59,18 @@ committed to the repository or placed in PostgreSQL volumes.
 - **THEN** the Kestrix container SHALL receive the master-key path through `KESTRIX_MASTER_KEY_PATH`
 - **AND** the documented key-file mount SHALL be distinct from PostgreSQL storage
 
-### Requirement: Master key rotation
+### Requirement: Master key rotation command
 
-Kestrix SHALL provide `kestrix keys rotate-master --new-key-path <file>`,
-which connects to the database directly and re-encrypts every stored
-ciphertext from the configured master key to the key in `<file>`:
-- repository and runtime-secret credentials;
-- remote job secrets;
-- remote run secrets.
-
-The new key file SHALL pass the same validation as the configured key and
-SHALL differ from it. Every row SHALL be re-encrypted with the associated
-data it already uses. The rotation SHALL be one transaction: every rewritten
-value SHALL be decrypted with the new key before commit, and any failure
-SHALL leave every row encrypted under the configured key. On success the
-command SHALL report the number of values re-encrypted per kind and
-instruct the operator to replace the configured key file with the new one
-before starting Kestrix.
+Kestrix SHALL provide `kestrix keys rotate-master --new-key-path <file>`, which connects to the database directly and re-encrypts every stored ciphertext from the configured master key to the key in `<file>`: repository and runtime-secret credentials, remote job secrets, and remote run secrets. The new key file SHALL pass the same validation as the configured key and SHALL differ from it.
 
 #### Scenario: Rotation re-encrypts everything
 - **WHEN** an operator runs the rotation with a valid new key while no server is running
 - **THEN** every stored credential and remote secret SHALL decrypt with the new key
 - **AND** none SHALL decrypt with the old key
 
+### Requirement: Atomic rotation transaction and operator instruction
+
+Every row SHALL be re-encrypted with the associated data it already uses. The rotation SHALL be one transaction: every rewritten value SHALL be decrypted with the new key before commit, and any failure SHALL leave every row encrypted under the configured key. On success the command SHALL report the number of values re-encrypted per kind and instruct the operator to replace the configured key file with the new one before starting Kestrix.
 #### Scenario: Failed rotation changes nothing
 - **WHEN** the rotation fails after some rows were rewritten in its transaction
 - **THEN** every stored value SHALL still decrypt with the configured key

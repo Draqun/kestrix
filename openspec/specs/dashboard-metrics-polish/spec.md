@@ -1,7 +1,7 @@
 # dashboard-metrics-polish Specification
 
 ## Purpose
-TBD - created by archiving change dashboard-metrics-polish. Update Purpose after archive.
+Provides dashboard summary metrics including distinct counters and stat cards for canceled and skipped pipeline runs.
 ## Requirements
 ### Requirement: Show canceled and skipped counts in stat cards
 The dashboard SHALL display stat cards for both canceled and skipped run counts.

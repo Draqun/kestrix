@@ -1,7 +1,7 @@
 # http-adapter-split Specification
 
 ## Purpose
-TBD - created by archiving change hexagonal-refactor. Update Purpose after archive.
+Structures HTTP adapter handlers into modular, domain-focused route handlers under `internal/web/` to preserve maintainability.
 ## Requirements
 ### Requirement: Handler files split by domain group
 `server.go` SHALL be decomposed into per-group files under `internal/web/handlers/`: `project.go`, `run.go`, `pipeline.go`, `webhook.go`, `system.go`.

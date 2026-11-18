@@ -27,20 +27,20 @@ unknown path.
 
 ### Requirement: Exposed metric set
 
-When metrics are enabled, the endpoint SHALL expose at least: the total number
-of runs that reached each terminal status (`passed`, `failed`, `canceled`), the
-current number of `running` and `queued` runs, a histogram of completed run
-durations in seconds, the total number of webhook deliveries by outcome
-(accepted, rejected, skipped), the current number of pending remote jobs that no registered runner can take (`kestrix_remote_jobs_unmatched`), and a build-information gauge whose value is `1`
-and whose labels carry the same version string reported by `GET /api/version`.
-Every metric SHALL carry a `HELP` and a `TYPE` line. Counters SHALL be
-monotonic for the life of the process and SHALL restart at zero after a restart.
+When metrics are enabled, the endpoint SHALL expose at least: the total number of runs that reached each terminal status (`passed`, `failed`, `canceled`), the current number of `running` and `queued` runs, a histogram of completed run durations in seconds, the total number of webhook deliveries by outcome (accepted, rejected, skipped), and the current number of pending remote jobs that no registered runner can take (`kestrix_remote_jobs_unmatched`).
 
 #### Scenario: Run outcome counted once
 - **WHEN** a run reaches a terminal status
 - **THEN** the counter for that status SHALL increase by exactly one
 - **AND** the run's duration SHALL be observed once in the duration histogram
 
+### Requirement: Build information gauge and metric metadata
+
+The metrics endpoint SHALL expose a build-information gauge whose value is `1` and whose labels carry the same version string reported by `GET /api/version`. Every metric SHALL carry a `HELP` and a `TYPE` line. Counters SHALL be monotonic for the life of the process and SHALL restart at zero after a restart.
+
+#### Scenario: Build information gauge
+- **WHEN** metrics are enabled and an authorized scraper requests `GET /metrics`
+- **THEN** the response SHALL include a build-information gauge whose value is `1` and whose labels carry the version string
 #### Scenario: Queue depth reflects the scheduler
 - **WHEN** runs are queued because every concurrency slot is busy
 - **THEN** the queued gauge SHALL equal the number of runs in `queued` state

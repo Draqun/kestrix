@@ -1,7 +1,7 @@
 # service-layer Specification
 
 ## Purpose
-TBD - created by archiving change hexagonal-refactor. Update Purpose after archive.
+Houses decoupled core business logic and orchestration services in `internal/service` independent of transport and protocol adapters.
 
 ## Requirements
 

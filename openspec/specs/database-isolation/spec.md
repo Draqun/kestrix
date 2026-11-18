@@ -1,7 +1,7 @@
 # database-isolation Specification
 
 ## Purpose
-TBD - created by archiving change separate-local-deployment-database. Update Purpose after archive.
+Enforces separation between local development, test, and production database environments and connection profiles.
 ## Requirements
 ### Requirement: Local and deployment databases are isolated
 

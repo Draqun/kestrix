@@ -8,7 +8,7 @@ Define encrypted, provider-neutral credentials for remote Git source acquisition
 
 ### Requirement: Encrypted provider-neutral credential storage
 
-Kestrix SHALL store Git credentials and run-time `secret` credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key. The credential type SHALL be bound to the ciphertext so that a stored record cannot be reinterpreted as a different type.
+Kestrix SHALL store Git credentials and run-time `secret` credentials in PostgreSQL as authenticated encrypted data referenced by a stable `credential_ref`. The credential type SHALL be bound to the ciphertext so that a stored record cannot be reinterpreted as a different type. Plaintext credential values SHALL NOT be stored in pipeline definitions, run metadata, logs, command arguments, or API responses.
 
 #### Scenario: Store a GitHub or GitLab token
 
@@ -28,6 +28,21 @@ Kestrix SHALL store Git credentials and run-time `secret` credentials in Postgre
 - **THEN** Kestrix SHALL encrypt its value under the same master key and store it in the same table
 - **AND** metadata responses SHALL report type `secret` and omit the value
 
+#### Scenario: Type bound to ciphertext
+
+- **WHEN** a stored credential of type `token` is queried
+- **THEN** it SHALL NOT be decryptable or interpretable as a `basic` or `ssh` credential
+
+### Requirement: Master key custody and storage isolation
+
+The encryption master key SHALL remain outside PostgreSQL and SHALL be supplied only by the validated file path configured through `KESTRIX_MASTER_KEY_PATH`. Kestrix SHALL NOT use an OS keyring or other implicit fallback to obtain the encryption master key.
+
+#### Scenario: Master key loaded from configured file
+
+- **WHEN** Kestrix initializes the credential encryption subsystem
+- **THEN** the encryption master key SHALL be loaded strictly from `KESTRIX_MASTER_KEY_PATH`
+- **AND** Kestrix SHALL NOT attempt fallback to PostgreSQL or OS keyrings
+
 ### Requirement: Credential lifecycle API
 
 The system SHALL provide create, rotate, inspect-metadata, and revoke operations for credentials. Secret-bearing operations SHALL be write-only; metadata responses SHALL include the reference, type, host/provider metadata, creation/update timestamps, and revocation state but SHALL NOT include secrets.
@@ -46,7 +61,12 @@ The system SHALL provide create, rotate, inspect-metadata, and revoke operations
 
 ### Requirement: Secure runtime resolution
 
-The source-acquisition port SHALL resolve Git credentials by reference at runtime and SHALL expose plaintext values only to the Git child process. Temporary credential files SHALL use restrictive permissions and SHALL be removed after success, failure, cancellation, or timeout. Git credential types (`token`, `basic`, `ssh`) SHALL NOT be injected into task processes or deployment environments; only a credential of type `secret`, referenced from a pipeline variable, reaches a task, and only as specified by the `runtime-secrets` capability. The source-acquisition port SHALL refuse a credential of type `secret`.
+The source-acquisition port SHALL resolve Git credentials by reference at runtime and SHALL expose plaintext values only to the Git child process. Temporary credential files SHALL use restrictive permissions and SHALL be removed after success, failure, cancellation, or timeout.
+
+#### Scenario: Temporary credential cleanup
+
+- **WHEN** Git checkout completes or fails
+- **THEN** temporary credential files SHALL be removed from disk
 
 #### Scenario: HTTPS token acquisition
 
@@ -60,16 +80,20 @@ The source-acquisition port SHALL resolve Git credentials by reference at runtim
 - **THEN** Kestrix SHALL remove temporary key and known-hosts material
 - **AND** Git diagnostics SHALL be redacted before being returned or logged
 
-#### Scenario: Git credential never reaches a task
-
-- **WHEN** a task runs in a project whose sources were acquired with a Git credential
-- **THEN** the task process environment SHALL NOT contain that credential's token, password, or private key
-
 #### Scenario: Secret credential refused for Git
 
 - **WHEN** source acquisition resolves a `credential_ref` whose credential type is `secret`
 - **THEN** acquisition SHALL fail before any Git process starts
 - **AND** the error SHALL name the type mismatch and SHALL NOT contain the value
+
+### Requirement: Task environment credential isolation
+
+Git credential types (`token`, `basic`, `ssh`) SHALL NOT be injected into task processes or deployment environments; only a credential of type `secret`, referenced from a pipeline variable, reaches a task, and only as specified by the `runtime-secrets` capability. The source-acquisition port SHALL refuse a credential of type `secret`.
+
+#### Scenario: Git credential never reaches a task
+
+- **WHEN** a task runs in a project whose sources were acquired with a Git credential
+- **THEN** the task process environment SHALL NOT contain that credential's token, password, or private key
 
 #### Scenario: Secret credential refused earlier, at project create or update
 

@@ -1,7 +1,7 @@
 # dashboard-run-navigation Specification
 
 ## Purpose
-TBD - created by archiving change dashboard-run-navigation. Update Purpose after archive.
+Enforces intuitive dashboard navigation by linking recent run table rows directly to their detailed pipeline run views.
 ## Requirements
 ### Requirement: Recent runs row navigates to run detail
 The system SHALL navigate to the run detail page when a user clicks a row in the dashboard's recent runs table.

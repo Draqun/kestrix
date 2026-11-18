@@ -1,7 +1,7 @@
 # hexagonal-ports Specification
 
 ## Purpose
-TBD - created by archiving change hexagonal-refactor. Update Purpose after archive.
+Establishes clean hexagonal architecture port interfaces and boundary rules in `internal/domain` without dependencies on outer layers.
 
 ## Requirements
 

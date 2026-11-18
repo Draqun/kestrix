@@ -8,8 +8,15 @@ Bounds how much work one Kestrix instance executes at once and how much run hist
 
 ### Requirement: Concurrent run limit
 
-Kestrix SHALL execute at most `max_concurrent_runs` runs at a time (default `2`; a non-positive or non-integer configured value SHALL fail startup naming the setting). A run accepted while every slot is busy SHALL be recorded with status `queued` and SHALL start automatically, in acceptance order, when a slot frees. Whole-pipeline runs, single-task re-runs, and approved manual tasks each occupy one slot while executing. Acceptance SHALL be reported before a slot is acquired: every route that starts a run SHALL respond with the run's id and its accepted status (`running` or `queued`) without waiting for the run to start or finish, and the run's outcome SHALL be read from the run record afterwards. A `remote`-mode run's tasks SHALL NOT occupy an in-process concurrency slot: their pacing is bounded by registered-runner availability, not `max_concurrent_runs`.
+Kestrix SHALL execute at most `max_concurrent_runs` runs at a time (default `2`; a non-positive or non-integer configured value SHALL fail startup naming the setting). A run accepted while every slot is busy SHALL be recorded with status `queued` and SHALL start automatically, in acceptance order, when a slot frees. Whole-pipeline runs, single-task re-runs, and approved manual tasks each occupy one slot while executing.
 
+#### Scenario: Slot occupation by manual task
+- **WHEN** an approved manual task executes
+- **THEN** it SHALL occupy one concurrency slot while executing
+
+### Requirement: Run acceptance and remote concurrency bypass
+
+Acceptance SHALL be reported before a slot is acquired: every route that starts a run SHALL respond with the run's id and its accepted status (`running` or `queued`) without waiting for the run to start or finish, and the run's outcome SHALL be read from the run record afterwards. A `remote`-mode run's tasks SHALL NOT occupy an in-process concurrency slot: their pacing is bounded by registered-runner availability, not `max_concurrent_runs`.
 #### Scenario: Burst above the limit
 - **WHEN** the limit is `2` and three runs are triggered at once
 - **THEN** two report `running`, one reports `queued`, and the queued run starts when either of the first two finishes
@@ -62,15 +69,15 @@ Run output persisted for a run SHALL NOT exceed `max_output_bytes` (default 10 M
 
 ### Requirement: Run output is stored as valid text
 
-Kestrix SHALL store the output and the error of a run, and the output and the
-error of each of its task results, as valid UTF-8 without NUL bytes, whichever
-path wrote them: an in-process run, an approved manual task, a single-task
-re-run, or the trace and completion of a remote job. Each consecutive run of
-bytes that are not valid UTF-8 or are NUL SHALL be stored as one U+FFFD, after
-secret redaction. Such bytes SHALL NOT change the status of the run or of the
-task that printed them, and SHALL NOT keep a run from reaching its terminal
-status.
+Kestrix SHALL store the output and the error of a run, and the output and the error of each of its task results, as valid UTF-8 without NUL bytes, whichever path wrote them: an in-process run, an approved manual task, a single-task re-run, or the trace and completion of a remote job.
 
+#### Scenario: Clean text output
+- **WHEN** a task prints valid UTF-8 text
+- **THEN** it SHALL be stored without modification
+
+### Requirement: Sanitization replacement and status preservation
+
+Each consecutive run of bytes that are not valid UTF-8 or are NUL SHALL be stored as one U+FFFD, after secret redaction. Such bytes SHALL NOT change the status of the run or of the task that printed them, and SHALL NOT keep a run from reaching its terminal status.
 #### Scenario: A task prints a byte that is not UTF-8
 - **WHEN** an in-process task prints `caf` followed by the byte `0xE9`, then a newline, and passes
 - **THEN** the run SHALL become `passed`

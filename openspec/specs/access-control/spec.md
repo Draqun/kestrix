@@ -58,17 +58,15 @@ the permissions the global role already provides.
 
 ### Requirement: Authentication required on API routes
 
-Kestrix SHALL require a valid token on every `/api` route except the health,
-login, logout, and first-run setup endpoints (`GET /api/setup`,
-`POST /api/setup`). The token SHALL be accepted from a bearer
-authorization header or from the session cookie. A request with no credentials,
-a malformed authorization header, or an invalid token SHALL be rejected with
-`401` before the route's handler runs. A route added later SHALL be covered by
-this requirement unless it is deliberately registered as public. The setup
-endpoints are public only so a fresh instance can create its first
-administrator; `first-run-setup` defines how they close themselves once any
-account exists.
+Kestrix SHALL require a valid token on every `/api` route except the health, login, logout, and first-run setup endpoints (`GET /api/setup`, `POST /api/setup`). The token SHALL be accepted from a bearer authorization header or from the session cookie. A request with no credentials, a malformed authorization header, or an invalid token SHALL be rejected with `401` before the route's handler runs.
 
+#### Scenario: Unauthenticated request rejected
+- **WHEN** a client calls a protected route without credentials
+- **THEN** the request SHALL be rejected with HTTP 401
+
+### Requirement: Default authentication for new API routes
+
+A route added later SHALL be covered by this requirement unless it is deliberately registered as public. The setup endpoints are public only so a fresh instance can create its first administrator; `first-run-setup` defines how they close themselves once any account exists.
 #### Scenario: Call without credentials
 
 - **WHEN** a request reaches any protected `/api` route with no authorization header and no session cookie
@@ -103,20 +101,15 @@ account exists.
 
 ### Requirement: Authorization on every route
 
-Kestrix SHALL map every protected route to a minimum required role and SHALL
-reject a request whose effective role is below it with `403`, distinct from the
-`401` returned for a failed authentication. Read routes SHALL require `viewer`,
-run and pipeline-editing routes SHALL require `operator`, and account,
-credential, and project lifecycle routes SHALL require `admin`.
+Kestrix SHALL map every protected route to a minimum required role and SHALL reject a request whose effective role is below it with `403`, distinct from the `401` returned for a failed authentication. Read routes SHALL require `viewer`, run and pipeline-editing routes SHALL require `operator`, and account, credential, and project lifecycle routes SHALL require `admin`.
 
-The effective role SHALL be the higher of the account's current stored global
-role and its current stored grant on the route's project. Both parts SHALL be
-resolved from the store on the request being authorized, never from the token
-and never from a request header, query parameter, or body field. Kestrix MAY
-serve either part from a cache whose maximum age is a configured bound, and
-SHALL invalidate a cached entry when the account it describes is changed by
-this process.
+#### Scenario: Route role requirements
+- **WHEN** an operator accesses project lifecycle routes
+- **THEN** the request SHALL be rejected with HTTP 403
 
+### Requirement: Effective role resolution and caching
+
+The effective role SHALL be the higher of the account's current stored global role and its current stored grant on the route's project. Both parts SHALL be resolved from the store on the request being authorized, never from token or client request fields. Kestrix MAY serve either part from a bounded-age cache, and SHALL invalidate a cached entry when the account it describes is changed by this process.
 #### Scenario: Insufficient role is distinguishable from missing credentials
 
 - **WHEN** an authenticated account calls a route above its effective role
@@ -149,20 +142,15 @@ this process.
 
 ### Requirement: Account administration API
 
-Kestrix SHALL expose administrator-only endpoints to list accounts, create an
-account, change an account's global role, set an account's project grants, and
-delete an account. Responses SHALL carry the account name, global role, grants,
-and timestamps, and SHALL NOT carry password hashes.
+Kestrix SHALL expose administrator-only endpoints to list accounts, create an account, change an account's global role, set an account's project grants, and delete an account. Responses SHALL carry the account name, global role, grants, and timestamps, and SHALL NOT carry password hashes.
 
-A change to an account's global role, grants, or password, and the deletion of
-an account, SHALL take effect on that account's subsequent requests without
-waiting for the existing token to expire. A change to global role or password,
-and account deletion, SHALL do so by ending sessions issued before the change
-(see requirement "Session revocation"): the account authenticates again to
-obtain a token usable at its new role. A change to project grants takes effect
-without ending any session, since a grant is resolved fresh on every
-project-scoped request rather than carried in the token.
+#### Scenario: Password hash omitted from response
+- **WHEN** account details are queried
+- **THEN** the response SHALL NOT contain password hashes
 
+### Requirement: Account change propagation and session revocation
+
+A change to an account's global role, grants, or password, and the deletion of an account, SHALL take effect on that account's subsequent requests without waiting for the existing token to expire. A change to global role or password, and account deletion, SHALL do so by ending sessions issued before the change (see requirement "Session revocation"). A change to project grants takes effect without ending sessions, resolved fresh on each request.
 #### Scenario: Non-administrator is refused
 
 - **WHEN** an account whose global role is `viewer` or `operator` lists or modifies accounts
@@ -204,15 +192,15 @@ to them. The webhook route SHALL remain outside the authenticated API surface.
 
 ### Requirement: Interface reflects authentication and role
 
-The user interface SHALL require a login before showing application data, SHALL
-rely on the session cookie rather than holding the token in script-readable
-storage, SHALL send the designated same-origin header on every API call, and
-SHALL return the user to the login view when the API reports that
-authentication failed. On load, the interface SHALL restore the signed-in
-account's name and role from the current-session endpoint rather than from a
-stored token. The interface SHALL NOT offer actions the current effective role
-cannot perform.
+The user interface SHALL require a login before showing application data, SHALL rely on the session cookie rather than holding the token in script-readable storage, SHALL send the designated same-origin header on every API call, and SHALL return the user to the login view when the API reports that authentication failed.
 
+#### Scenario: Redirection on auth failure
+- **WHEN** an API call returns 401
+- **THEN** the UI SHALL redirect the user to login
+
+### Requirement: Interface role restoration and action gating
+
+On load, the interface SHALL restore the signed-in account's name and role from the current-session endpoint rather than from a stored token. The interface SHALL NOT offer actions the current effective role cannot perform.
 #### Scenario: Unauthenticated visitor
 
 - **WHEN** a visitor with no valid session opens any application view
@@ -353,15 +341,15 @@ its own policy without relaxing the application's.
 
 ### Requirement: Metrics endpoint authentication
 
-The metrics endpoint SHALL sit outside `/api` and therefore outside the public
-and protected `/api` route groups, and SHALL carry its own authentication. It
-SHALL NOT be reachable without credentials at any time. Enabling metrics SHALL
-NOT add a public route: the endpoint SHALL accept a dedicated scrape token
-presented as a bearer token, or an authenticated account holding at least the
-viewer role, and SHALL reject everything else with `401`. The scrape token SHALL
-grant access to the metrics endpoint only and SHALL NOT authenticate any `/api`
-route, carry a role, or create a session.
+The metrics endpoint SHALL sit outside `/api` and therefore outside the public and protected `/api` route groups, and SHALL carry its own authentication. It SHALL NOT be reachable without credentials at any time. Enabling metrics SHALL NOT add a public route: the endpoint SHALL accept a dedicated scrape token presented as a bearer token, or an authenticated account holding at least the viewer role, and SHALL reject everything else with `401`.
 
+#### Scenario: Viewer role can scrape metrics
+- **WHEN** an authenticated user with viewer role accesses `/metrics`
+- **THEN** the request SHALL be accepted
+
+### Requirement: Scrape token isolation
+
+The scrape token SHALL grant access to the metrics endpoint only and SHALL NOT authenticate any `/api` route, carry a role, or create a session.
 #### Scenario: Scrape token is not an API credential
 - **WHEN** a request presents the scrape token as a bearer token to any `/api` route
 - **THEN** the request SHALL be rejected with `401`

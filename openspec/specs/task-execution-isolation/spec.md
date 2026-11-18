@@ -11,21 +11,7 @@ repository they are read from.
 
 ### Requirement: Task environment is an explicit allowlist
 
-A task process in every runner mode SHALL receive only: a fixed base set of
-host variables needed to execute a shell (`PATH`, `HOME`, `LANG`, `LC_ALL`,
-`TMPDIR`, `TERM`, `USER`), the `CI_*` variables Kestrix sets for the task,
-the pipeline variables resolved for that task, and host variables whose exact
-names appear in `KESTRIX_RUNNER_ENV_PASSTHROUGH`. Every other variable of the
-Kestrix process SHALL be withheld. The variables `KESTRIX_MASTER_KEY_PATH`,
-`KESTRIX_JWT_SIGNING_KEY_PATH`, `DATABASE_URL`,
-`KESTRIX_GITLAB_TOKEN`, and `KESTRIX_WEBHOOK_SECRET` SHALL never reach a task,
-even when listed for passthrough; listing one SHALL be rejected at startup as a
-configuration error. A pipeline variable SHALL override a base or passthrough
-variable of the same name. In `remote` mode, this guarantee is enforced at job
-payload construction rather than environment passthrough — a remote runner has
-no access to the Kestrix host's environment at all, so the same exclusion list
-SHALL be checked against the payload before it is sent, not against the
-runner's own environment.
+A task process across all runner modes SHALL receive only base shell variables, `CI_*` variables, resolved pipeline variables, and allowlisted `KESTRIX_RUNNER_ENV_PASSTHROUGH` variables. Critical host secrets (`KESTRIX_MASTER_KEY_PATH`, `KESTRIX_JWT_SIGNING_KEY_PATH`, `DATABASE_URL`, `KESTRIX_GITLAB_TOKEN`, `KESTRIX_WEBHOOK_SECRET`) SHALL NEVER reach tasks and fail startup if listed in passthrough.
 
 #### Scenario: Control-plane secrets are withheld
 
@@ -57,18 +43,7 @@ runner's own environment.
 
 ### Requirement: Docker tasks run with reduced privilege and bounded resources
 
-A task executed in `docker` mode SHALL run with all Linux capabilities dropped,
-with privilege escalation disabled, with a process-count limit, and with a
-memory limit and CPU limit taken from configuration (`KESTRIX_RUNNER_DOCKER_PIDS`,
-`KESTRIX_RUNNER_DOCKER_MEMORY`, `KESTRIX_RUNNER_DOCKER_CPUS`, each with a
-non-zero default). It SHALL attach to the network named by
-`KESTRIX_RUNNER_DOCKER_NETWORK` (default `bridge`) and, when
-`KESTRIX_RUNNER_DOCKER_USER` is set, SHALL run as that user. Kestrix SHALL NOT
-mount the Docker socket, SHALL NOT pass `--privileged`, and SHALL mount only the
-run workspace and the acquired source directories. This hardening applies
-regardless of how the task was started: a full-DAG run, a single-task re-run,
-or an approved manual task in a `docker`-mode project all run through the
-same hardened container construction.
+Tasks executed in `docker` mode SHALL drop all Linux capabilities, disable privilege escalation, and enforce PID, memory, and CPU bounds configured via `KESTRIX_RUNNER_DOCKER_*`. Docker containers SHALL attach to `KESTRIX_RUNNER_DOCKER_NETWORK` (default `bridge`) and SHALL NOT mount the Docker socket or run with `--privileged`.
 
 #### Scenario: Default container hardening
 
@@ -96,25 +71,7 @@ same hardened container construction.
 
 ### Requirement: Cancellation terminates task processes
 
-Cancelling a run SHALL stop the run's executing task before its status is
-recorded as `canceled`, regardless of how the run's task was started: a
-full-DAG run, a single-task re-run, or an approved manual task all use the
-same termination path. In `local` mode the task's whole process group SHALL
-receive a termination signal, then a kill signal after
-`KESTRIX_RUNNER_CANCEL_GRACE` (default `10s`). In `docker` mode the task
-container SHALL be stopped with the same grace period. Tasks not yet started
-SHALL NOT start. A run whose process could not be terminated SHALL stay
-`running` with the failure in its error, rather than being reported as
-`canceled`.
-
-In `remote` mode this guarantee does not hold and SHALL NOT be attempted: the
-task process runs on a machine Kestrix cannot reach, over a poll-only
-transport with no inbound channel (design.md D8). Cancelling a `remote`-mode
-run SHALL mark it `canceled` without terminating, or waiting for, a task
-already executing on a runner — the `remote`-mode behaviour is specified in
-full by the `remote-runner-execution` requirement "Cancelling a remote-mode
-run". The termination guarantee above continues to apply unchanged to
-`local` and `docker` mode.
+Cancelling an in-process run (`local` or `docker`) SHALL terminate executing task processes or containers within `KESTRIX_RUNNER_CANCEL_GRACE` before marking the run `canceled`, remaining `running` if termination fails. Remote-mode runs SHALL transition to `canceled` immediately without reaching into remote worker machines.
 
 #### Scenario: Cancel a running local task
 
@@ -159,26 +116,15 @@ run". The termination guarantee above continues to apply unchanged to
 
 ### Requirement: Local execution requires an explicit opt-in
 
-Kestrix SHALL execute a task in `local` mode inside its own process only when
-the instance setting `runner.allow_local` (environment variable
-`KESTRIX_RUNNER_ALLOW_LOCAL`) is true. The setting SHALL default to false and
-follow the configuration precedence rule. The instance runner mode itself
-(`runner.mode`) SHALL be settable via the environment variable
-`KESTRIX_EXECUTION_MODE`, following the same precedence rule; this is
-distinct from `KESTRIX_RUNNER_MODE`, which configures only `kestrix
-runner`'s own execution backend and has no effect on the server. When the
-opt-in is false:
-- startup SHALL fail if the instance runner mode is `local` or unset, with a
-  message stating that `local` tasks can read Kestrix's key files and naming
-  `remote` and the opt-in as the alternatives;
-- creating or updating a project with mode `local` SHALL be rejected as a
-  validation error;
-- a run of a stored project whose mode is `local` SHALL fail before any
-  source is acquired or any task executes, with the same explanation.
+Kestrix SHALL execute a task in `local` mode inside its own process only when the instance setting `runner.allow_local` (environment variable `KESTRIX_RUNNER_ALLOW_LOCAL`) is true. The setting SHALL default to false and follow the configuration precedence rule. The instance runner mode itself (`runner.mode`) SHALL be settable via the environment variable `KESTRIX_EXECUTION_MODE`, following the same precedence rule; this is distinct from `KESTRIX_RUNNER_MODE`.
 
-When it is true, startup SHALL log a warning naming the exposure and the
-number of stored projects in `local` mode.
+#### Scenario: Execution mode precedence
+- **WHEN** `KESTRIX_EXECUTION_MODE` is provided
+- **THEN** it SHALL configure the instance runner mode
 
+### Requirement: Local execution rejection and warning rules
+
+When `runner.allow_local` is false: startup SHALL fail if instance runner mode is `local` or unset, with a message stating that `local` tasks can read Kestrix's key files and naming `remote` and the opt-in as alternatives; creating or updating a project with mode `local` SHALL be rejected as validation error; a run of a stored `local` project SHALL fail before source acquisition. When true, startup SHALL log a warning naming the exposure and stored `local` projects count.
 #### Scenario: Local instance mode without the opt-in
 - **WHEN** Kestrix starts with `runner.mode` unset and `KESTRIX_RUNNER_ALLOW_LOCAL` unset
 - **THEN** startup SHALL fail with a message naming the key-file exposure, `remote`, and `KESTRIX_RUNNER_ALLOW_LOCAL`

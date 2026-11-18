@@ -1,7 +1,7 @@
 # docker-deployment-e2e Specification
 
 ## Purpose
-TBD - created by archiving change docker-deployment-e2e-tests. Update Purpose after archive.
+Provides isolated, automated end-to-end testing for Kestrix Docker deployment stacks without touching host or production state.
 ## Requirements
 ### Requirement: Isolated Docker deployment E2E test
 
